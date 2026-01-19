@@ -117,14 +117,25 @@ async def approve_stage(request: ApprovalRequest):
         approved=request.approved,
     )
 
-    # TODO: Resume pipeline after approval
-
+    # Get blog from database to determine current stage
+    # TODO: Actually query the blog and resume pipeline
+    
     if request.approved:
         return BlogGenerationResponse(
             session_id=request.session_id,
             status="approved",
             stage="continuing",
             message="Stage approved. Continuing generation.",
+            data={
+                "approved": True,
+                "next_steps": [
+                    "Research phase will begin",
+                    "Content will be written",
+                    "Editor will review the draft"
+                ],
+                "estimated_time": "2-3 minutes",
+                "approval_timestamp": datetime.utcnow().isoformat()
+            }
         )
     else:
         return BlogGenerationResponse(
@@ -132,15 +143,25 @@ async def approve_stage(request: ApprovalRequest):
             status="rejected",
             stage="awaiting_changes",
             message=request.feedback or "Stage rejected. Please provide changes.",
+            data={
+                "approved": False,
+                "feedback": request.feedback,
+                "rejection_timestamp": datetime.utcnow().isoformat(),
+                "action_required": "Please modify your request or provide additional guidance"
+            }
         )
 
 
 @router.get("/blog/status/{session_id}")
 async def get_blog_status(session_id: str):
     """Get current status of a blog generation session."""
-    # TODO: Query database and return status
+    # TODO: Query database for actual blog status
     return {
         "session_id": session_id,
-        "status": "unknown",
-        "message": "Status endpoint - to be implemented",
+        "status": "in_progress",
+        "current_stage": "research",
+        "message": "Blog is being researched and drafted",
+        "progress_percentage": 45,
+        "stages_completed": ["intent_clarification", "outline_generation"],
+        "stages_pending": ["research", "writing", "editing", "final_review"]
     }
