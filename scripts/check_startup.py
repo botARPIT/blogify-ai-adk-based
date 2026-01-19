@@ -12,7 +12,7 @@ load_dotenv(dotenv_path=".env.dev")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.config.logging_config import setup_logging
-from src.config.startup_checks import run_startup_checks
+from src.core.startup import run_startup_checks
 
 setup_logging("INFO")
 

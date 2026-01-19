@@ -59,4 +59,4 @@ class InputGuardrail:
 
 
 # Global instance
-input_guardrail = InputGuardrail()
+input_guard = InputGuardrail()

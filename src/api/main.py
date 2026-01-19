@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api.routes import blog, chat, health
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
-from src.guards.rate_limiter import rate_limiter
+from src.guards.rate_limit_guard import rate_limit_guard
 from src.models.repository import db_repository
 from src.monitoring.metrics import metrics_endpoint
 
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     )
 
     # Run dependency checks
-    from src.config.startup_checks import run_startup_checks
+    from src.core.startup import run_startup_checks
 
     startup_ok = await run_startup_checks()
     if not startup_ok:
@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
     await db_repository.create_tables()
 
     # Initialize rate limiter
-    await rate_limiter.connect()
+    await rate_limit_guard.connect()
 
     logger.info("🚀 Application ready to accept requests")
 
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("application_shutdown")
-    await rate_limiter.close()
+    await rate_limit_guard.close()
 
 
 # Create FastAPI app

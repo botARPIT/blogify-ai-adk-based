@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from src.agents.chatbot_agent import chatbot_agent
 from src.api.main import request_semaphore
 from src.config.logging_config import get_logger
-from src.guards.rate_limiter import rate_limiter
+from src.guards.rate_limit_guard import rate_limit_guard
 from src.models.repository import db_repository
 
 logger = get_logger(__name__)
@@ -43,7 +43,7 @@ async def chat(request: ChatRequest):
     """
     async with request_semaphore:
         # Rate limiting
-        allowed, msg = await rate_limiter.check_all_limits(request.user_id, is_blog_request=False)
+        allowed, msg = await rate_limit_guard.check_all_limits(request.user_id, is_blog_request=False)
         if not allowed:
             raise HTTPException(status_code=429, detail=msg)
 

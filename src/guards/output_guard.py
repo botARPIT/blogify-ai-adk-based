@@ -70,4 +70,4 @@ class OutputGuardrail:
 
 
 # Global instance
-output_guardrail = OutputGuardrail()
+output_guard = OutputGuardrail()

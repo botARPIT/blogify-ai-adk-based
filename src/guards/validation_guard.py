@@ -201,4 +201,4 @@ class ValidationPolicy:
 
 
 # Global instance
-validation_policy = ValidationPolicy(max_retries=2)
+validation_guard = ValidationPolicy(max_retries=2)

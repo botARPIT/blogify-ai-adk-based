@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 
 from src.config.logging_config import get_logger
-from src.guards.rate_limiter import rate_limiter
+from src.guards.rate_limit_guard import rate_limit_guard
 from src.models.repository import db_repository
 
 logger = get_logger(__name__)
@@ -39,7 +39,7 @@ async def detailed_health_check():
 
     # Check Redis
     try:
-        await rate_limiter.connect()
+        await rate_limit_guard.connect()
         checks["redis"] = "healthy"
     except Exception as e:
         logger.error("redis_health_check_failed", error=str(e))

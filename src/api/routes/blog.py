@@ -9,9 +9,9 @@ from pydantic import BaseModel, Field
 from src.agents.blog_generation_pipeline import blog_pipeline
 from src.api.main import request_semaphore
 from src.config.logging_config import get_logger
-from src.guards.input_guardrail import input_guardrail
-from src.guards.output_guardrail import output_guardrail
-from src.guards.rate_limiter import rate_limiter
+from src.guards.input_guard import input_guard
+from src.guards.output_guard import output_guard
+from src.guards.rate_limit_guard import rate_limit_guard
 from src.models.repository import db_repository
 
 logger = get_logger(__name__)
@@ -54,12 +54,12 @@ async def generate_blog(request: BlogGenerationRequest):
     """
     async with request_semaphore:
         # Rate limiting (blog-specific)
-        allowed, msg = await rate_limiter.check_all_limits(request.user_id, is_blog_request=True)
+        allowed, msg = await rate_limit_guard.check_all_limits(request.user_id, is_blog_request=True)
         if not allowed:
             raise HTTPException(status_code=429, detail=msg)
 
         # Input guardrail
-        valid, msg = input_guardrail.validate_input(request.topic, request.audience)
+        valid, msg = input_guard.validate_input(request.topic, request.audience)
         if not valid:
             raise HTTPException(status_code=400, detail=msg)
 
@@ -85,8 +85,8 @@ async def generate_blog(request: BlogGenerationRequest):
         )
 
         # Increment rate limiters
-        await rate_limiter.increment_global_blog_count()
-        await rate_limiter.increment_user_blog_count(request.user_id)
+        await rate_limit_guard.increment_global_blog_count()
+        await rate_limit_guard.increment_user_blog_count(request.user_id)
 
         try:
             # TODO: Start blog pipeline

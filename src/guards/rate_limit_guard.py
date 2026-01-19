@@ -164,4 +164,4 @@ class EnhancedRateLimiter:
 
 
 # Global instance
-rate_limiter = EnhancedRateLimiter()
+rate_limit_guard = EnhancedRateLimiter()

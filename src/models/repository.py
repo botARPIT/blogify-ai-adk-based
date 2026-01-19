@@ -9,7 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.config.database_config import db_settings
 from src.config.logging_config import get_logger
-from src.models.database import Base, Blog, CostRecord, User
+from src.models.orm_models import Base, Blog, CostRecord, User
 
 logger = get_logger(__name__)
 
