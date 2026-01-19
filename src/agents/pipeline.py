@@ -1,4 +1,13 @@
-"""Blog generation pipeline with human approval checkpoints."""
+"""Blog generation pipeline with human approval checkpoints.
+
+NOTE: This pipeline defines the orchestration flow. The actual ADK agent execution
+is left for future integration when:
+1. State management between approval steps is implemented
+2. Background task queue (Celery/Cloud Tasks) is set up
+3. WebSocket/polling mechanism for async approval workflow is ready
+
+Current implementation focuses on API endpoints and data flow structure.
+"""
 
 from typing import Any, Callable
 
@@ -25,6 +34,13 @@ class BlogGenerationPipeline:
     3. Research
     4. Writer-Editor Loop (automatic refinement)
     5. Final output
+    
+    Integration Notes:
+    - Agents are defined and ready in src/agents/
+    - For production deployment, integrate with:
+      * Task queue for async processing
+      * State persistence for resuming after approvals
+      * WebSocket or Server-Sent Events for real-time updates
     """
 
     def __init__(self) -> None:
@@ -55,6 +71,11 @@ class BlogGenerationPipeline:
         
         Returns:
             Pipeline result with final blog or approval request
+            
+        Future Implementation:
+            This method will execute the full agent pipeline when integrated
+            with a task queue system. Current API endpoints handle the flow
+            by initiating generation and handling approvals separately.
         """
         state: dict[str, Any] = {
             "session_id": session_id,
@@ -63,43 +84,19 @@ class BlogGenerationPipeline:
             "audience": audience,
         }
 
-        # Step 1: Intent Clarification Loop
-        logger.info("intent_clarification_start", session_id=session_id)
-        # TODO: Run intent clarification loop
-        # intent_result = await self.agents["intent"].run(...)
-        # state["intent_result"] = intent_result
-
-        # Human approval checkpoint after intent
-        if approval_callback:
-            approved = await approval_callback("intent", state)
-            if not approved:
-                return {"status": "pending_approval", "stage": "intent", "state": state}
-
-        # Step 2: Outline Generation
-        logger.info("outline_generation_start", session_id=session_id)
-        # TODO: Run outline agent
-        # outline_result = await self.agents["outline"].run(...)
-        # state["blog_outline"] = outline_result
-
-        # Human approval checkpoint after outline
-        if approval_callback:
-            approved = await approval_callback("outline", state)
-            if not approved:
-                return {"status": "pending_approval", "stage": "outline", "state": state}
-
-        # Step 3: Research (no approval needed)
-        logger.info("research_start", session_id=session_id)
-        # TODO: Run research agent
-        # research_result = await self.agents["research"].run(...)
-        # state["research_data"] = research_result
-
-        # Step 4: Writer-Editor Loop (automatic)
-        logger.info("writing_start", session_id=session_id)
-        # TODO: Run writer-editor loop
-        # final_result = await self.agents["writer_editor_loop"].run(...)
-        # state["editor_review"] = final_result
-
-        return {"status": "completed", "state": state}
+        # Pipeline execution would happen here in full implementation
+        # For now, the API endpoints handle this flow:
+        # 1. /blog/generate - initiates and waits for intent approval
+        # 2. /blog/approve - resumes and continues to next stage
+        # 3. Repeat until completion
+        
+        logger.info("pipeline_structure_defined", session_id=session_id)
+        
+        return {
+            "status": "pipeline_ready",
+            "message": "Pipeline structure defined. Use API endpoints for execution.",
+            "state": state
+        }
 
 
 # Global instance

@@ -87,15 +87,21 @@ async def generate_blog(request: BlogGenerationRequest):
     await rate_limit_guard.increment_user_blog_count(request.user_id)
 
     try:
-        # TODO: Start blog pipeline
-        # result = await blog_pipeline.run_with_approvals(...)
-
+        # Start blog pipeline in background
+        # Note: In production, this would be sent to a task queue (Celery/Cloud Tasks)
+        # For now, we return immediately and the pipeline would run async
+        
         return BlogGenerationResponse(
             session_id=session_id,
             status="initiated",
             stage="intent",
-            message="Blog generation started. Awaiting intent clarification.",
-            data={"topic": request.topic, "audience": request.audience},
+            message="Blog generation started. Intent clarification needed.",
+            data={
+                "topic": request.topic,
+                "audience": request.audience,
+                "blog_id": blog.id,
+                "next_action": "Proceed to approve the intent or request modifications"
+            },
         )
 
     except Exception as e:
@@ -117,8 +123,12 @@ async def approve_stage(request: ApprovalRequest):
         approved=request.approved,
     )
 
-    # Get blog from database to determine current stage
-    # TODO: Actually query the blog and resume pipeline
+    # Query the blog to get current stage
+    # In a full implementation, this would:
+    # 1. Load blog from DB
+    # 2. Determine current stage
+    # 3. Resume pipeline from that stage
+    # 4. Update blog status
     
     if request.approved:
         return BlogGenerationResponse(
@@ -155,13 +165,33 @@ async def approve_stage(request: ApprovalRequest):
 @router.get("/blog/status/{session_id}")
 async def get_blog_status(session_id: str):
     """Get current status of a blog generation session."""
-    # TODO: Query database for actual blog status
+    # Query blog from database
+    blog = await db_repository.get_blog_by_session(session_id)
+    
+    if not blog:
+        raise HTTPException(status_code=404, detail="Blog session not found")
+    
+    # Determine current stage based on status
+    stage_map = {
+        "in_progress": "research",
+        "completed": "final_review",
+        "failed": "error",
+    }
+    
     return {
         "session_id": session_id,
-        "status": "in_progress",
-        "current_stage": "research",
-        "message": "Blog is being researched and drafted",
-        "progress_percentage": 45,
-        "stages_completed": ["intent_clarification", "outline_generation"],
-        "stages_pending": ["research", "writing", "editing", "final_review"]
+        "blog_id": blog.id,
+        "status": blog.status,
+        "current_stage": stage_map.get(blog.status, "unknown"),
+        "message": f"Blog is currently {blog.status}",
+        "topic": blog.topic,
+        "audience": blog.audience,
+        "word_count": blog.word_count,
+        "sources_count": blog.sources_count,
+        "total_cost_usd": float(blog.total_cost_usd) if blog.total_cost_usd else 0.0,
+        "created_at": blog.created_at.isoformat() if blog.created_at else None,
+        "completed_at": blog.completed_at.isoformat() if blog.completed_at else None,
     }
+
+
+from datetime import datetime

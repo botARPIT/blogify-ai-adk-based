@@ -205,6 +205,14 @@ class DatabaseRepository:
             blogs = result.scalars().all()
             return len(blogs)
 
+    async def get_blog_by_session(self, session_id: str) -> Blog | None:
+        """Get blog by session ID."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(Blog).where(Blog.session_id == session_id)
+            )
+            return result.scalar_one_or_none()
+
     async def close(self) -> None:
         """Close database connections."""
         if self.engine:

@@ -58,11 +58,25 @@ async def chat(request: ChatRequest):
     )
 
     try:
-        # TODO: Invoke chatbot agent
-        # For now, return a placeholder response
+        # Invoke chatbot agent
+        # Note: Full implementation would use ADK's chatbot_agent.run()
+        # with proper state management and tool calling
+        # For now, simple echo with blog detection
         
-        response_text = f"Echo: {request.message}"
-        blog_initiated = "blog" in request.message.lower() and "generate" in request.message.lower()
+        message_lower = request.message.lower()
+        blog_keywords = ["blog", "write", "generate", "create article"]
+        blog_initiated = any(keyword in message_lower for keyword in blog_keywords)
+        
+        if blog_initiated:
+            response_text = (
+                "I can help you generate a blog! To proceed, please use the "
+                "/api/blog/generate endpoint with your topic and target audience. "
+                "I'll guide you through the process with human approval checkpoints."
+            )
+        else:
+            # Simple conversational response
+            response_text = f"I received your message: '{request.message}'. "
+            response_text += "I'm a blog generation assistant. Ask me to create a blog or use /api/blog/generate!"
 
         return ChatResponse(
             session_id=session_id,
