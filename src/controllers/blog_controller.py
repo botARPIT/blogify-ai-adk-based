@@ -20,12 +20,9 @@ class BlogController:
         self, user_id: str, topic: str, audience: str | None
     ) -> dict[str, Any]:
         """
-        Initiate blog generation with validation.
+        Initiate blog generation with HITL approvals.
         
-        Controller responsibilities:
-        - Apply guards (rate limiting, input validation)
-        - Call service layer
-        - Format response
+        Runs intent stage and pauses for approval.
         """
         # Apply guards
         allowed, msg = await rate_limit_guard.check_all_limits(user_id, is_blog_request=True)
@@ -36,7 +33,7 @@ class BlogController:
         if not valid:
             raise ValueError(msg)
 
-        # Call service layer (where ADK logic lives)
+        # Call service layer
         session_data = await self.service.create_blog_session(user_id, topic, audience)
 
         # Update rate limiters
@@ -48,12 +45,51 @@ class BlogController:
             "session_id": session_data["session_id"],
             "status": "initiated",
             "stage": session_data["stage"],
-            "message": "Blog generation started. Intent clarification needed.",
+            "message": "Blog generation started. Intent clarification complete - approve to continue.",
             "data": {
                 "topic": session_data["topic"],
                 "audience": session_data["audience"],
                 "blog_id": session_data["blog_id"],
-                "next_action": "Proceed to approve the intent or request modifications"
+                "intent_result": session_data.get("intent_result"),
+                "next_action": "Review intent and approve to generate outline"
+            },
+        }
+
+    async def generate_blog_sync(
+        self, user_id: str, topic: str, audience: str | None
+    ) -> dict[str, Any]:
+        """
+        Generate blog synchronously without approval pauses.
+        """
+        # Apply guards
+        allowed, msg = await rate_limit_guard.check_all_limits(user_id, is_blog_request=True)
+        if not allowed:
+            raise RuntimeError(msg)
+
+        valid, msg = input_guard.validate_input(topic, audience)
+        if not valid:
+            raise ValueError(msg)
+
+        # Call service layer for sync generation
+        result = await self.service.generate_blog_sync(user_id, topic, audience)
+
+        # Update rate limiters
+        await rate_limit_guard.increment_global_blog_count()
+        await rate_limit_guard.increment_user_blog_count(user_id)
+
+        final_blog = result.get("final_blog", {})
+
+        return {
+            "session_id": result["session_id"],
+            "status": "completed",
+            "stage": "final",
+            "message": "Blog generated successfully!",
+            "data": {
+                "blog_id": result["blog_id"],
+                "title": final_blog.get("title"),
+                "word_count": final_blog.get("word_count"),
+                "sources_count": final_blog.get("sources_count"),
+                "content_preview": final_blog.get("content", "")[:500] + "..."
             },
         }
 
@@ -61,54 +97,64 @@ class BlogController:
         self, session_id: str, approved: bool, feedback: str | None
     ) -> dict[str, Any]:
         """
-        Handle approval/rejection.
-        
-        Controller delegates to service for ADK pipeline continuation.
+        Handle approval/rejection and continue pipeline.
         """
         logger.info("stage_approval", session_id=session_id, approved=approved)
 
-        # Call service layer (ADK pipeline logic)
+        # Call service layer
         approval_result = await self.service.process_stage_approval(
             session_id, approved, feedback
         )
 
         # Format response
         if approved:
-            return {
-                "session_id": session_id,
-                "status": "approved",
-                "stage": "continuing",
-                "message": "Stage approved. Continuing generation.",
-                "data": {
-                    **approval_result,
-                    "next_steps": [
-                        "Research phase will begin",
-                        "Content will be written",
-                        "Editor will review the draft"
-                    ],
-                    "estimated_time": "2-3 minutes",
+            next_stage = approval_result.get("next_stage", "unknown")
+            
+            if next_stage == "completed":
+                final_blog = approval_result.get("final_blog", {})
+                return {
+                    "session_id": session_id,
+                    "status": "completed",
+                    "stage": "final",
+                    "message": "Blog generation completed!",
+                    "data": {
+                        "title": final_blog.get("title"),
+                        "word_count": final_blog.get("word_count"),
+                        "sources_count": final_blog.get("sources_count"),
+                        "content_preview": final_blog.get("content", "")[:500] + "...",
+                        "next_action": "Use /blog/content/{session_id} to get full content"
+                    }
                 }
-            }
+            else:
+                return {
+                    "session_id": session_id,
+                    "status": "approved",
+                    "stage": next_stage,
+                    "message": f"Stage approved. Moved to {next_stage} stage.",
+                    "data": {
+                        "stage_data": approval_result.get("stage_data"),
+                        "next_action": f"Review {next_stage} and approve to continue"
+                    }
+                }
         else:
             return {
                 "session_id": session_id,
                 "status": "rejected",
-                "stage": "awaiting_changes",
+                "stage": approval_result.get("current_stage"),
                 "message": feedback or "Stage rejected. Please provide changes.",
                 "data": {
-                    **approval_result,
-                    "action_required": "Please modify your request or provide additional guidance"
+                    "feedback": feedback,
+                    "action_required": "Modify your request or provide additional guidance"
                 }
             }
 
     async def get_blog_status(self, session_id: str) -> dict[str, Any]:
-        """
-        Get blog status.
-        
-        Controller delegates to service.
-        """
-        # Call service layer
+        """Get blog status."""
         return await self.service.get_blog_details(session_id)
+
+    async def get_blog_content(self, session_id: str) -> dict[str, Any]:
+        """Get final blog content."""
+        return await self.service.get_blog_content(session_id)
 
 
 # Global instance

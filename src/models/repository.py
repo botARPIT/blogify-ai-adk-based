@@ -213,6 +213,25 @@ class DatabaseRepository:
             )
             return result.scalar_one_or_none()
 
+    async def update_blog_stage(
+        self, session_id: str, stage: str, stage_data: dict
+    ) -> Blog | None:
+        """Update blog pipeline stage and data."""
+        async with self.async_session() as db_session:
+            async with db_session.begin():
+                result = await db_session.execute(
+                    select(Blog).where(Blog.session_id == session_id)
+                )
+                blog = result.scalar_one_or_none()
+
+                if blog:
+                    blog.current_stage = stage
+                    blog.stage_data = stage_data
+                    await db_session.flush()
+                    logger.info("blog_stage_updated", session_id=session_id, stage=stage)
+
+                return blog
+
     async def close(self) -> None:
         """Close database connections."""
         if self.engine:

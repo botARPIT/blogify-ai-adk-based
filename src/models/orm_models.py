@@ -57,6 +57,10 @@ class Blog(Base):
     sources_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(50), default="in_progress")  # in_progress, completed, failed
     
+    # Pipeline State
+    current_stage: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    stage_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    
     # Cost
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
