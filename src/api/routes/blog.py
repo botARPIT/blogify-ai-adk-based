@@ -1,17 +1,10 @@
-"""Blog generation API endpoints."""
-
-import uuid
-from typing import Any
+"""Blog generation API routes - handles HTTP requests/responses only."""
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.agents.pipeline import blog_pipeline
 from src.config.logging_config import get_logger
-from src.guards.input_guard import input_guard
-from src.guards.output_guard import output_guard
-from src.guards.rate_limit_guard import rate_limit_guard
-from src.models.repository import db_repository
+from src.controllers.blog_controller import blog_controller
 
 logger = get_logger(__name__)
 
@@ -38,10 +31,10 @@ class BlogGenerationResponse(BaseModel):
     """Blog generation response model."""
 
     session_id: str
-    status: str  # initiated, pending_approval, completed, failed
-    stage: str | None = None  # intent, outline, research, writing
+    status: str
+    stage: str | None = None
     message: str
-    data: dict[str, Any] | None = None
+    data: dict | None = None
 
 
 @router.post("/blog/generate", response_model=BlogGenerationResponse)
@@ -49,64 +42,24 @@ async def generate_blog(request: BlogGenerationRequest):
     """
     Initiate blog generation.
     
-    This will start the blog generation pipeline with human approval checkpoints.
+    Delegates to blog_controller for business logic.
     """
-    # Rate limiting (blog-specific)
-    allowed, msg = await rate_limit_guard.check_all_limits(request.user_id, is_blog_request=True)
-    if not allowed:
-        raise HTTPException(status_code=429, detail=msg)
-
-    # Input guardrail
-    valid, msg = input_guard.validate_input(request.topic, request.audience)
-    if not valid:
-        raise HTTPException(status_code=400, detail=msg)
-
-    # Ensure user exists
-    await db_repository.get_or_create_user(request.user_id)
-
-    # Create session
-    session_id = str(uuid.uuid4())
-
-    # Create blog record
-    blog = await db_repository.create_blog(
-        user_id=request.user_id,
-        session_id=session_id,
-        topic=request.topic,
-        audience=request.audience,
-    )
-
-    logger.info(
-        "blog_generation_initiated",
-        user_id=request.user_id,
-        session_id=session_id,
-        blog_id=blog.id,
-    )
-
-    # Increment rate limiters
-    await rate_limit_guard.increment_global_blog_count()
-    await rate_limit_guard.increment_user_blog_count(request.user_id)
-
     try:
-        # Start blog pipeline in background
-        # Note: In production, this would be sent to a task queue (Celery/Cloud Tasks)
-        # For now, we return immediately and the pipeline would run async
-        
-        return BlogGenerationResponse(
-            session_id=session_id,
-            status="initiated",
-            stage="intent",
-            message="Blog generation started. Intent clarification needed.",
-            data={
-                "topic": request.topic,
-                "audience": request.audience,
-                "blog_id": blog.id,
-                "next_action": "Proceed to approve the intent or request modifications"
-            },
+        result = await blog_controller.initiate_blog_generation(
+            user_id=request.user_id,
+            topic=request.topic,
+            audience=request.audience
         )
-
+        return BlogGenerationResponse(**result)
+    
+    except RuntimeError as e:
+        # Rate limit error
+        raise HTTPException(status_code=429, detail=str(e))
+    except ValueError as e:
+        # Validation error
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error("blog_generation_failed", error=str(e), session_id=session_id)
-        await db_repository.update_blog(session_id, status="failed")
+        logger.error("blog_generation_failed", error=str(e))
         raise HTTPException(status_code=500, detail="Blog generation failed")
 
 
@@ -115,83 +68,33 @@ async def approve_stage(request: ApprovalRequest):
     """
     Approve or reject a pipeline stage.
     
-    Used for human-in-the-loop approval at intent and outline stages.
+    Delegates to blog_controller for business logic.
     """
-    logger.info(
-        "stage_approval",
-        session_id=request.session_id,
-        approved=request.approved,
-    )
-
-    # Query the blog to get current stage
-    # In a full implementation, this would:
-    # 1. Load blog from DB
-    # 2. Determine current stage
-    # 3. Resume pipeline from that stage
-    # 4. Update blog status
+    try:
+        result = await blog_controller.handle_stage_approval(
+            session_id=request.session_id,
+            approved=request.approved,
+            feedback=request.feedback
+        )
+        return BlogGenerationResponse(**result)
     
-    if request.approved:
-        return BlogGenerationResponse(
-            session_id=request.session_id,
-            status="approved",
-            stage="continuing",
-            message="Stage approved. Continuing generation.",
-            data={
-                "approved": True,
-                "next_steps": [
-                    "Research phase will begin",
-                    "Content will be written",
-                    "Editor will review the draft"
-                ],
-                "estimated_time": "2-3 minutes",
-                "approval_timestamp": datetime.utcnow().isoformat()
-            }
-        )
-    else:
-        return BlogGenerationResponse(
-            session_id=request.session_id,
-            status="rejected",
-            stage="awaiting_changes",
-            message=request.feedback or "Stage rejected. Please provide changes.",
-            data={
-                "approved": False,
-                "feedback": request.feedback,
-                "rejection_timestamp": datetime.utcnow().isoformat(),
-                "action_required": "Please modify your request or provide additional guidance"
-            }
-        )
+    except Exception as e:
+        logger.error("approval_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Approval processing failed")
 
 
 @router.get("/blog/status/{session_id}")
 async def get_blog_status(session_id: str):
-    """Get current status of a blog generation session."""
-    # Query blog from database
-    blog = await db_repository.get_blog_by_session(session_id)
+    """
+    Get current status of a blog generation session.
     
-    if not blog:
-        raise HTTPException(status_code=404, detail="Blog session not found")
+    Delegates to blog_controller for business logic.
+    """
+    try:
+        return await blog_controller.get_blog_status(session_id)
     
-    # Determine current stage based on status
-    stage_map = {
-        "in_progress": "research",
-        "completed": "final_review",
-        "failed": "error",
-    }
-    
-    return {
-        "session_id": session_id,
-        "blog_id": blog.id,
-        "status": blog.status,
-        "current_stage": stage_map.get(blog.status, "unknown"),
-        "message": f"Blog is currently {blog.status}",
-        "topic": blog.topic,
-        "audience": blog.audience,
-        "word_count": blog.word_count,
-        "sources_count": blog.sources_count,
-        "total_cost_usd": float(blog.total_cost_usd) if blog.total_cost_usd else 0.0,
-        "created_at": blog.created_at.isoformat() if blog.created_at else None,
-        "completed_at": blog.completed_at.isoformat() if blog.completed_at else None,
-    }
-
-
-from datetime import datetime
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error("status_check_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Status check failed")
