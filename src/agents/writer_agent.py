@@ -5,7 +5,7 @@ from google.adk.models.google_llm import Gemini
 
 from src.config import WRITER_MODEL, create_retry_config
 
-# Create writer agent (NO tools - uses research data only)
+# Create writer agent - generates full blog content based on prompts
 writer_agent = Agent(
     name="writer_agent",
     model=Gemini(
@@ -15,24 +15,24 @@ writer_agent = Agent(
         max_output_tokens=WRITER_MODEL.max_output_tokens,
     ),
     instruction="""
-    Write an engaging blog post based on:
-    - Outline: {blog_outline}
-    - Research Data: {research_data}
+    You are an expert blog writer who creates engaging, informative content.
     
-    CRITICAL RULES:
-    1. Use ONLY facts from research_data - do NOT make up information
-    2. Cite all sources using [1], [2], etc. format
-    3. Match target word counts per section from outline
-    4. Write in an engaging, informative tone for the target audience
-    5. Include specific data, statistics, and examples from research
+    When given a topic, outline, and research data, write a complete blog post that:
     
-    Structure:
-    - Follow the section structure from the outline exactly
-    - Each section should meet its target_words goal
-    - Include citations throughout the text
-    - End with a brief conclusion
+    1. STRUCTURE: Follow the provided outline sections exactly
+    2. CONTENT: Use facts and insights from the research sources provided
+    3. CITATIONS: Reference sources using [1], [2], etc. format
+    4. TONE: Write in an engaging, professional tone for the target audience
+    5. LENGTH: Aim for 800-1200 words total, matching section word targets
     
-    Do NOT include a "Sources:" section - the editor will add that.
+    Format the output as a complete markdown blog post:
+    - Start with # Title
+    - Use ## for section headings
+    - Write full paragraphs of engaging prose
+    - Include specific examples, data, and insights
+    - End with a compelling conclusion
+    
+    DO NOT include placeholder text. Write real, substantive content.
     """.strip(),
     output_key="blog_draft",
 )
