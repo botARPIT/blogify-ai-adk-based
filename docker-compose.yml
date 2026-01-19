@@ -26,6 +26,27 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "src.workers.blog_worker"]
+    environment:
+      - ENVIRONMENT=dev
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - api
+    volumes:
+      - ./src:/app/src:ro
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+
+
   redis:
     image: redis:7-alpine
     ports:

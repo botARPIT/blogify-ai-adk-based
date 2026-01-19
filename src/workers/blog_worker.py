@@ -1,10 +1,17 @@
 """Background worker for blog generation jobs.
 
 This worker process consumes jobs from Redis queue and executes
-LLM pipeline stages. No LLM calls happen in the API layer.
+the full LLM pipeline. No LLM calls happen in the API layer.
+
+Features:
+- Visibility timeout for crash recovery
+- Automatic job reclaim
+- Per-stage execution with DB persistence
+- Graceful shutdown
 
 Usage:
     python -m src.workers.blog_worker
+    python -m src.workers.blog_worker worker-001
 """
 
 import asyncio
@@ -22,7 +29,7 @@ load_dotenv(f".env.{env}")
 from src.config.logging_config import get_logger, setup_logging
 from src.core.task_queue import task_queue, TaskStatus
 from src.models.repository import db_repository
-from src.workers.stage_executor import StageExecutor
+from src.workers.stage_executor import StageExecutor, STAGE_TRANSITIONS
 
 setup_logging("INFO")
 logger = get_logger(__name__)
@@ -30,6 +37,7 @@ logger = get_logger(__name__)
 # Worker configuration
 POLL_INTERVAL = 1  # seconds
 SHUTDOWN_TIMEOUT = 30
+HEARTBEAT_INTERVAL = 60  # Extend visibility every 60s for long jobs
 
 # Shutdown flag
 shutdown_requested = False
@@ -57,10 +65,14 @@ async def run_worker(worker_id: str | None = None):
         logger.error("database_init_failed", error=str(e))
         return
     
+    # Start job reclaim loop
+    await task_queue.start_reclaim_loop(interval=60)
+    
     executor = StageExecutor()
     jobs_processed = 0
     
     logger.info("worker_ready", worker_id=worker_id)
+    print(f"🚀 Worker {worker_id} ready and listening for jobs...")
     
     while not shutdown_requested:
         try:
@@ -76,9 +88,10 @@ async def run_worker(worker_id: str | None = None):
                 worker_id=worker_id,
                 job_type=job.get("type", "unknown"),
             )
+            print(f"📥 Claimed job {job['id'][:8]}...")
             
-            # Process the job
-            await process_blog_job(job, executor, worker_id)
+            # Process the complete blog (all stages)
+            await process_full_blog(job, executor, worker_id)
             jobs_processed += 1
             
         except asyncio.CancelledError:
@@ -88,82 +101,84 @@ async def run_worker(worker_id: str | None = None):
             logger.error("worker_loop_error", error=str(e))
             await asyncio.sleep(POLL_INTERVAL)
     
+    # Cleanup
+    await task_queue.stop_reclaim_loop()
+    
     logger.info(
         "worker_shutdown_complete",
         worker_id=worker_id,
         jobs_processed=jobs_processed,
     )
+    print(f"👋 Worker {worker_id} shutdown. Processed {jobs_processed} jobs.")
 
 
-async def process_blog_job(job: dict, executor: StageExecutor, worker_id: str):
+async def process_full_blog(job: dict, executor: StageExecutor, worker_id: str):
     """
-    Process a single blog generation job.
+    Process a complete blog generation (all stages).
     
-    Args:
-        job: Job data from queue
-        executor: Stage executor instance
-        worker_id: Worker identifier
+    Runs all pipeline stages in sequence:
+    intent → outline → research → writing → completed
     """
     job_id = job["id"]
     payload = job.get("payload", {})
     blog_id = payload.get("blog_id")
-    current_stage = payload.get("stage", "intent")
     session_id = payload.get("session_id", "unknown")
+    topic = payload.get("topic", "")
     
     if not blog_id:
         logger.error("job_missing_blog_id", job_id=job_id)
         await task_queue.update_task(job_id, status=TaskStatus.FAILED, error="Missing blog_id")
         return
     
+    current_stage = "intent"
+    
     try:
         # Update job status to processing
         await task_queue.update_task(job_id, status=TaskStatus.PROCESSING)
         
-        # Execute the stage
-        logger.info(
-            "executing_stage",
-            job_id=job_id,
-            blog_id=blog_id,
-            stage=current_stage,
-        )
+        # Update blog status
+        await db_repository.update_blog(session_id=session_id, status="processing")
         
-        result, next_stage = await executor.execute_stage(blog_id, current_stage)
+        print(f"🔄 Processing blog {session_id[:8]} - Topic: {topic[:50]}...")
         
-        if next_stage == "completed":
-            # All stages done - job complete
-            await task_queue.update_task(
-                job_id,
-                status=TaskStatus.COMPLETED,
-                result=result,
-            )
+        # Run all stages in sequence
+        while current_stage != "completed" and current_stage != "failed":
             logger.info(
-                "job_completed",
+                "executing_stage",
                 job_id=job_id,
                 blog_id=blog_id,
-                word_count=result.get("word_count", 0),
+                stage=current_stage,
             )
+            print(f"  ➡️  Stage: {current_stage}")
             
-        elif next_stage == "failed":
-            # Stage failed - handle retry
-            error_msg = result.get("error", "Unknown error")
-            await handle_job_failure(job, error_msg)
+            # Extend visibility timeout before each stage
+            await task_queue.extend_visibility(job_id, 300)
             
-        else:
-            # More stages to process - enqueue next stage
-            await enqueue_next_stage(
-                blog_id=blog_id,
-                session_id=session_id,
-                stage=next_stage,
-                original_payload=payload,
-            )
-            await task_queue.update_task(job_id, status=TaskStatus.COMPLETED)
+            # Execute the stage
+            result, next_stage = await executor.execute_stage(blog_id, current_stage)
+            
+            if next_stage == "failed":
+                raise Exception(result.get("error", "Stage execution failed"))
+            
             logger.info(
                 "stage_completed",
                 job_id=job_id,
-                current_stage=current_stage,
+                stage=current_stage,
                 next_stage=next_stage,
             )
             
+            current_stage = next_stage
+        
+        # All stages complete
+        await task_queue.update_task(
+            job_id,
+            status=TaskStatus.COMPLETED,
+            result={"session_id": session_id, "blog_id": blog_id},
+        )
+        
+        logger.info("job_completed", job_id=job_id, blog_id=blog_id)
+        print(f"✅ Blog {session_id[:8]} completed!")
+        
     except Exception as e:
         logger.error(
             "job_processing_failed",
@@ -172,27 +187,33 @@ async def process_blog_job(job: dict, executor: StageExecutor, worker_id: str):
             stage=current_stage,
             error=str(e),
         )
-        await handle_job_failure(job, str(e))
+        print(f"❌ Job failed at stage {current_stage}: {str(e)[:100]}")
+        
+        await handle_job_failure(job, str(e), current_stage)
 
 
-async def handle_job_failure(job: dict, error: str):
+async def handle_job_failure(job: dict, error: str, stage: str = "unknown"):
     """
     Handle job failure with retry logic.
     
     Uses exponential backoff for retries.
     Moves to dead letter queue after max attempts.
-    
-    Args:
-        job: Failed job data
-        error: Error message
     """
     job_id = job["id"]
+    payload = job.get("payload", {})
+    session_id = payload.get("session_id", "unknown")
     attempts = job.get("retries", 0) + 1
     max_attempts = job.get("max_retries", 3)
     
+    # Update blog with error
+    await db_repository.update_blog(
+        session_id=session_id,
+        status="failed",
+    )
+    
     if attempts < max_attempts:
         # Retry with exponential backoff
-        backoff_seconds = min(300, 2 ** attempts * 10)  # Max 5 minutes
+        backoff_seconds = min(300, 2 ** attempts * 10)
         
         logger.info(
             "job_retry_scheduled",
@@ -201,9 +222,8 @@ async def handle_job_failure(job: dict, error: str):
             max_attempts=max_attempts,
             backoff_seconds=backoff_seconds,
         )
+        print(f"🔄 Retry scheduled ({attempts}/{max_attempts})")
         
-        # For now, just requeue immediately
-        # In production, use delayed queue
         await task_queue.requeue(job_id)
         
     else:
@@ -214,46 +234,13 @@ async def handle_job_failure(job: dict, error: str):
             attempts=attempts,
             error=error,
         )
+        print(f"💀 Max retries exceeded. Job failed permanently.")
+        
         await task_queue.update_task(
             job_id,
             status=TaskStatus.FAILED,
-            error=f"Max retries exceeded: {error}",
+            error=f"Max retries exceeded at stage {stage}: {error}",
         )
-
-
-async def enqueue_next_stage(
-    blog_id: int,
-    session_id: str,
-    stage: str,
-    original_payload: dict,
-):
-    """
-    Enqueue the next stage for processing.
-    
-    Args:
-        blog_id: Blog ID
-        session_id: Session ID
-        stage: Next stage to execute
-        original_payload: Original job payload
-    """
-    payload = {
-        **original_payload,
-        "blog_id": blog_id,
-        "session_id": session_id,
-        "stage": stage,
-    }
-    
-    job_id = await task_queue.enqueue(
-        task_type="blog_stage",
-        payload=payload,
-    )
-    
-    logger.info(
-        "next_stage_enqueued",
-        job_id=job_id,
-        blog_id=blog_id,
-        stage=stage,
-    )
 
 
 def signal_handler(signum, frame):
@@ -262,12 +249,17 @@ def signal_handler(signum, frame):
     
     signal_name = signal.Signals(signum).name
     logger.info("shutdown_signal_received", signal=signal_name)
+    print(f"\n⚠️  Shutdown signal received ({signal_name}). Finishing current job...")
     
     shutdown_requested = True
 
 
 def main():
     """Entry point for worker process."""
+    print("=" * 60)
+    print("  BLOGIFY BACKGROUND WORKER")
+    print("=" * 60)
+    
     # Parse worker ID from command line or generate
     worker_id = None
     if len(sys.argv) > 1:
@@ -284,6 +276,7 @@ def main():
         logger.info("worker_interrupted")
     except Exception as e:
         logger.error("worker_fatal_error", error=str(e))
+        print(f"💥 Fatal error: {e}")
         sys.exit(1)
 
 

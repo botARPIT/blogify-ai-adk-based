@@ -1,12 +1,16 @@
-"""Async task queue for long-running blog generation.
+"""Enhanced task queue with job reclaim for crashed workers.
 
-Uses Redis-based task queue for non-blocking blog generation.
+Features:
+- Job visibility timeout (prevents lost jobs on crash)
+- Automatic job reclaim for stale processing jobs
+- Dead letter queue for failed jobs
 """
 
 import asyncio
+import hashlib
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Callable
 
@@ -29,24 +33,26 @@ class TaskStatus(str, Enum):
 
 class TaskQueue:
     """
-    Redis-backed async task queue for blog generation.
+    Redis-backed async task queue with job reclaim support.
     
     Features:
     - Non-blocking task submission
-    - Real-time status polling
-    - Automatic retry with backoff
-    - Task result storage
-    - Worker-based processing
+    - Visibility timeout for crash recovery
+    - Automatic stale job reclaim
+    - Dead letter queue for permanent failures
     """
     
     QUEUE_NAME = "blogify:tasks"
+    PROCESSING_SET = "blogify:processing"
     TASK_PREFIX = "blogify:task:"
+    DEAD_LETTER = "blogify:deadletter"
     RESULT_TTL = 86400  # 24 hours
+    VISIBILITY_TIMEOUT = 300  # 5 minutes - job reclaim if not completed
     
     def __init__(self, redis_url: str | None = None):
         self.redis_url = redis_url or db_settings.redis_url
         self._client: redis.Redis | None = None
-        self._is_running = False
+        self._reclaim_task: asyncio.Task | None = None
     
     async def _get_client(self) -> redis.Redis:
         """Get or create Redis client."""
@@ -105,15 +111,7 @@ class TaskQueue:
         return task_id
     
     async def get_task_status(self, task_id: str) -> dict | None:
-        """
-        Get task status and result.
-        
-        Args:
-            task_id: Task ID
-            
-        Returns:
-            Task data or None if not found
-        """
+        """Get task status and result."""
         client = await self._get_client()
         
         task_key = f"{self.TASK_PREFIX}{task_id}"
@@ -132,16 +130,7 @@ class TaskQueue:
         error: str | None = None,
         progress: int | None = None,
     ) -> None:
-        """
-        Update task status and data.
-        
-        Args:
-            task_id: Task ID
-            status: New status
-            result: Task result (on completion)
-            error: Error message (on failure)
-            progress: Progress percentage (0-100)
-        """
+        """Update task status and data."""
         client = await self._get_client()
         
         task_key = f"{self.TASK_PREFIX}{task_id}"
@@ -168,6 +157,12 @@ class TaskQueue:
         
         if status == TaskStatus.COMPLETED:
             task["completed_at"] = datetime.utcnow().isoformat()
+            # Remove from processing set
+            await client.zrem(self.PROCESSING_SET, task_id)
+        
+        if status == TaskStatus.FAILED:
+            # Remove from processing set
+            await client.zrem(self.PROCESSING_SET, task_id)
         
         await client.set(task_key, json.dumps(task), ex=self.RESULT_TTL)
         
@@ -175,7 +170,7 @@ class TaskQueue:
     
     async def dequeue(self, timeout: int = 5) -> dict | None:
         """
-        Dequeue the next task (blocking).
+        Dequeue the next task with visibility timeout.
         
         Args:
             timeout: Wait timeout in seconds
@@ -204,11 +199,24 @@ class TaskQueue:
         task["started_at"] = datetime.utcnow().isoformat()
         task["updated_at"] = datetime.utcnow().isoformat()
         
+        # Add to processing set with visibility timeout score
+        visibility_deadline = datetime.utcnow().timestamp() + self.VISIBILITY_TIMEOUT
+        await client.zadd(self.PROCESSING_SET, {task_id: visibility_deadline})
+        
         await client.set(task_key, json.dumps(task), ex=self.RESULT_TTL)
         
         logger.info("task_dequeued", task_id=task_id)
         
         return task
+    
+    async def extend_visibility(self, task_id: str, seconds: int = 300) -> None:
+        """Extend the visibility timeout for a processing task."""
+        client = await self._get_client()
+        
+        new_deadline = datetime.utcnow().timestamp() + seconds
+        await client.zadd(self.PROCESSING_SET, {task_id: new_deadline})
+        
+        logger.debug("visibility_extended", task_id=task_id, seconds=seconds)
     
     async def requeue(self, task_id: str) -> None:
         """Requeue a failed task for retry."""
@@ -224,60 +232,124 @@ class TaskQueue:
         task["retries"] = task.get("retries", 0) + 1
         task["status"] = TaskStatus.PENDING.value
         task["updated_at"] = datetime.utcnow().isoformat()
+        task.pop("started_at", None)
+        
+        # Remove from processing set
+        await client.zrem(self.PROCESSING_SET, task_id)
         
         await client.set(task_key, json.dumps(task), ex=self.RESULT_TTL)
         await client.lpush(self.QUEUE_NAME, task_id)
         
         logger.info("task_requeued", task_id=task_id, retries=task["retries"])
     
-    async def process_task(
-        self,
-        task: dict,
-        handler: Callable[[dict], Any],
-    ) -> None:
+    async def reclaim_stale_jobs(self) -> int:
         """
-        Process a task with the given handler.
+        Reclaim jobs from crashed workers.
         
-        Args:
-            task: Task data
-            handler: Async function to process task
+        Checks processing set for jobs past their visibility deadline
+        and requeues them.
+        
+        Returns:
+            Number of jobs reclaimed
         """
-        task_id = task["id"]
+        client = await self._get_client()
         
-        try:
-            result = await handler(task["payload"])
+        now = datetime.utcnow().timestamp()
+        
+        # Get all jobs past their deadline
+        stale_jobs = await client.zrangebyscore(
+            self.PROCESSING_SET,
+            "-inf",
+            now,
+        )
+        
+        reclaimed = 0
+        for task_id in stale_jobs:
+            task_key = f"{self.TASK_PREFIX}{task_id}"
+            data = await client.get(task_key)
             
-            await self.update_task(
-                task_id,
-                status=TaskStatus.COMPLETED,
-                result=result,
-            )
+            if data is None:
+                # Task expired, just remove from set
+                await client.zrem(self.PROCESSING_SET, task_id)
+                continue
             
-            logger.info("task_completed", task_id=task_id)
+            task = json.loads(data)
+            retries = task.get("retries", 0)
+            max_retries = task.get("max_retries", 3)
             
-        except Exception as e:
-            logger.error("task_failed", task_id=task_id, error=str(e))
-            
-            task_data = await self.get_task_status(task_id)
-            retries = task_data.get("retries", 0) if task_data else 0
-            max_retries = task_data.get("max_retries", 3) if task_data else 3
-            
-            if retries < max_retries:
-                await self.requeue(task_id)
+            if retries >= max_retries:
+                # Move to dead letter queue
+                await client.lpush(self.DEAD_LETTER, task_id)
+                await client.zrem(self.PROCESSING_SET, task_id)
+                task["status"] = TaskStatus.FAILED.value
+                task["error"] = "Max retries exceeded (job reclaim)"
+                await client.set(task_key, json.dumps(task), ex=self.RESULT_TTL)
+                logger.warning("job_moved_to_deadletter", task_id=task_id)
             else:
-                await self.update_task(
-                    task_id,
-                    status=TaskStatus.FAILED,
-                    error=str(e),
-                )
+                # Requeue for retry
+                await self.requeue(task_id)
+                reclaimed += 1
+                logger.info("job_reclaimed", task_id=task_id, retries=retries + 1)
+        
+        return reclaimed
+    
+    async def start_reclaim_loop(self, interval: int = 60):
+        """Start background job reclaim loop."""
+        
+        async def reclaim_loop():
+            while True:
+                try:
+                    reclaimed = await self.reclaim_stale_jobs()
+                    if reclaimed > 0:
+                        logger.info("reclaim_cycle_complete", reclaimed=reclaimed)
+                except Exception as e:
+                    logger.error("reclaim_error", error=str(e))
+                
+                await asyncio.sleep(interval)
+        
+        self._reclaim_task = asyncio.create_task(reclaim_loop())
+        logger.info("reclaim_loop_started", interval=interval)
+    
+    async def stop_reclaim_loop(self):
+        """Stop the background reclaim loop."""
+        if self._reclaim_task:
+            self._reclaim_task.cancel()
+            try:
+                await self._reclaim_task
+            except asyncio.CancelledError:
+                pass
+            self._reclaim_task = None
+            logger.info("reclaim_loop_stopped")
+    
+    async def get_queue_stats(self) -> dict:
+        """Get queue statistics."""
+        client = await self._get_client()
+        
+        pending = await client.llen(self.QUEUE_NAME)
+        processing = await client.zcard(self.PROCESSING_SET)
+        dead_letter = await client.llen(self.DEAD_LETTER)
+        
+        return {
+            "pending": pending,
+            "processing": processing,
+            "dead_letter": dead_letter,
+        }
+    
+    async def close(self):
+        """Close connections and stop background tasks."""
+        await self.stop_reclaim_loop()
+        if self._client:
+            await self._client.close()
+            self._client = None
 
 
-# Blog generation specific helper
+# Blog generation specific helpers
 async def enqueue_blog_generation(
     user_id: str,
     topic: str,
     audience: str | None,
     session_id: str | None = None,
+    blog_id: int | None = None,
 ) -> str:
     """
     Enqueue a blog generation task.
@@ -293,6 +365,8 @@ async def enqueue_blog_generation(
             "topic": topic,
             "audience": audience or "general readers",
             "session_id": session_id or str(uuid.uuid4()),
+            "blog_id": blog_id,
+            "stage": "intent",  # Start at intent stage
         },
     )
     

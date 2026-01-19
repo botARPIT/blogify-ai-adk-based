@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blogify-worker
+  labels:
+    app: blogify-worker
+    component: worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: blogify-worker
+  template:
+    metadata:
+      labels:
+        app: blogify-worker
+    spec:
+      containers:
+        - name: worker
+          image: gcr.io/PROJECT_ID/blogify-api:latest
+          command: ["python", "-m", "src.workers.blog_worker"]
+          env:
+            - name: ENVIRONMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: blogify-config
+                  key: ENVIRONMENT
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blogify-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: blogify-secrets
+                  key: REDIS_URL
+            - name: GOOGLE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: blogify-secrets
+                  key: GOOGLE_API_KEY
+            - name: TAVILY_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: blogify-secrets
+                  key: TAVILY_API_KEY
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          # Liveness probe - worker health
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import redis; r = redis.from_url('$REDIS_URL'); r.ping()"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # No readiness probe for workers (no HTTP)
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: blogify-worker-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: blogify-worker
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+    # Scale based on queue depth (requires custom metrics adapter)
+    - type: External
+      external:
+        metric:
+          name: redis_queue_length
+          selector:
+            matchLabels:
+              queue: blogify:tasks
+        target:
+          type: AverageValue
+          averageValue: "10"
+    # Fallback: CPU-based scaling
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
