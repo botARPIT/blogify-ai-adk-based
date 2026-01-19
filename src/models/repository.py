@@ -232,11 +232,20 @@ class DatabaseRepository:
 
                 return blog
 
+    async def get_blog(self, blog_id: int) -> Blog | None:
+        """Get blog by ID."""
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(Blog).where(Blog.id == blog_id)
+            )
+            return result.scalar_one_or_none()
+
     async def close(self) -> None:
         """Close database connections."""
         if self.engine:
             await self.engine.dispose()
             logger.info("database_engine_closed")
+
 
 
 # Global instance
