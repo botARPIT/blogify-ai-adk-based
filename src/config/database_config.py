@@ -8,7 +8,7 @@ class DatabaseSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    database_url: str
+    database_url: str = "postgresql+asyncpg://localhost/blogify"
     database_pool_size: int = 10
     database_max_overflow: int = 20
     redis_url: str = "redis://localhost:6379/0"
