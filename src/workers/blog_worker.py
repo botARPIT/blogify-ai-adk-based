@@ -39,8 +39,17 @@ POLL_INTERVAL = 1  # seconds
 SHUTDOWN_TIMEOUT = 30
 HEARTBEAT_INTERVAL = 60  # Extend visibility every 60s for long jobs
 
+# BACKPRESSURE: Limit concurrent jobs per worker
+# Prevents CPU/memory/token exhaustion
+MAX_CONCURRENT_JOBS = 3
+job_semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
+
 # Shutdown flag
 shutdown_requested = False
+
+# Active jobs counter
+active_jobs = 0
+
 
 
 async def run_worker(worker_id: str | None = None):
@@ -71,11 +80,21 @@ async def run_worker(worker_id: str | None = None):
     executor = StageExecutor()
     jobs_processed = 0
     
-    logger.info("worker_ready", worker_id=worker_id)
-    print(f"🚀 Worker {worker_id} ready and listening for jobs...")
+    logger.info(
+        "worker_ready",
+        worker_id=worker_id,
+        max_concurrent_jobs=MAX_CONCURRENT_JOBS,
+    )
+    print(f"🚀 Worker {worker_id} ready (max {MAX_CONCURRENT_JOBS} concurrent jobs)")
     
     while not shutdown_requested:
         try:
+            # BACKPRESSURE: Check if we have capacity before claiming
+            if job_semaphore.locked() and job_semaphore._value == 0:
+                # At capacity - wait a bit
+                await asyncio.sleep(0.1)
+                continue
+            
             # Try to claim a job
             job = await task_queue.dequeue(timeout=POLL_INTERVAL)
             
@@ -87,11 +106,14 @@ async def run_worker(worker_id: str | None = None):
                 job_id=job["id"],
                 worker_id=worker_id,
                 job_type=job.get("type", "unknown"),
+                semaphore_available=job_semaphore._value,
             )
             print(f"📥 Claimed job {job['id'][:8]}...")
             
-            # Process the complete blog (all stages)
-            await process_full_blog(job, executor, worker_id)
+            # Process with semaphore protection (non-blocking)
+            asyncio.create_task(
+                process_with_semaphore(job, executor, worker_id)
+            )
             jobs_processed += 1
             
         except asyncio.CancelledError:
@@ -101,8 +123,14 @@ async def run_worker(worker_id: str | None = None):
             logger.error("worker_loop_error", error=str(e))
             await asyncio.sleep(POLL_INTERVAL)
     
+    # Wait for active jobs to complete
+    print(f"⏳ Waiting for active jobs to complete...")
+    while job_semaphore._value < MAX_CONCURRENT_JOBS:
+        await asyncio.sleep(0.5)
+    
     # Cleanup
     await task_queue.stop_reclaim_loop()
+
     
     logger.info(
         "worker_shutdown_complete",
@@ -110,6 +138,22 @@ async def run_worker(worker_id: str | None = None):
         jobs_processed=jobs_processed,
     )
     print(f"👋 Worker {worker_id} shutdown. Processed {jobs_processed} jobs.")
+
+
+async def process_with_semaphore(job: dict, executor: StageExecutor, worker_id: str):
+    """
+    Process job with semaphore protection.
+    
+    Ensures we never exceed MAX_CONCURRENT_JOBS active jobs.
+    """
+    global active_jobs
+    
+    async with job_semaphore:
+        active_jobs += 1
+        try:
+            await process_full_blog(job, executor, worker_id)
+        finally:
+            active_jobs -= 1
 
 
 async def process_full_blog(job: dict, executor: StageExecutor, worker_id: str):

@@ -168,6 +168,7 @@ class TestTaskQueue:
             mock_client = AsyncMock()
             mock_client.set.return_value = True
             mock_client.lpush.return_value = 1
+            mock_client.llen.return_value = 0  # Queue depth check
             mock_redis.return_value = mock_client
             
             from src.core.task_queue import TaskQueue

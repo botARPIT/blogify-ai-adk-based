@@ -31,6 +31,11 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class QueueFullError(Exception):
+    """Raised when queue depth exceeds maximum allowed."""
+    pass
+
+
 class TaskQueue:
     """
     Redis-backed async task queue with job reclaim support.
@@ -41,6 +46,7 @@ class TaskQueue:
     - Automatic stale job reclaim
     - Dead letter queue for permanent failures
     """
+
     
     QUEUE_NAME = "blogify:tasks"
     PROCESSING_SET = "blogify:processing"
@@ -48,6 +54,7 @@ class TaskQueue:
     DEAD_LETTER = "blogify:deadletter"
     RESULT_TTL = 86400  # 24 hours
     VISIBILITY_TIMEOUT = 300  # 5 minutes - job reclaim if not completed
+    MAX_QUEUE_DEPTH = 1000  # Maximum pending jobs - backpressure control
     
     def __init__(self, redis_url: str | None = None):
         self.redis_url = redis_url or db_settings.redis_url
@@ -60,6 +67,8 @@ class TaskQueue:
             self._client = await redis.from_url(
                 self.redis_url,
                 decode_responses=True,
+                socket_timeout=5.0,  # Fast-fail on Redis issues
+                socket_connect_timeout=2.0,
             )
         return self._client
     
@@ -71,7 +80,7 @@ class TaskQueue:
         priority: int = 0,
     ) -> str:
         """
-        Enqueue a new task.
+        Enqueue a new task with depth check.
         
         Args:
             task_type: Type of task (e.g., "blog_generation")
@@ -81,8 +90,23 @@ class TaskQueue:
             
         Returns:
             Task ID
+            
+        Raises:
+            QueueFullError: If queue depth exceeds MAX_QUEUE_DEPTH
         """
         client = await self._get_client()
+        
+        # BACKPRESSURE: Check queue depth before enqueue
+        current_depth = await client.llen(self.QUEUE_NAME)
+        if current_depth >= self.MAX_QUEUE_DEPTH:
+            logger.warning(
+                "queue_depth_exceeded",
+                current=current_depth,
+                max=self.MAX_QUEUE_DEPTH,
+            )
+            raise QueueFullError(
+                f"Queue depth {current_depth} exceeds maximum {self.MAX_QUEUE_DEPTH}"
+            )
         
         if task_id is None:
             task_id = str(uuid.uuid4())
@@ -106,7 +130,7 @@ class TaskQueue:
         # Add to queue
         await client.lpush(self.QUEUE_NAME, task_id)
         
-        logger.info("task_enqueued", task_id=task_id, type=task_type)
+        logger.info("task_enqueued", task_id=task_id, type=task_type, queue_depth=current_depth + 1)
         
         return task_id
     

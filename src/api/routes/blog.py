@@ -2,6 +2,7 @@
 
 NO LLM CALLS IN HTTP HANDLERS.
 All blog generation is handled by background workers.
+Full backpressure controls at all boundaries.
 """
 
 import uuid
@@ -9,8 +10,18 @@ from fastapi import APIRouter, HTTPException, Header, Request
 from pydantic import BaseModel, Field
 
 from src.config.logging_config import get_logger
+from src.core.backpressure import (
+    api_concurrency_limiter,
+    ConcurrencyLimitExceeded,
+    get_all_stats as get_backpressure_stats,
+)
 from src.core.idempotency import idempotency_store
-from src.core.task_queue import enqueue_blog_generation, get_generation_status, task_queue
+from src.core.task_queue import (
+    enqueue_blog_generation,
+    get_generation_status,
+    task_queue,
+    QueueFullError,
+)
 from src.guards.input_guard import input_guard
 from src.guards.rate_limit_guard import rate_limit_guard
 from src.models.repository import db_repository
@@ -18,6 +29,7 @@ from src.models.repository import db_repository
 logger = get_logger(__name__)
 
 router = APIRouter()
+
 
 
 class BlogGenerationRequest(BaseModel):
@@ -80,105 +92,132 @@ async def generate_blog(
     for status updates.
     
     **Flow:**
-    1. Request validated
-    2. Blog record created in DB
-    3. Job enqueued to Redis
-    4. Returns task_id for polling
+    1. Concurrency check (backpressure)
+    2. Request validated
+    3. Blog record created in DB
+    4. Job enqueued to Redis (with queue depth check)
+    5. Returns task_id for polling
+    
+    **Backpressure:**
+    - Returns 503 if API overloaded (concurrency limit)
+    - Returns 503 if queue is full (queue depth limit)
     
     **Idempotency:**
     Provide `Idempotency-Key` header to prevent duplicate processing on retries.
     """
     try:
-        # Get user_id - prefer from JWT if available
-        user_id = getattr(req.state, "user_id", None) or request.user_id
-        
-        # Check idempotency
-        is_new, cached_response = await idempotency_store.check_and_set(
-            user_id=user_id,
-            endpoint="/blog/generate",
-            idempotency_key=idempotency_key,
-            request_body=request.model_dump(),
-        )
-        
-        if not is_new:
-            if cached_response:
-                logger.info("idempotency_cache_hit", user_id=user_id)
-                return BlogGenerationResponse(**cached_response)
-            else:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Request already in progress with this idempotency key",
+        # BACKPRESSURE: Concurrency limit for API layer
+        async with api_concurrency_limiter:
+            
+            # Get user_id - prefer from JWT if available
+            user_id = getattr(req.state, "user_id", None) or request.user_id
+            
+            # Check idempotency
+            is_new, cached_response = await idempotency_store.check_and_set(
+                user_id=user_id,
+                endpoint="/blog/generate",
+                idempotency_key=idempotency_key,
+                request_body=request.model_dump(),
+            )
+            
+            if not is_new:
+                if cached_response:
+                    logger.info("idempotency_cache_hit", user_id=user_id)
+                    return BlogGenerationResponse(**cached_response)
+                else:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Request already in progress with this idempotency key",
+                    )
+            
+            # Validate input
+            valid, msg = input_guard.validate_input(request.topic, request.audience)
+            if not valid:
+                await idempotency_store.clear(
+                    user_id=user_id,
+                    endpoint="/blog/generate",
+                    idempotency_key=idempotency_key,
                 )
-        
-        # Validate input
-        valid, msg = input_guard.validate_input(request.topic, request.audience)
-        if not valid:
-            await idempotency_store.clear(
+                raise HTTPException(status_code=400, detail=msg)
+            
+            # Check rate limits
+            allowed, msg = await rate_limit_guard.check_all_limits(user_id, is_blog_request=True)
+            if not allowed:
+                await idempotency_store.clear(
+                    user_id=user_id,
+                    endpoint="/blog/generate",
+                    idempotency_key=idempotency_key,
+                )
+                raise HTTPException(status_code=429, detail=msg)
+            
+            # Generate session ID
+            session_id = str(uuid.uuid4())
+            
+            # Create blog record in DB
+            await db_repository.get_or_create_user(user_id)
+            blog = await db_repository.create_blog(
+                user_id=user_id,
+                session_id=session_id,
+                topic=request.topic,
+                audience=request.audience or "general readers",
+            )
+            
+            # Enqueue job - NO LLM CALL HERE
+            task_id = await enqueue_blog_generation(
+                user_id=user_id,
+                topic=request.topic,
+                audience=request.audience,
+                session_id=session_id,
+                blog_id=blog.id,
+            )
+            
+            # Update rate limiters
+            await rate_limit_guard.increment_global_blog_count()
+            await rate_limit_guard.increment_user_blog_count(user_id)
+            
+            response = BlogGenerationResponse(
+                session_id=session_id,
+                task_id=task_id,
+                status="queued",
+                message="Blog generation queued. Poll /blog/task/{task_id} for status.",
+                poll_url=f"/api/v1/blog/task/{task_id}",
+            )
+            
+            # Cache for idempotency
+            await idempotency_store.set_response(
                 user_id=user_id,
                 endpoint="/blog/generate",
+                response=response.model_dump(),
                 idempotency_key=idempotency_key,
             )
-            raise HTTPException(status_code=400, detail=msg)
-        
-        # Check rate limits
-        allowed, msg = await rate_limit_guard.check_all_limits(user_id, is_blog_request=True)
-        if not allowed:
-            await idempotency_store.clear(
+            
+            logger.info(
+                "blog_generation_queued",
+                session_id=session_id,
+                task_id=task_id,
                 user_id=user_id,
-                endpoint="/blog/generate",
-                idempotency_key=idempotency_key,
             )
-            raise HTTPException(status_code=429, detail=msg)
+            
+            return response
+
         
-        # Generate session ID
-        session_id = str(uuid.uuid4())
-        
-        # Create blog record in DB
-        await db_repository.get_or_create_user(user_id)
-        blog = await db_repository.create_blog(
-            user_id=user_id,
-            session_id=session_id,
-            topic=request.topic,
-            audience=request.audience or "general readers",
+    except ConcurrencyLimitExceeded:
+        # BACKPRESSURE: API overloaded - fast fail
+        logger.warning("api_concurrency_limit_exceeded", user_id=request.user_id)
+        raise HTTPException(
+            status_code=503,
+            detail="Service temporarily overloaded. Please retry.",
+            headers={"Retry-After": "5"},
         )
         
-        # Enqueue job - NO LLM CALL HERE
-        task_id = await enqueue_blog_generation(
-            user_id=user_id,
-            topic=request.topic,
-            audience=request.audience,
-            session_id=session_id,
-            blog_id=blog.id,
+    except QueueFullError as e:
+        # BACKPRESSURE: Queue at capacity - fast fail
+        logger.warning("queue_full", user_id=request.user_id, detail=str(e))
+        raise HTTPException(
+            status_code=503,
+            detail="Job queue at capacity. Please retry later.",
+            headers={"Retry-After": "10"},
         )
-        
-        # Update rate limiters
-        await rate_limit_guard.increment_global_blog_count()
-        await rate_limit_guard.increment_user_blog_count(user_id)
-        
-        response = BlogGenerationResponse(
-            session_id=session_id,
-            task_id=task_id,
-            status="queued",
-            message="Blog generation queued. Poll /blog/task/{task_id} for status.",
-            poll_url=f"/api/v1/blog/task/{task_id}",
-        )
-        
-        # Cache for idempotency
-        await idempotency_store.set_response(
-            user_id=user_id,
-            endpoint="/blog/generate",
-            response=response.model_dump(),
-            idempotency_key=idempotency_key,
-        )
-        
-        logger.info(
-            "blog_generation_queued",
-            session_id=session_id,
-            task_id=task_id,
-            user_id=user_id,
-        )
-        
-        return response
         
     except HTTPException:
         raise
@@ -191,6 +230,7 @@ async def generate_blog(
                 idempotency_key=idempotency_key,
             )
         raise HTTPException(status_code=500, detail=f"Failed to queue blog generation: {str(e)}")
+
 
 
 @router.get("/blog/task/{task_id}", response_model=TaskStatusResponse)
@@ -325,6 +365,31 @@ async def get_queue_stats():
     except Exception as e:
         logger.error("queue_stats_failed", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to get queue stats")
+
+
+@router.get("/blog/backpressure/stats")
+async def get_backpressure_status():
+    """
+    Get backpressure control statistics.
+    
+    Returns circuit breaker states and concurrency limits.
+    Useful for monitoring system health under load.
+    """
+    try:
+        queue_stats = await task_queue.get_queue_stats()
+        backpressure = get_backpressure_stats()
+        
+        return {
+            "queue": {
+                **queue_stats,
+                "max_depth": task_queue.MAX_QUEUE_DEPTH,
+            },
+            **backpressure,
+        }
+    except Exception as e:
+        logger.error("backpressure_stats_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get backpressure stats")
+
 
 
 # Legacy endpoints for backward compatibility (deprecated)
