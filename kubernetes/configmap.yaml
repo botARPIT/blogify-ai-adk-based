@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blogify-config
+data:
+  environment: "production"
+  redis-url: "redis://redis-service:6379/0"
+  log-level: "INFO"
+  cors-origins: '["https://your-domain.com"]'
+  rate-limit-blogs-per-day: "100"
+  rate-limit-requests-per-minute: "60"

@@ -15,8 +15,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import blog, chat, health
+from src.api.middleware import setup_middleware
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
+from src.core.errors import register_exception_handlers
 from src.guards.rate_limit_guard import rate_limit_guard
 from src.models.repository import db_repository
 from src.monitoring.metrics import metrics_endpoint
@@ -81,10 +83,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add custom middleware (request ID, logging, security headers)
+setup_middleware(app)
+
+# Register exception handlers
+register_exception_handlers(app)
+
 # Include routers
 app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(chat.router, prefix="/api", tags=["Chat"])
 app.include_router(blog.router, prefix="/api", tags=["Blog"])
+
 
 
 @app.get("/")
