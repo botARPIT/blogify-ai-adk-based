@@ -5,7 +5,7 @@ from google.adk.models.google_llm import Gemini
 from google.adk.tools import AgentTool, FunctionTool
 
 from src.config import CHATBOT_MODEL, create_retry_config
-from src.agents.blog_generation_pipeline import blog_pipeline
+from src.agents.pipeline import blog_pipeline
 
 
 @FunctionTool
