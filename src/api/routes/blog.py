@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from src.agents.blog_generation_pipeline import blog_pipeline
+from src.agents.pipeline import blog_pipeline
 from src.api.main import request_semaphore
 from src.config.logging_config import get_logger
 from src.guards.input_guard import input_guard
