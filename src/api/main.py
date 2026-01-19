@@ -32,13 +32,16 @@ from src.api.middleware import setup_middleware
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
 from src.core.errors import register_exception_handlers
+from src.core.session_store import redis_session_service
 from src.guards.rate_limit_guard import rate_limit_guard
 from src.models.repository import db_repository
 from src.monitoring.metrics import metrics_endpoint
+from src.monitoring.tracing import init_tracing, instrument_app
 
 # Setup logging
 setup_logging(config.log_level)
 logger = get_logger(__name__)
+
 
 # Semaphore for concurrent request limiting (scalability)
 request_semaphore = asyncio.Semaphore(config.max_concurrent_requests)
@@ -102,12 +105,16 @@ async def lifespan(app: FastAPI):
     # Initialize rate limiter
     await rate_limit_guard.connect()
 
+    # Initialize distributed tracing
+    init_tracing(service_name="blogify-api")
+
     # Register signal handlers for graceful shutdown
     loop = asyncio.get_event_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, lambda: asyncio.create_task(graceful_shutdown()))
 
     logger.info("🚀 Application ready to accept requests")
+
 
     yield
 
