@@ -1,5 +1,13 @@
 """FastAPI main application with environment-based configuration."""
 
+import os
+from dotenv import load_dotenv
+
+# Load environment file before any other imports
+env = os.getenv("ENVIRONMENT", "dev")
+load_dotenv(f".env.{env}")
+
+
 import asyncio
 from contextlib import asynccontextmanager
 
