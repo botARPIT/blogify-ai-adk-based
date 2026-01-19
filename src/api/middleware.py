@@ -242,16 +242,25 @@ def setup_middleware(app):
     
     Execution order on REQUEST:
     1. RequestIDMiddleware (generates ID)
-    2. RequestLoggingMiddleware (logs request)
-    3. RateLimitHeaderMiddleware (checks limits)
-    4. SecurityHeadersMiddleware (adds headers)
-    5. ConcurrencyLimitMiddleware (controls load)
+    2. AuthMiddleware (validates JWT) - NEW
+    3. RequestLoggingMiddleware (logs request)
+    4. RateLimitHeaderMiddleware (checks limits)
+    5. SecurityHeadersMiddleware (adds headers)
+    6. ConcurrencyLimitMiddleware (controls load)
     """
+    import os
     from src.config.env_config import config
+    from src.api.auth import AuthMiddleware
+    
+    # Determine if auth is required (default: false in dev, true in prod)
+    auth_required = os.getenv("AUTH_REQUIRED", "false").lower() == "true"
+    if config.environment == "prod":
+        auth_required = True
     
     # Add in reverse order of desired execution
     app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent=config.max_concurrent_requests)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RateLimitHeaderMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(AuthMiddleware, required=auth_required)
     app.add_middleware(RequestIDMiddleware)
