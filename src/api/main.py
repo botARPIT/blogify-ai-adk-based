@@ -24,18 +24,30 @@ request_semaphore = asyncio.Semaphore(config.max_concurrent_requests)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown."""
-    # Startup
+    # Startup checks - fail fast if dependencies not ready
     logger.info(
         "application_startup",
         environment=config.environment,
         workers=config.api_workers,
     )
 
+    # Run dependency checks
+    from src.config.startup_checks import run_startup_checks
+
+    startup_ok = await run_startup_checks()
+    if not startup_ok:
+        logger.error("Startup checks failed - terminating")
+        raise RuntimeError("Startup checks failed")
+
+    logger.info("✅ All startup checks passed - initializing services...")
+
     # Initialize database
     await db_repository.create_tables()
 
     # Initialize rate limiter
     await rate_limiter.connect()
+
+    logger.info("🚀 Application ready to accept requests")
 
     yield
 
