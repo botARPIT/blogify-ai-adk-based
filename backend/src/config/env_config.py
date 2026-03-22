@@ -71,7 +71,7 @@ class DevelopmentConfig(BaseConfig):
     model_config = SettingsConfigDict(env_file=[".env.dev", "../.env.dev"], env_file_encoding="utf-8")
 
     environment: Environment = Environment.DEV
-    log_level: str = "DEBUG"
+    log_level: str = "debug"
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
     enable_datadog: bool = False
 
@@ -82,7 +82,7 @@ class StagingConfig(BaseConfig):
     model_config = SettingsConfigDict(env_file=[".env.stage", "../.env.stage"], env_file_encoding="utf-8")
 
     environment: Environment = Environment.STAGE
-    log_level: str = "INFO"
+    log_level: str = "info"
     api_workers: int = 4
     max_concurrent_requests: int = 20
     enable_datadog: bool = True
@@ -94,7 +94,7 @@ class ProductionConfig(BaseConfig):
     model_config = SettingsConfigDict(env_file=[".env.prod", "../.env.prod"], env_file_encoding="utf-8")
 
     environment: Environment = Environment.PROD
-    log_level: str = "WARNING"
+    log_level: str = "warning"
     api_workers: int = 8
     max_concurrent_requests: int = 50
     cors_origins: list[str] = []  # Must be explicitly set in prod
