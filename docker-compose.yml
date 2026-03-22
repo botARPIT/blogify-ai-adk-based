@@ -4,7 +4,7 @@ version: '3.8'
 services:
   api:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
@@ -17,7 +17,7 @@ services:
     depends_on:
       - redis
     volumes:
-      - ./src:/app/src:ro  # Mount source for hot reload in dev
+      - ./backend/src:/app/src:ro  # Mount source for hot reload in dev
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
@@ -28,7 +28,7 @@ services:
 
   worker:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     command: ["python", "-m", "src.workers.blog_worker"]
     environment:
@@ -41,7 +41,7 @@ services:
       - redis
       - api
     volumes:
-      - ./src:/app/src:ro
+      - ./backend/src:/app/src:ro
     restart: unless-stopped
     deploy:
       replicas: 2
