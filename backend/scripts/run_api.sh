@@ -21,10 +21,12 @@ done
 
 export ENVIRONMENT="${ENVIRONMENT:-dev}"
 export PYTHONPATH="$REPO_ROOT"
+# Ensure log level is lowercase for uvicorn
+LOG_LEVEL_LOWER=$(echo "${LOG_LEVEL:-info}" | tr '[:upper:]' '[:lower:]')
 
 echo "==> Starting Blogify AI API (env=$ENVIRONMENT)"
 uvicorn src.api.main:app \
   --host "${API_HOST:-0.0.0.0}" \
   --port "${API_PORT:-8000}" \
   --reload \
-  --log-level "${LOG_LEVEL:-info}"
+  --log-level "$LOG_LEVEL_LOWER"
