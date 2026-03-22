@@ -6,10 +6,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-if [ -f ".env" ]; then
-  # shellcheck disable=SC2046
-  export $(grep -v '^#' .env | xargs)
-fi
+# Load env from multiple locations (priority: backend/.env -> root/.env -> root/.env.dev)
+for env_file in ".env" "../.env" "../.env.dev"; do
+  if [ -f "$env_file" ]; then
+    echo "==> Loading environment from $env_file"
+    # shellcheck disable=SC2046
+    export $(grep -v '^#' "$env_file" | xargs)
+  fi
+done
 
 : "${GOOGLE_API_KEY:?'GOOGLE_API_KEY is required'}"
 : "${TAVILY_API_KEY:?'TAVILY_API_KEY is required'}"
