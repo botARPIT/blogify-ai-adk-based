@@ -13,14 +13,12 @@ State is passed between agents via ``output_key`` on the shared
 
 from __future__ import annotations
 
-import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from google.adk.agents import SequentialAgent, LoopAgent
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from src.agents.editor_agent import editor_agent
@@ -200,8 +198,15 @@ async def run_pipeline(
                     is_final=getattr(getattr(event, "actions", None), "escalate", False),
                 )
 
-            # Harvest results from session state
-            state = session.state if hasattr(session, "state") else {}
+            # Reload the session after the ADK run so we read the latest
+            # persisted state rather than the pre-run snapshot returned by
+            # create_session().
+            latest_session = await svc.get_session(
+                app_name=APP_NAME,
+                user_id=user_id,
+                session_id=session.id,
+            )
+            state = latest_session.state if latest_session and hasattr(latest_session, "state") else {}
             result.intent_result = state.get("intent_result")
             result.outline = state.get("blog_outline")
             result.research = state.get("research_data")

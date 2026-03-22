@@ -68,7 +68,7 @@ class BaseConfig(BaseSettings):
 class DevelopmentConfig(BaseConfig):
     """Development environment configuration."""
 
-    model_config = SettingsConfigDict(env_file=".env.dev", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=[".env.dev", "../.env.dev"], env_file_encoding="utf-8")
 
     environment: Environment = Environment.DEV
     log_level: str = "DEBUG"
@@ -79,7 +79,7 @@ class DevelopmentConfig(BaseConfig):
 class StagingConfig(BaseConfig):
     """Staging environment configuration."""
 
-    model_config = SettingsConfigDict(env_file=".env.stage", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=[".env.stage", "../.env.stage"], env_file_encoding="utf-8")
 
     environment: Environment = Environment.STAGE
     log_level: str = "INFO"
@@ -91,7 +91,7 @@ class StagingConfig(BaseConfig):
 class ProductionConfig(BaseConfig):
     """Production environment configuration."""
 
-    model_config = SettingsConfigDict(env_file=".env.prod", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=[".env.prod", "../.env.prod"], env_file_encoding="utf-8")
 
     environment: Environment = Environment.PROD
     log_level: str = "WARNING"

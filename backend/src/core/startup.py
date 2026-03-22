@@ -8,14 +8,13 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-import redis.asyncio as redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from src.config.database_config import db_settings
 from src.config.env_config import config
 from src.config.logging_config import get_logger
-from src.core.redis_pool import close_pool as close_redis_pool
+from src.core.redis_pool import close_pool as close_redis_pool, get_redis_client
 from src.core.task_queue import task_queue
 from src.guards.rate_limit_guard import rate_limit_guard
 from src.models.repository import db_repository
@@ -103,14 +102,9 @@ class RuntimeManager:
         self.started_at = datetime.utcnow()
         self._worker_tasks: dict[str, asyncio.Task] = {}
 
-    async def _create_redis_client(self) -> redis.Redis:
-        """Create a short-lived Redis client for checks and worker heartbeats."""
-        return await redis.from_url(
-            db_settings.redis_url,
-            decode_responses=True,
-            socket_connect_timeout=5,
-            socket_timeout=5,
-        )
+    async def _create_redis_client(self):
+        """Return a Redis client backed by the shared pool."""
+        return get_redis_client()
 
     def _required_environment_variables(self) -> dict[str, str]:
         """Return required environment variables for service startup."""
