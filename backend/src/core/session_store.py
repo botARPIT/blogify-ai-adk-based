@@ -8,6 +8,9 @@ import json
 from datetime import datetime
 from typing import Any
 
+from google.adk.events import Event
+from google.adk.sessions import BaseSessionService, Session
+from google.adk.sessions.base_session_service import ListSessionsResponse
 from src.config.logging_config import get_logger
 from src.core.redis_pool import get_redis_client
 
@@ -181,7 +184,7 @@ class RedisSessionStore:
     async def list_user_sessions(
         self,
         app_name: str,
-        user_id: str,
+        user_id: str | None,
         limit: int = 100,
     ) -> list[dict]:
         """
@@ -201,7 +204,8 @@ class RedisSessionStore:
                 data = await client.get(key)
                 if data:
                     session = json.loads(data)
-                    if session.get("user_id") == user_id and session.get("app_name") == app_name:
+                    matches_user = user_id is None or session.get("user_id") == user_id
+                    if matches_user and session.get("app_name") == app_name:
                         sessions.append(session)
                         if len(sessions) >= limit:
                             return sessions
@@ -217,7 +221,7 @@ class RedisSessionStore:
 
 
 # ADK-compatible wrapper
-class RedisSessionService:
+class RedisSessionService(BaseSessionService):
     """
     ADK-compatible session service backed by Redis.
     
@@ -227,13 +231,28 @@ class RedisSessionService:
     def __init__(self):
         self._store = RedisSessionStore()
     
+    def _to_adk_session(self, session: dict) -> Session:
+        events = [
+            Event.model_validate(event) if not isinstance(event, Event) else event
+            for event in session.get("events", [])
+        ]
+        return Session(
+            id=session["id"],
+            appName=session["app_name"],
+            userId=session["user_id"],
+            state=session.get("state", {}),
+            events=events,
+            lastUpdateTime=session.get("last_update_time", 0.0),
+        )
+
     async def create_session(
         self,
+        *,
         app_name: str,
         user_id: str,
         session_id: str | None = None,
         state: dict | None = None,
-    ):
+    ) -> Session:
         """Create a new session (ADK interface)."""
         session = await self._store.create_session(
             app_name=app_name,
@@ -241,27 +260,87 @@ class RedisSessionService:
             session_id=session_id,
             initial_state=state,
         )
-        
-        # Return ADK-compatible session object
-        return type("Session", (), {"id": session["id"], "state": session["state"]})()
+        session["last_update_time"] = datetime.utcnow().timestamp()
+        return self._to_adk_session(session)
     
     async def get_session(
         self,
+        *,
         app_name: str,
         user_id: str,
         session_id: str,
-    ):
+        config: Any | None = None,
+    ) -> Session | None:
         """Get a session (ADK interface)."""
         session = await self._store.get_session(
             app_name=app_name,
             user_id=user_id,
             session_id=session_id,
         )
-        
+
         if session is None:
             return None
-        
-        return type("Session", (), {"id": session["id"], "state": session["state"]})()
+
+        session.setdefault("last_update_time", datetime.utcnow().timestamp())
+        return self._to_adk_session(session)
+
+    async def list_sessions(
+        self,
+        *,
+        app_name: str,
+        user_id: str | None = None,
+    ) -> ListSessionsResponse:
+        sessions = await self._store.list_user_sessions(
+            app_name=app_name,
+            user_id=user_id,
+            limit=100,
+        )
+        return ListSessionsResponse(
+            sessions=[self._to_adk_session(session) for session in sessions]
+        )
+
+    async def delete_session(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+    ) -> None:
+        await self._store.delete_session(session_id=session_id)
+
+    async def update_session_state(
+        self,
+        *,
+        app_name: str,
+        user_id: str,
+        session_id: str,
+        state: dict[str, Any],
+    ) -> Session | None:
+        existing = await self._store.get_session(
+            app_name=app_name,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if existing is None:
+            return None
+
+        updated = await self._store.update_session(
+            session_id=session_id,
+            state=state,
+        )
+        if updated is None:
+            return None
+        updated["last_update_time"] = datetime.utcnow().timestamp()
+        return self._to_adk_session(updated)
+
+    async def append_event(self, session: Session, event: Event) -> Event:
+        appended_event = await super().append_event(session, event)
+        await self._store.update_session(
+            session_id=session.id,
+            state=session.state,
+            events=[appended_event.model_dump(mode="json")],
+        )
+        return appended_event
     
     async def close(self):
         """Close connections."""

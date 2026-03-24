@@ -1,14 +1,4 @@
-"""FastAPI main application with production-grade features.
-
-Features:
-- API versioning (v1)
-- Health checks with dependency verification
-- Graceful shutdown
-- Request ID tracking
-- Rate limiting with headers
-- OpenAPI documentation
-- Cost tracking endpoint
-"""
+"""FastAPI main application with canonical blog session APIs."""
 
 import os
 import signal
@@ -33,6 +23,9 @@ from src.core.errors import register_exception_handlers
 from src.core.startup import StartupCheckError, runtime_manager
 from src.monitoring.metrics import metrics_endpoint
 from src.monitoring.tracing import init_tracing, instrument_app
+from src.models.repository import db_repository
+from src.models.repositories.auth_user_repository import AuthUserRepository
+from src.services.local_auth_service import LocalAuthService
 
 # Setup logging
 setup_logging(config.log_level)
@@ -88,6 +81,14 @@ async def lifespan(app: FastAPI):
 
     logger.info("database_schema_expected_via_alembic")
 
+    try:
+        async with db_repository.async_session() as session:
+            async with session.begin():
+                await LocalAuthService().ensure_seed_user(AuthUserRepository(session))
+        logger.info("local_auth_seed_checked")
+    except Exception as exc:
+        logger.warning("local_auth_seed_skipped", error=str(exc))
+
     # Initialize distributed tracing
     init_tracing(service_name="blogify-api")
 
@@ -113,27 +114,26 @@ API_PREFIX = "/api/v1"
 app = FastAPI(
     title="Blogify AI API",
     description="""
-## Production-grade AI Blog Generation System
+## Canonical AI Blog Generation System
 
-Generate high-quality blog posts using Google ADK agents with:
-- **Intent Classification**: Validates and clarifies blog topics
-- **Outline Generation**: Creates structured blog outlines
-- **Research**: Gathers sources via Tavily API
-- **Content Writing**: Generates full blog content with citations
+Generate and review blog sessions using Google ADK agents with:
+- **Intent Classification**
+- **Outline Generation**
+- **Human outline review**
+- **Research and drafting**
+- **Final human review**
 
 ### Features
-- Rate limiting and budget enforcement
-- Cost tracking per blog generation
-- Real-time generation status
-- Legacy blog generation endpoints enabled by default on localhost
-
-### Localhost Notes
-Canonical adapter routes are feature-flagged and hidden by default until
-their database, budget, and worker wiring is complete.
+- Budget enforcement and session tracking
+- Human-in-the-loop checkpoints
+- Real-time canonical session status
+- Local cookie-based authentication
+- In-app notifications for async workflow transitions
+- Internal service adapter routes
 
 ### Authentication
-This API expects authentication to be handled by an external auth service.
-Include the `Authorization` header with your bearer token.
+Browser clients authenticate with local email/password login and HTTP-only cookies.
+Internal service routes continue to use the `X-Internal-Api-Key` header.
     """,
     version=API_VERSION,
     lifespan=lifespan,
@@ -170,30 +170,18 @@ from src.api.routes import health
 app.include_router(health.router, prefix="/api", tags=["Health"])  # Health at /api for backward compat
 app.include_router(health.router, prefix=API_PREFIX, tags=["Health"])
 
-# Optional ADK-backed routes are mounted only when their dependencies import cleanly.
-try:
-    from src.api.routes import blog, chat
-except ModuleNotFoundError as e:
-    logger.warning("adk_routes_disabled", error=str(e))
-else:
-    app.include_router(chat.router, prefix=API_PREFIX, tags=["Chat"])
-    app.include_router(blog.router, prefix=API_PREFIX, tags=["Blog"])
-
 if config.enable_canonical_routes:
+    from src.api.routes.auth_local import router as auth_router
     from src.api.routes.canonical import canonical_router, internal_router
+    from src.api.routes.notifications import router as notification_router
 
+    app.include_router(auth_router, tags=["Auth"])
     app.include_router(canonical_router, tags=["Blog Generation"])
+    app.include_router(notification_router, tags=["Notifications"])
     app.include_router(internal_router, tags=["Internal Service"])
     logger.info("canonical_routes_enabled")
 else:
     logger.info("canonical_routes_disabled")
-
-# Keep legacy routes for backward compatibility
-try:
-    app.include_router(blog.router, prefix="/api", tags=["Blog (Legacy)"], include_in_schema=False)
-    app.include_router(chat.router, prefix="/api", tags=["Chat (Legacy)"], include_in_schema=False)
-except NameError:
-    pass
 
 
 @app.get("/", tags=["Root"])

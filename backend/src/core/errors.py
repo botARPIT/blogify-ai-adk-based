@@ -1,22 +1,16 @@
-"""Centralized error handling for production and staging environments.
-
-This module provides:
-- Custom exception classes for different error types
-- Error handling decorators for routes and services
-- Environment-aware error responses (dev shows details, prod hides internals)
-- Error logging and tracking integration
-"""
+"""Centralized error handling for frontend-safe API responses."""
 
 import functools
 import os
-import traceback
 from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, TypeVar
 
 from fastapi import HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
 from src.config.logging_config import get_logger
 
@@ -56,7 +50,6 @@ class ErrorResponse(BaseModel):
     success: bool = False
     error_code: str
     message: str
-    details: dict | None = None
     request_id: str | None = None
     timestamp: str
 
@@ -190,46 +183,66 @@ def is_staging() -> bool:
     return env in ("stage", "staging")
 
 
+def _status_to_error_code(status_code: int) -> ErrorCode:
+    if status_code == 400:
+        return ErrorCode.VALIDATION_ERROR
+    if status_code == 401:
+        return ErrorCode.UNAUTHORIZED
+    if status_code == 403:
+        return ErrorCode.FORBIDDEN
+    if status_code == 404:
+        return ErrorCode.NOT_FOUND
+    if status_code == 429:
+        return ErrorCode.RATE_LIMIT_EXCEEDED
+    if status_code >= 500:
+        return ErrorCode.INTERNAL_ERROR
+    return ErrorCode.VALIDATION_ERROR
+
+
+def _database_message(error: SQLAlchemyError) -> str:
+    message = str(error).lower()
+    if "undefinedtable" in message or "does not exist" in message:
+        return "Database schema is not up to date. Run migrations and try again."
+    return "A database error occurred. Please verify setup and try again."
+
+
 def format_error_response(
     error: Exception,
     request_id: str | None = None,
-    include_traceback: bool = False
 ) -> ErrorResponse:
-    """Format error into standardized response based on environment."""
+    """Format an exception into a safe, structured public response."""
     
     timestamp = datetime.utcnow().isoformat()
     
     if isinstance(error, BlogifyError):
-        details = error.details if not is_production() else None
         return ErrorResponse(
             error_code=error.error_code.value,
             message=error.message,
-            details=details,
             request_id=request_id,
             timestamp=timestamp
         )
     
     elif isinstance(error, HTTPException):
+        code = _status_to_error_code(error.status_code)
         return ErrorResponse(
-            error_code=ErrorCode.INTERNAL_ERROR.value if error.status_code >= 500 else ErrorCode.VALIDATION_ERROR.value,
-            message=error.detail if not is_production() else "Request failed",
-            details=None,
+            error_code=code.value,
+            message=str(error.detail),
             request_id=request_id,
             timestamp=timestamp
         )
+
+    elif isinstance(error, SQLAlchemyError):
+        return ErrorResponse(
+            error_code=ErrorCode.DATABASE_ERROR.value,
+            message=_database_message(error),
+            request_id=request_id,
+            timestamp=timestamp,
+        )
     
     else:
-        # Generic exception
-        message = str(error) if not is_production() else "An unexpected error occurred"
-        details = None
-        
-        if include_traceback and not is_production():
-            details = {"traceback": traceback.format_exc()}
-        
         return ErrorResponse(
             error_code=ErrorCode.INTERNAL_ERROR.value,
-            message=message,
-            details=details,
+            message="A server error occurred. Please try again.",
             request_id=request_id,
             timestamp=timestamp
         )
@@ -324,6 +337,47 @@ async def blogify_exception_handler(request: Request, exc: BlogifyError) -> JSON
     )
 
 
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """FastAPI exception handler for HTTPException."""
+    request_id = getattr(request.state, "request_id", None)
+    response = format_error_response(exc, request_id=request_id)
+    logger.warning(
+        "http_exception",
+        request_id=request_id,
+        status_code=exc.status_code,
+        detail=str(exc.detail),
+        path=request.url.path,
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=response.model_dump(exclude_none=True),
+    )
+
+
+async def validation_exception_handler(
+    request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    """FastAPI exception handler for request validation failures."""
+    request_id = getattr(request.state, "request_id", None)
+    logger.warning(
+        "request_validation_failed",
+        request_id=request_id,
+        errors=exc.errors(),
+        path=request.url.path,
+    )
+    response = ErrorResponse(
+        error_code=ErrorCode.VALIDATION_ERROR.value,
+        message="Invalid request payload.",
+        request_id=request_id,
+        timestamp=datetime.utcnow().isoformat(),
+    )
+    return JSONResponse(
+        status_code=422,
+        content=response.model_dump(exclude_none=True),
+    )
+
+
 async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """FastAPI exception handler for unhandled exceptions."""
     request_id = getattr(request.state, "request_id", None)
@@ -335,24 +389,20 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
         path=request.url.path
     )
     
-    response = format_error_response(
-        exc, 
-        request_id=request_id,
-        include_traceback=not is_production()
-    )
+    response = format_error_response(exc, request_id=request_id)
     
-    return JSONResponse(
-        status_code=500,
-        content=response.model_dump(exclude_none=True)
-    )
+    status_code = 500
+    if isinstance(exc, SQLAlchemyError):
+        status_code = 500
+    return JSONResponse(status_code=status_code, content=response.model_dump(exclude_none=True))
 
 
 def register_exception_handlers(app):
     """Register all exception handlers with FastAPI app."""
     app.add_exception_handler(BlogifyError, blogify_exception_handler)
-    # Note: Generic exception handler should be used carefully in production
-    if not is_production():
-        app.add_exception_handler(Exception, generic_exception_handler)
+    app.add_exception_handler(HTTPException, http_exception_handler)
+    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(Exception, generic_exception_handler)
 
 
 # Utility functions

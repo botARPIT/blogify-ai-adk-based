@@ -38,6 +38,16 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _pg_enum(enum_cls: type[PyEnum], name: str) -> Enum:
+    """Persist enum values instead of member names in PostgreSQL enums."""
+    return Enum(
+        enum_cls,
+        name=name,
+        values_callable=lambda members: [member.value for member in members],
+        validate_strings=True,
+    )
+
+
 class Base(DeclarativeBase):
     """Shared base class for all ORM models."""
     pass
@@ -151,12 +161,12 @@ class ServiceClient(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     client_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
     mode: Mapped[str] = mapped_column(
-        Enum(ClientMode, name="client_mode_enum"), nullable=False
+        _pg_enum(ClientMode, "client_mode_enum"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     hashed_api_key: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(
-        Enum(ClientStatus, name="client_status_enum"),
+        _pg_enum(ClientStatus, "client_status_enum"),
         nullable=False,
         default=ClientStatus.ACTIVE,
     )
@@ -190,10 +200,10 @@ class Tenant(Base):
     external_tenant_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     plan_tier: Mapped[str] = mapped_column(
-        Enum(TenantPlan, name="tenant_plan_enum"), nullable=False, default=TenantPlan.FREE
+        _pg_enum(TenantPlan, "tenant_plan_enum"), nullable=False, default=TenantPlan.FREE
     )
     status: Mapped[str] = mapped_column(
-        Enum(TenantStatus, name="tenant_status_enum"),
+        _pg_enum(TenantStatus, "tenant_status_enum"),
         nullable=False,
         default=TenantStatus.ACTIVE,
     )
@@ -228,7 +238,7 @@ class EndUser(Base):
     email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(
-        Enum(EndUserStatus, name="end_user_status_enum"),
+        _pg_enum(EndUserStatus, "end_user_status_enum"),
         nullable=False,
         default=EndUserStatus.ACTIVE,
     )
@@ -243,6 +253,27 @@ class EndUser(Base):
     )
     blog_sessions: Mapped[list["BlogSession"]] = relationship(
         "BlogSession", back_populates="end_user"
+    )
+
+
+class AuthUser(Base):
+    """Local browser-authenticated user."""
+
+    __tablename__ = "auth_users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    display_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    notifications: Mapped[list["UserNotification"]] = relationship(
+        "UserNotification", back_populates="user"
     )
 
 
@@ -265,7 +296,7 @@ class BudgetPolicy(Base):
         BigInteger, ForeignKey("end_users.id"), nullable=True
     )
     scope: Mapped[str] = mapped_column(
-        Enum(BudgetPolicyScope, name="budget_scope_enum"),
+        _pg_enum(BudgetPolicyScope, "budget_scope_enum"),
         nullable=False,
         default=BudgetPolicyScope.DEFAULT,
     )
@@ -333,10 +364,10 @@ class BudgetLedgerEntry(Base):
     )
 
     entry_type: Mapped[str] = mapped_column(
-        Enum(LedgerEntryType, name="ledger_entry_type_enum"), nullable=False
+        _pg_enum(LedgerEntryType, "ledger_entry_type_enum"), nullable=False
     )
     resource_type: Mapped[str] = mapped_column(
-        Enum(LedgerResourceType, name="ledger_resource_type_enum"), nullable=False
+        _pg_enum(LedgerResourceType, "ledger_resource_type_enum"), nullable=False
     )
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     unit_cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
@@ -352,6 +383,7 @@ class BudgetLedgerEntry(Base):
 class BlogSessionStatus(str, PyEnum):
     QUEUED = "queued"
     PROCESSING = "processing"
+    AWAITING_OUTLINE_REVIEW = "awaiting_outline_review"
     AWAITING_HUMAN_REVIEW = "awaiting_human_review"
     REVISION_REQUESTED = "revision_requested"
     COMPLETED = "completed"
@@ -387,13 +419,15 @@ class BlogSession(Base):
 
     # Lifecycle
     status: Mapped[str] = mapped_column(
-        Enum(BlogSessionStatus, name="blog_session_status_enum"),
+        _pg_enum(BlogSessionStatus, "blog_session_status_enum"),
         nullable=False,
         default=BlogSessionStatus.QUEUED,
         index=True,
     )
     current_stage: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     iteration_count: Mapped[int] = mapped_column(Integer, default=0)
+    outline_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    outline_feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Budget tracking
     budget_reserved_usd: Mapped[float] = mapped_column(Float, default=0.0)
@@ -449,7 +483,7 @@ class BlogVersion(Base):
     version_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     source_type: Mapped[str] = mapped_column(
-        Enum(BlogVersionSource, name="blog_version_source_enum"), nullable=False
+        _pg_enum(BlogVersionSource, "blog_version_source_enum"), nullable=False
     )
 
     title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
@@ -458,12 +492,12 @@ class BlogVersion(Base):
     sources_count: Mapped[int] = mapped_column(Integer, default=0)
 
     editor_status: Mapped[str] = mapped_column(
-        Enum(BlogEditorStatus, name="blog_editor_status_enum"),
+        _pg_enum(BlogEditorStatus, "blog_editor_status_enum"),
         nullable=False,
         default=BlogEditorStatus.DRAFT,
     )
     created_by: Mapped[str] = mapped_column(
-        Enum(BlogCreatedBy, name="blog_created_by_enum"),
+        _pg_enum(BlogCreatedBy, "blog_created_by_enum"),
         nullable=False,
         default=BlogCreatedBy.SYSTEM,
     )
@@ -507,7 +541,7 @@ class AgentRun(Base):
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
 
     status: Mapped[str] = mapped_column(
-        Enum(AgentRunStatus, name="agent_run_status_enum"),
+        _pg_enum(AgentRunStatus, "agent_run_status_enum"),
         nullable=False,
         default=AgentRunStatus.STARTED,
     )
@@ -562,7 +596,7 @@ class HumanReviewEvent(Base):
     )
     reviewer_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
     action: Mapped[str] = mapped_column(
-        Enum(HumanReviewAction, name="human_review_action_enum"), nullable=False
+        _pg_enum(HumanReviewAction, "human_review_action_enum"), nullable=False
     )
     feedback_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     review_context: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
@@ -596,13 +630,35 @@ class ExportJob(Base):
         BigInteger, ForeignKey("blog_versions.id"), nullable=False
     )
     format: Mapped[str] = mapped_column(
-        Enum(ExportFormat, name="export_format_enum"), nullable=False
+        _pg_enum(ExportFormat, "export_format_enum"), nullable=False
     )
     status: Mapped[str] = mapped_column(
-        Enum(ExportStatus, name="export_status_enum"),
+        _pg_enum(ExportStatus, "export_status_enum"),
         nullable=False,
         default=ExportStatus.PENDING,
     )
     artifact_uri: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserNotification(Base):
+    """Persistent in-app notification records for authenticated users."""
+
+    __tablename__ = "user_notifications"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("auth_users.id"), nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("blog_sessions.id"), nullable=True, index=True
+    )
+    action_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    payload_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    user: Mapped["AuthUser"] = relationship("AuthUser", back_populates="notifications")

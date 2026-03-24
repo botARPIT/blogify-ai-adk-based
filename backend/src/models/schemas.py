@@ -158,6 +158,20 @@ class BlogVersionView(BaseModel):
     created_at: datetime
 
 
+class BlogContentView(BaseModel):
+    """Canonical representation of a readable blog version."""
+
+    session_id: int
+    version_id: int
+    title: Optional[str]
+    content_markdown: str
+    word_count: int
+    sources_count: int
+    topic: str
+    audience: Optional[str]
+    status: str
+
+
 class HumanReviewRequest(BaseModel):
     """Request body for the /review endpoint."""
 
@@ -169,7 +183,7 @@ class HumanReviewRequest(BaseModel):
         default=None,
         description="Required when action=request_revision",
     )
-    reviewer_user_id: str = Field(description="ID of the user submitting the review")
+    reviewer_user_id: Optional[str] = Field(default=None, description="ID of the user submitting the review")
 
 
 class HumanReviewDecision(BaseModel):
@@ -182,6 +196,45 @@ class HumanReviewDecision(BaseModel):
     iteration_count: int
     requires_human_review: bool
     message: str
+
+
+class OutlineReviewRequest(BaseModel):
+    """Request body for the outline HITL endpoint."""
+
+    action: str = Field(
+        description="approve | revise",
+        pattern="^(approve|revise)$",
+    )
+    edited_outline: Optional[OutlineSchema] = None
+    feedback_text: Optional[str] = Field(
+        default=None,
+        description="Optional guidance to incorporate before final generation",
+    )
+    reviewer_user_id: Optional[str] = Field(default=None, description="ID of the user submitting the outline review")
+
+
+class OutlineReviewDecision(BaseModel):
+    """Response after an outline review action."""
+
+    session_id: int
+    action: str
+    new_status: str
+    current_stage: Optional[str]
+    requires_human_review: bool
+    outline: OutlineSchema
+    message: str
+
+
+class OutlineReviewView(BaseModel):
+    """Current outline review state for a session."""
+
+    session_id: int
+    status: str
+    current_stage: Optional[str]
+    topic: str
+    audience: Optional[str]
+    feedback_text: Optional[str]
+    outline: OutlineSchema
 
 
 class RevisionRequest(BaseModel):
@@ -208,6 +261,65 @@ class AgentRunSummary(BaseModel):
     started_at: datetime
     completed_at: Optional[datetime]
     error_message: Optional[str]
+
+
+class AuthUserView(BaseModel):
+    id: int
+    email: str
+    display_name: Optional[str]
+
+
+class AuthMeResponse(BaseModel):
+    authenticated: bool
+    user: Optional[AuthUserView]
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class NotificationView(BaseModel):
+    id: int
+    type: str
+    title: str
+    message: str
+    session_id: Optional[int]
+    status: str
+    created_at: datetime
+    action_url: Optional[str]
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationView]
+
+
+class MarkNotificationReadResponse(BaseModel):
+    ok: bool
+    updated: int
+
+
+class HumanReviewEventView(BaseModel):
+    """External representation of a human review event."""
+
+    event_id: int
+    session_id: int
+    version_id: int
+    reviewer_user_id: str
+    action: str
+    feedback_text: Optional[str]
+    review_context: Optional[dict[str, Any]]
+    created_at: datetime
+
+
+class SessionDetailView(BaseModel):
+    """Aggregate session detail view for UI inspection pages."""
+
+    session: BlogSessionState
+    outline: Optional[OutlineReviewView]
+    latest_version: Optional[BlogVersionView]
+    review_events: list[HumanReviewEventView]
+    agent_runs: list[AgentRunSummary]
 
 
 class WebhookEventEnvelope(BaseModel):

@@ -34,7 +34,7 @@ class AgentRunRepository:
             stage_name=stage_name,
             agent_name=agent_name,
             model_name=model_name,
-            status=AgentRunStatus.STARTED.value,
+            status=AgentRunStatus.STARTED,
             input_summary=input_summary,
         )
         self._session.add(run)
@@ -54,7 +54,7 @@ class AgentRunRepository:
     ) -> None:
         run = await self.get_by_id(run_id)
         if run:
-            run.status = AgentRunStatus.COMPLETED.value
+            run.status = AgentRunStatus.COMPLETED
             run.prompt_tokens = prompt_tokens
             run.completion_tokens = completion_tokens
             run.total_tokens = prompt_tokens + completion_tokens
@@ -73,7 +73,7 @@ class AgentRunRepository:
     ) -> None:
         run = await self.get_by_id(run_id)
         if run:
-            run.status = status.value
+            run.status = status
             run.error_message = error_message
             run.completed_at = datetime.now(timezone.utc)
 

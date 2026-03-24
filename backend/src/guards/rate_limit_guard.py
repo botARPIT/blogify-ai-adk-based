@@ -1,7 +1,5 @@
 """Enhanced rate limiter with global and per-user limits."""
 
-import time
-
 from src.config import budget_settings, settings
 from src.config.logging_config import get_logger
 from src.core.redis_pool import get_redis_client

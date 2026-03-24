@@ -76,6 +76,7 @@ class BudgetRepository:
         if policy:
             return policy
         policy = BudgetPolicy(scope=BudgetPolicyScope.DEFAULT.value)
+        policy.scope = BudgetPolicyScope.DEFAULT
         self._session.add(policy)
         await self._session.flush()
         return policy
@@ -136,8 +137,8 @@ class BudgetRepository:
             blog_session_id=blog_session_id,
             blog_version_id=blog_version_id,
             agent_run_id=agent_run_id,
-            entry_type=entry_type.value,
-            resource_type=resource_type.value,
+            entry_type=entry_type,
+            resource_type=resource_type,
             quantity=quantity,
             unit_cost_usd=unit_cost_usd,
             metadata_=metadata,

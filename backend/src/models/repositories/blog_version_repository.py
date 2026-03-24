@@ -37,13 +37,13 @@ class BlogVersionRepository:
         version = BlogVersion(
             blog_session_id=blog_session_id,
             version_number=next_version,
-            source_type=source_type.value,
+            source_type=source_type,
             content_markdown=content_markdown,
             title=title,
             word_count=word_count,
             sources_count=sources_count,
-            editor_status=editor_status.value,
-            created_by=created_by.value,
+            editor_status=editor_status,
+            created_by=created_by,
         )
         self._session.add(version)
         await self._session.flush()
@@ -101,14 +101,14 @@ class BlogVersionRepository:
     async def mark_approved(self, version_id: int) -> None:
         version = await self.get_by_id(version_id)
         if version:
-            version.editor_status = BlogEditorStatus.HUMAN_APPROVED.value
+            version.editor_status = BlogEditorStatus.HUMAN_APPROVED
 
     async def mark_rejected(self, version_id: int) -> None:
         version = await self.get_by_id(version_id)
         if version:
-            version.editor_status = BlogEditorStatus.HUMAN_REJECTED.value
+            version.editor_status = BlogEditorStatus.HUMAN_REJECTED
 
     async def mark_editor_approved(self, version_id: int) -> None:
         version = await self.get_by_id(version_id)
         if version:
-            version.editor_status = BlogEditorStatus.EDITOR_APPROVED.value
+            version.editor_status = BlogEditorStatus.EDITOR_APPROVED

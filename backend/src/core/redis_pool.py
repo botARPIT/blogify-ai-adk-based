@@ -27,7 +27,10 @@ def _ensure_pool() -> redis.ConnectionPool:
             decode_responses=True,
             max_connections=20,
             socket_connect_timeout=5,
-            socket_timeout=5,
+            # Worker queue consumers use blocking Redis operations such as BRPOP.
+            # A very short read timeout causes spurious "Timeout reading" errors
+            # even when the worker itself is healthy.
+            socket_timeout=30,
         )
         logger.info("redis_pool_created", max_connections=20)
     return _pool

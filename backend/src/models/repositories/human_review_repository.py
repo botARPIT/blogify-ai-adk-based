@@ -29,7 +29,7 @@ class HumanReviewRepository:
             blog_session_id=blog_session_id,
             blog_version_id=blog_version_id,
             reviewer_user_id=reviewer_user_id,
-            action=action.value,
+            action=action,
             feedback_text=feedback_text,
             review_context=review_context,
         )

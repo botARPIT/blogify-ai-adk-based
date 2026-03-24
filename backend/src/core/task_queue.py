@@ -360,6 +360,14 @@ async def enqueue_blog_generation(
     audience: str | None,
     session_id: str | None = None,
     blog_id: int | None = None,
+    canonical_session_id: int | None = None,
+    tenant_id: int | None = None,
+    end_user_id: int | None = None,
+    job_phase: str = "outline_gate",
+    invocation_id: str | None = None,
+    confirmation_request_id: str | None = None,
+    approved_outline: dict | None = None,
+    outline_feedback: str | None = None,
 ) -> str:
     """
     Enqueue a blog generation task.
@@ -376,7 +384,15 @@ async def enqueue_blog_generation(
             "audience": audience or "general readers",
             "session_id": session_id or str(uuid.uuid4()),
             "blog_id": blog_id,
+            "canonical_session_id": canonical_session_id,
+            "tenant_id": tenant_id,
+            "end_user_id": end_user_id,
             "stage": "intent",  # Start at intent stage
+            "job_phase": job_phase,
+            "invocation_id": invocation_id,
+            "confirmation_request_id": confirmation_request_id,
+            "approved_outline": approved_outline,
+            "outline_feedback": outline_feedback,
         },
     )
     

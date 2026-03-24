@@ -210,7 +210,7 @@ async def get_idempotency_key(
     FastAPI dependency to extract idempotency key.
     
     Usage:
-        @router.post("/blog/generate")
+        @router.post("/blogs/generate")
         async def generate(
             request: BlogRequest,
             idem_key: str | None = Depends(get_idempotency_key)

@@ -53,13 +53,13 @@ class ChatService:
         if blog_initiated:
             response_text = (
                 "I can help you generate a blog! To proceed, please use the "
-                "/api/blog/generate endpoint with your topic and target audience. "
+                "/api/v1/blogs/generate endpoint with your topic and target audience. "
                 "I'll guide you through the process with human approval checkpoints."
             )
         else:
             response_text = (
                 f"I received your message: '{message}'. "
-                "I'm a blog generation assistant. Ask me to create a blog or use /api/blog/generate!"
+                "I'm a blog generation assistant. Ask me to create a blog or use /api/v1/blogs/generate!"
             )
 
         return {

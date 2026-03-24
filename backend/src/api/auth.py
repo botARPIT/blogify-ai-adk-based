@@ -1,45 +1,30 @@
-"""JWT Authentication middleware.
+"""Authentication helpers for cookie-based local auth and optional bearer auth."""
 
-Validates JWT tokens from external authentication service.
-Extracts user identity and attaches to request state.
-"""
+from __future__ import annotations
 
-import os
+from dataclasses import dataclass
 from typing import Callable
 
-from fastapi import Request, HTTPException
+from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
 
 from src.config.logging_config import get_logger
+from src.services.local_auth_service import AUTH_COOKIE_NAME, LocalAuthService
 
 logger = get_logger(__name__)
 
-# Try to import jose for JWT handling
-try:
-    from jose import jwt, JWTError, ExpiredSignatureError
-    JWT_AVAILABLE = True
-except ImportError:
-    JWT_AVAILABLE = False
-    logger.warning("python-jose not installed - JWT validation disabled")
+
+@dataclass(slots=True)
+class AuthenticatedUser:
+    user_id: str
+    email: str | None = None
+    display_name: str | None = None
+    token_claims: dict | None = None
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """
-    JWT authentication middleware.
-    
-    Validates Bearer tokens from Authorization header.
-    Attaches user identity to request.state.
-    
-    Configuration via environment:
-    - JWT_SECRET_KEY: Secret for HS256, or public key for RS256
-    - JWT_ALGORITHM: Algorithm (default: HS256)
-    - JWT_AUDIENCE: Expected audience claim
-    - JWT_ISSUER: Expected issuer claim
-    - AUTH_REQUIRED: Whether auth is required (default: true in prod)
-    """
-    
-    # Routes that don't require authentication
+    """Attach authenticated user context when a cookie or bearer token is present."""
+
     PUBLIC_ROUTES = {
         "/",
         "/docs",
@@ -52,206 +37,83 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/health/detailed",
         "/metrics",
     }
-    
-    # Routes with prefix that are public
     PUBLIC_PREFIXES = {
         "/health",
     }
-    
-    def __init__(self, app, required: bool = True):
+
+    def __init__(self, app, required: bool = False):
         super().__init__(app)
         self.required = required
-        self.secret_key = os.getenv("JWT_SECRET_KEY", "")
-        self.algorithm = os.getenv("JWT_ALGORITHM", "HS256")
-        self.audience = os.getenv("JWT_AUDIENCE", "blogify-api")
-        self.issuer = os.getenv("JWT_ISSUER", "")
-    
+        self.local_auth = LocalAuthService()
+
     async def dispatch(self, request: Request, call_next: Callable):
-        """Process request with JWT validation."""
-        
-        # Skip public routes
+        request.state.user_id = None
+        request.state.user_email = None
+        request.state.user_display_name = None
+        request.state.token_claims = None
+        request.state.authenticated = False
+
         if self._is_public_route(request.url.path):
             return await call_next(request)
-        
-        # Skip if JWT not available (dev mode)
-        if not JWT_AVAILABLE:
-            request.state.user_id = "dev-user"
-            request.state.user_email = "dev@example.com"
-            return await call_next(request)
-        
-        # Skip if auth not required (dev/test)
-        if not self.required:
-            # Use user_id from request body if available
-            return await call_next(request)
-        
-        # Extract token
-        auth_header = request.headers.get("Authorization")
-        
-        if not auth_header:
-            return self._unauthorized("Missing Authorization header")
-        
-        if not auth_header.startswith("Bearer "):
-            return self._unauthorized("Invalid Authorization header format")
-        
-        token = auth_header.split(" ", 1)[1]
-        
-        if not token:
-            return self._unauthorized("Empty token")
-        
-        # Validate token
-        try:
-            payload = self._validate_token(token)
-            
-            # Attach user info to request state
-            request.state.user_id = payload.get("sub")
-            request.state.user_email = payload.get("email")
-            request.state.token_claims = payload
-            
-            logger.debug(
-                "auth_success",
-                user_id=request.state.user_id,
-                path=request.url.path,
-            )
-            
-        except ExpiredSignatureError:
-            return self._unauthorized("Token expired")
-        except JWTError as e:
-            logger.warning("jwt_validation_failed", error=str(e))
-            return self._unauthorized(f"Invalid token: {str(e)}")
-        except Exception as e:
-            logger.error("auth_error", error=str(e))
-            return self._unauthorized("Authentication failed")
-        
+
+        token = self._extract_token(request)
+        if token:
+            try:
+                payload = self.local_auth.decode_token(token)
+                request.state.user_id = payload.get("sub")
+                request.state.user_email = payload.get("email")
+                request.state.user_display_name = payload.get("display_name")
+                request.state.token_claims = payload
+                request.state.authenticated = True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("auth_token_invalid", path=request.url.path, error=str(exc))
+
         return await call_next(request)
-    
+
+    def _extract_token(self, request: Request) -> str | None:
+        cookie_token = request.cookies.get(AUTH_COOKIE_NAME)
+        if cookie_token:
+            return cookie_token
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            return auth_header.split(" ", 1)[1]
+        return None
+
     def _is_public_route(self, path: str) -> bool:
-        """Check if route is public."""
         if path in self.PUBLIC_ROUTES:
             return True
-        
-        for prefix in self.PUBLIC_PREFIXES:
-            if path.startswith(prefix):
-                return True
-        
-        return False
-    
-    def _validate_token(self, token: str) -> dict:
-        """
-        Validate JWT token and return payload.
-        
-        Raises:
-            JWTError: If token is invalid
-        """
-        options = {
-            "verify_signature": True,
-            "verify_exp": True,
-            "verify_iat": True,
-            "require_exp": True,
-        }
-        
-        # Add audience/issuer verification if configured
-        if self.audience:
-            options["verify_aud"] = True
-        if self.issuer:
-            options["verify_iss"] = True
-        
-        payload = jwt.decode(
-            token,
-            self.secret_key,
-            algorithms=[self.algorithm],
-            audience=self.audience if self.audience else None,
-            issuer=self.issuer if self.issuer else None,
-            options=options,
-        )
-        
-        return payload
-    
-    def _unauthorized(self, message: str) -> JSONResponse:
-        """Return 401 Unauthorized response."""
-        return JSONResponse(
-            status_code=401,
-            content={
-                "error": "Unauthorized",
-                "message": message,
-            },
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return any(path.startswith(prefix) for prefix in self.PUBLIC_PREFIXES)
 
 
 class OptionalAuthMiddleware(AuthMiddleware):
-    """
-    Optional authentication middleware.
-    
-    Sets user info if token present, but doesn't require it.
-    Useful for endpoints that work both authenticated and anonymously.
-    """
-    
-    def __init__(self, app):
-        super().__init__(app, required=False)
-    
-    async def dispatch(self, request: Request, call_next: Callable):
-        """Process request with optional JWT validation."""
-        
-        # Skip public routes
-        if self._is_public_route(request.url.path):
-            return await call_next(request)
-        
-        # Extract token if present
-        auth_header = request.headers.get("Authorization")
-        
-        if auth_header and auth_header.startswith("Bearer ") and JWT_AVAILABLE:
-            token = auth_header.split(" ", 1)[1]
-            
-            try:
-                payload = self._validate_token(token)
-                request.state.user_id = payload.get("sub")
-                request.state.user_email = payload.get("email")
-                request.state.token_claims = payload
-                request.state.authenticated = True
-            except Exception:
-                # Token invalid but optional - continue without auth
-                request.state.user_id = None
-                request.state.authenticated = False
-        else:
-            request.state.user_id = None
-            request.state.authenticated = False
-        
-        return await call_next(request)
+    pass
 
 
-def get_current_user(request: Request) -> str | None:
-    """
-    Get current user ID from request.
-    
-    Usage in route:
-        @router.post("/protected")
-        async def protected_route(request: Request):
-            user_id = get_current_user(request)
-            if not user_id:
-                raise HTTPException(401, "Not authenticated")
-    """
-    return getattr(request.state, "user_id", None)
+def get_current_user(request: Request) -> AuthenticatedUser | None:
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        return None
+    return AuthenticatedUser(
+        user_id=str(user_id),
+        email=getattr(request.state, "user_email", None),
+        display_name=getattr(request.state, "user_display_name", None),
+        token_claims=getattr(request.state, "token_claims", None),
+    )
+
+
+def require_authenticated_user(request: Request) -> AuthenticatedUser:
+    user = get_current_user(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
 
 
 def require_auth(request: Request) -> str:
-    """
-    Require authentication and return user ID.
-    
-    Raises HTTPException if not authenticated.
-    
-    Usage in route:
-        @router.post("/protected")
-        async def protected_route(request: Request):
-            user_id = require_auth(request)
-            # user_id is guaranteed to be set
-    """
-    user_id = getattr(request.state, "user_id", None)
-    
-    if not user_id:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
-    return user_id
+    return require_authenticated_user(request).user_id
+
+
+def ensure_csrf_header(request: Request) -> None:
+    if request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+        return
+    if request.headers.get("X-Requested-With") != "XMLHttpRequest":
+        raise HTTPException(status_code=403, detail="Missing CSRF header")

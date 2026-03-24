@@ -8,7 +8,9 @@ from __future__ import annotations
 import asyncio
 import os
 from logging.config import fileConfig
+from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
@@ -17,6 +19,10 @@ from alembic import context
 from src.models.orm_models import Base  # noqa: E402
 
 config = context.config
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / f".env.{os.getenv('ENVIRONMENT', 'dev')}", override=True)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

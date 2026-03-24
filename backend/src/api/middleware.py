@@ -18,6 +18,7 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.config.logging_config import get_logger
+from src.core.errors import ErrorCode
 from src.monitoring.metrics import http_requests_total, http_request_duration_seconds
 
 logger = get_logger(__name__)
@@ -221,9 +222,16 @@ class ConcurrencyLimitMiddleware(BaseHTTPMiddleware):
         acquired = self.semaphore.locked()
         
         if acquired and self.semaphore._value == 0:
+            request_id = getattr(request.state, "request_id", "unknown")
             # At capacity - return 503
             return Response(
-                content='{"error": "Service temporarily overloaded"}',
+                content=(
+                    '{"success":false,"error_code":"'
+                    + ErrorCode.RATE_LIMIT_EXCEEDED.value
+                    + '","message":"Service is temporarily overloaded. Please retry shortly.","request_id":"'
+                    + request_id
+                    + '"}'
+                ),
                 status_code=503,
                 media_type="application/json",
                 headers={"Retry-After": "5"}

@@ -39,7 +39,7 @@ class BlogSessionRepository:
             tone=tone,
             external_request_id=external_request_id,
             external_blog_id=external_blog_id,
-            status=BlogSessionStatus.QUEUED.value,
+            status=BlogSessionStatus.QUEUED,
             budget_reserved_usd=budget_reserved_usd,
             budget_reserved_tokens=budget_reserved_tokens,
         )
@@ -71,12 +71,24 @@ class BlogSessionRepository:
     ) -> None:
         blog_session = await self.get_by_id(session_id)
         if blog_session:
-            blog_session.status = status.value
+            blog_session.status = status
             if current_stage is not None:
                 blog_session.current_stage = current_stage
             blog_session.updated_at = datetime.now(timezone.utc)
             if status == BlogSessionStatus.COMPLETED:
                 blog_session.completed_at = datetime.now(timezone.utc)
+
+    async def update_outline(
+        self,
+        session_id: int,
+        outline_data: dict,
+        outline_feedback: Optional[str] = None,
+    ) -> None:
+        blog_session = await self.get_by_id(session_id)
+        if blog_session:
+            blog_session.outline_data = outline_data
+            blog_session.outline_feedback = outline_feedback
+            blog_session.updated_at = datetime.now(timezone.utc)
 
     async def commit_spend(
         self,

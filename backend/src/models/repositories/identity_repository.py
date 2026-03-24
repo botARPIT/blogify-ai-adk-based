@@ -56,9 +56,9 @@ class IdentityRepository:
         client = ServiceClient(
             client_key=client_key,
             name=name,
-            mode=mode.value,
+            mode=mode,
             hashed_api_key=hashed,
-            status=ClientStatus.ACTIVE.value,
+            status=ClientStatus.ACTIVE,
         )
         self._session.add(client)
         await self._session.flush()
@@ -87,8 +87,8 @@ class IdentityRepository:
             service_client_id=service_client_id,
             external_tenant_id=external_tenant_id,
             name=name,
-            plan_tier=plan.value,
-            status=TenantStatus.ACTIVE.value,
+            plan_tier=plan,
+            status=TenantStatus.ACTIVE,
         )
         self._session.add(tenant)
         await self._session.flush()
@@ -120,7 +120,7 @@ class IdentityRepository:
             external_user_id=external_user_id,
             email=email,
             display_name=display_name,
-            status=EndUserStatus.ACTIVE.value,
+            status=EndUserStatus.ACTIVE,
         )
         self._session.add(user)
         await self._session.flush()

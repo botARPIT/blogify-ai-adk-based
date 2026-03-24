@@ -2,7 +2,9 @@
 
 import os
 from enum import Enum
+from typing import Any
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +14,12 @@ class Environment(str, Enum):
     DEV = "dev"
     STAGE = "stage"
     PROD = "prod"
+
+
+# Determine base directories
+CONFIG_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(CONFIG_DIR)
+BACKEND_ROOT = os.path.dirname(SRC_DIR)
 
 
 class BaseConfig(BaseSettings):
@@ -25,12 +33,32 @@ class BaseConfig(BaseSettings):
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    api_workers: int = 4
-    log_level: str = "INFO"
+    api_workers: int = 2
+    log_level: str = "info"
 
     # CORS
-    cors_origins: list[str] = ["*"]
+    cors_origins: str = "*"
     cors_allow_credentials: bool = True
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v: Any) -> list[str]:
+        """Parse CORS origins if provided as a string or list."""
+        if not v:
+            return ["*"]
+        if isinstance(v, str):
+            v_strip = v.strip()
+            if not v_strip:
+                return ["*"]
+            try:
+                # Try JSON first
+                import json
+
+                return json.loads(v_strip)
+            except json.JSONDecodeError:
+                # Fallback to comma-separated
+                return [s.strip() for s in v_strip.split(",")]
+        return v
 
     # Database
     database_url: str
@@ -68,7 +96,15 @@ class BaseConfig(BaseSettings):
 class DevelopmentConfig(BaseConfig):
     """Development environment configuration."""
 
-    model_config = SettingsConfigDict(env_file=[".env.dev", "../.env.dev"], env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=[
+            os.path.join(BACKEND_ROOT, ".env.dev"),
+            os.path.join(BACKEND_ROOT, ".env"),
+            ".env.dev",
+            ".env",
+        ],
+        env_file_encoding="utf-8",
+    )
 
     environment: Environment = Environment.DEV
     log_level: str = "debug"
@@ -79,7 +115,13 @@ class DevelopmentConfig(BaseConfig):
 class StagingConfig(BaseConfig):
     """Staging environment configuration."""
 
-    model_config = SettingsConfigDict(env_file=[".env.stage", "../.env.stage"], env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=[
+            os.path.join(BACKEND_ROOT, ".env.stage"),
+            ".env.stage",
+        ],
+        env_file_encoding="utf-8",
+    )
 
     environment: Environment = Environment.STAGE
     log_level: str = "info"
@@ -91,7 +133,13 @@ class StagingConfig(BaseConfig):
 class ProductionConfig(BaseConfig):
     """Production environment configuration."""
 
-    model_config = SettingsConfigDict(env_file=[".env.prod", "../.env.prod"], env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=[
+            os.path.join(BACKEND_ROOT, ".env.prod"),
+            ".env.prod",
+        ],
+        env_file_encoding="utf-8",
+    )
 
     environment: Environment = Environment.PROD
     log_level: str = "warning"
