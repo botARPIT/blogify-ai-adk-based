@@ -1,10 +1,9 @@
 # Development environment docker-compose
-version: '3.8'
 
 services:
   api:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
@@ -14,10 +13,12 @@ services:
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://redis:6379/0
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
     depends_on:
       - redis
+      - tempo
     volumes:
-      - ./backend/src:/app/src:ro  # Mount source for hot reload in dev
+      - ./src:/app/src:ro  # Mount source for hot reload in dev
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
@@ -28,7 +29,7 @@ services:
 
   worker:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     command: ["python", "-m", "src.workers.blog_worker"]
     environment:
@@ -37,11 +38,13 @@ services:
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://redis:6379/0
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
     depends_on:
       - redis
       - api
+      - tempo
     volumes:
-      - ./backend/src:/app/src:ro
+      - ./src:/app/src:ro
     restart: unless-stopped
     deploy:
       replicas: 2
@@ -65,12 +68,22 @@ services:
     ports:
       - "9090:9090"
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
       - '--web.enable-lifecycle'
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    command: ["-config.file=/etc/tempo.yaml"]
+    ports:
+      - "4317:4317"
+      - "3200:3200"
+    volumes:
+      - ./monitoring/tempo.yaml:/etc/tempo.yaml:ro
     restart: unless-stopped
 
   grafana:
@@ -86,6 +99,7 @@ services:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
+      - tempo
     restart: unless-stopped
 
 volumes:

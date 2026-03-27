@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -61,6 +62,43 @@ class IdentityRepository:
             status=ClientStatus.ACTIVE,
         )
         self._session.add(client)
+        await self._session.flush()
+        return client
+
+    async def list_service_clients(self, limit: int = 100) -> list[ServiceClient]:
+        result = await self._session.execute(
+            select(ServiceClient)
+            .order_by(ServiceClient.created_at.desc())
+            .limit(min(max(limit, 1), 100))
+        )
+        return list(result.scalars().all())
+
+    async def get_service_client_by_key(self, client_key: str) -> Optional[ServiceClient]:
+        return await self.get_client_by_key(client_key)
+
+    async def set_service_client_status(
+        self, client_key: str, status: ClientStatus
+    ) -> Optional[ServiceClient]:
+        client = await self.get_client_by_key(client_key)
+        if client is None:
+            return None
+        client.status = status
+        if status == ClientStatus.ROTATED:
+            client.rotated_at = datetime.now(timezone.utc)
+        await self._session.flush()
+        return client
+
+    async def rotate_service_client_api_key(
+        self,
+        client_key: str,
+        new_raw_api_key: str,
+    ) -> Optional[ServiceClient]:
+        client = await self.get_client_by_key(client_key)
+        if client is None:
+            return None
+        client.hashed_api_key = hashlib.sha256(new_raw_api_key.encode()).hexdigest()
+        client.status = ClientStatus.ACTIVE
+        client.rotated_at = datetime.now(timezone.utc)
         await self._session.flush()
         return client
 

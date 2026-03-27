@@ -8,6 +8,7 @@ from typing import Callable
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from src.config.env_config import config
 from src.config.logging_config import get_logger
 from src.services.local_auth_service import AUTH_COOKIE_NAME, LocalAuthService
 
@@ -35,10 +36,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/health/live",
         "/api/health/ready",
         "/api/health/detailed",
-        "/metrics",
+        "/api/v1/health",
+        "/api/v1/health/live",
+        "/api/v1/health/ready",
+        "/api/v1/health/detailed",
+        "/api/v1/auth/login",
+        "/api/v1/auth/me",
+        "/api/v1/auth/logout",
     }
     PUBLIC_PREFIXES = {
         "/health",
+        "/api/health",
+        "/api/v1/health",
     }
 
     def __init__(self, app, required: bool = False):
@@ -55,6 +64,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         if self._is_public_route(request.url.path):
             return await call_next(request)
+        if request.url.path.startswith("/internal/ai"):
+            return await call_next(request)
 
         token = self._extract_token(request)
         if token:
@@ -68,6 +79,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             except Exception as exc:  # noqa: BLE001
                 logger.warning("auth_token_invalid", path=request.url.path, error=str(exc))
 
+        if self.required and not request.state.authenticated:
+            raise HTTPException(status_code=401, detail="Authentication required")
+
         return await call_next(request)
 
     def _extract_token(self, request: Request) -> str | None:
@@ -80,6 +94,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return None
 
     def _is_public_route(self, path: str) -> bool:
+        if path == "/metrics":
+            return config.metrics_public
         if path in self.PUBLIC_ROUTES:
             return True
         return any(path.startswith(prefix) for prefix in self.PUBLIC_PREFIXES)

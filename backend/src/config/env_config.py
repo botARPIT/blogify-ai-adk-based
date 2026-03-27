@@ -35,6 +35,8 @@ class BaseConfig(BaseSettings):
     api_port: int = 8000
     api_workers: int = 2
     log_level: str = "info"
+    log_format: str = "json"
+    mask_secrets_in_logs: bool = True
 
     # CORS
     cors_origins: str = "*"
@@ -71,6 +73,8 @@ class BaseConfig(BaseSettings):
     # Rate limiting
     rate_limit_blogs_per_day: int = 10
     rate_limit_requests_per_minute: int = 20
+    service_rate_limit_requests_per_minute: int = 120
+    service_rate_limit_blog_generations_per_day: int = 1000
 
     # Concurrency
     max_concurrent_requests: int = 10
@@ -81,16 +85,19 @@ class BaseConfig(BaseSettings):
 
     # Monitoring
     enable_metrics: bool = True
+    metrics_public: bool = True
     metrics_port: int = 9090
     enable_datadog: bool = False
     datadog_api_key: str | None = None
+    admin_api_key: str | None = None
 
     # Worker health
     worker_heartbeat_interval_seconds: int = 15
     worker_heartbeat_ttl_seconds: int = 45
 
     # Feature flags
-    enable_canonical_routes: bool = False
+    enable_canonical_routes: bool = True
+    enable_admin_routes: bool = True
 
 
 class DevelopmentConfig(BaseConfig):
@@ -128,6 +135,8 @@ class StagingConfig(BaseConfig):
     api_workers: int = 4
     max_concurrent_requests: int = 20
     enable_datadog: bool = True
+    metrics_public: bool = False
+    enable_canonical_routes: bool = True
 
 
 class ProductionConfig(BaseConfig):
@@ -148,6 +157,7 @@ class ProductionConfig(BaseConfig):
     cors_origins: list[str] = []  # Must be explicitly set in prod
     cors_allow_credentials: bool = False
     enable_datadog: bool = True
+    metrics_public: bool = False
     enable_canonical_routes: bool = True
 
 

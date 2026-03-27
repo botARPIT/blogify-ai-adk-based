@@ -174,6 +174,11 @@ class ServiceClient(Base):
     rotated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     tenants: Mapped[list["Tenant"]] = relationship("Tenant", back_populates="service_client")
+    budget_policy: Mapped[Optional["ServiceClientBudgetPolicy"]] = relationship(
+        "ServiceClientBudgetPolicy",
+        back_populates="service_client",
+        uselist=False,
+    )
 
 
 class TenantPlan(str, PyEnum):
@@ -324,6 +329,31 @@ class BudgetPolicy(Base):
     )
     end_user: Mapped[Optional["EndUser"]] = relationship(
         "EndUser", back_populates="budget_policies"
+    )
+
+
+class ServiceClientBudgetPolicy(Base):
+    """Configured daily budget limit for a service client."""
+
+    __tablename__ = "service_client_budget_policies"
+    __table_args__ = (
+        UniqueConstraint("service_client_id", name="uq_service_client_budget_policy"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    service_client_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("service_clients.id"), nullable=False
+    )
+    daily_budget_limit_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    currency_code: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    service_client: Mapped["ServiceClient"] = relationship(
+        "ServiceClient", back_populates="budget_policy"
     )
 
 

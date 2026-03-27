@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.orm_models import (
@@ -75,6 +75,33 @@ class BlogVersionRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def get_latest_for_sessions(
+        self, blog_session_ids: list[int]
+    ) -> dict[int, BlogVersion]:
+        if not blog_session_ids:
+            return {}
+
+        latest_version_subquery = (
+            select(
+                BlogVersion.blog_session_id.label("blog_session_id"),
+                func.max(BlogVersion.version_number).label("max_version_number"),
+            )
+            .where(BlogVersion.blog_session_id.in_(blog_session_ids))
+            .group_by(BlogVersion.blog_session_id)
+            .subquery()
+        )
+
+        result = await self._session.execute(
+            select(BlogVersion)
+            .join(
+                latest_version_subquery,
+                (BlogVersion.blog_session_id == latest_version_subquery.c.blog_session_id)
+                & (BlogVersion.version_number == latest_version_subquery.c.max_version_number),
+            )
+        )
+        versions = list(result.scalars().all())
+        return {int(version.blog_session_id): version for version in versions}
 
     async def get_latest_approved(
         self, blog_session_id: int

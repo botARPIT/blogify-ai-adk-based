@@ -17,6 +17,7 @@ from fastapi import Response
 from src.models.repositories.auth_user_repository import AuthUserRepository
 
 AUTH_COOKIE_NAME = "blogify_access_token"
+DEFAULT_JWT_SECRET = "dev-blogify-local-auth-secret"
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -41,12 +42,25 @@ class LocalAuthUser:
 
 class LocalAuthService:
     def __init__(self) -> None:
-        self.secret = os.getenv("JWT_SECRET_KEY") or os.getenv("LOCAL_AUTH_SECRET") or "dev-blogify-local-auth-secret"
+        self.environment = os.getenv("ENVIRONMENT", "dev").lower()
+        configured_secret = os.getenv("JWT_SECRET_KEY") or os.getenv("LOCAL_AUTH_SECRET")
+        if configured_secret:
+            self.secret = configured_secret
+        elif self.environment == "prod":
+            self.secret = ""
+        else:
+            self.secret = DEFAULT_JWT_SECRET
         self.issuer = os.getenv("JWT_ISSUER", "blogify-local-auth")
         self.audience = os.getenv("JWT_AUDIENCE", "blogify-api")
         self.ttl_seconds = int(os.getenv("LOCAL_AUTH_TTL_SECONDS", "28800"))
         self.cookie_secure = os.getenv("COOKIE_SECURE", "false").lower() == "true"
         self.cookie_samesite = os.getenv("COOKIE_SAMESITE", "lax").capitalize()
+
+    def is_production_secret_invalid(self) -> bool:
+        return self.environment == "prod" and not self.secret
+
+    def is_default_secret_in_use(self) -> bool:
+        return self.secret == DEFAULT_JWT_SECRET
 
     def hash_password(self, password: str) -> str:
         salt = secrets.token_bytes(16)
@@ -116,6 +130,8 @@ class LocalAuthService:
         response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
 
     async def ensure_seed_user(self, auth_repo: AuthUserRepository) -> None:
+        if self.environment == "prod":
+            return
         if await auth_repo.count_all() > 0:
             return
         seed_email = os.getenv("LOCAL_AUTH_SEED_EMAIL", "dev@blogify.local")

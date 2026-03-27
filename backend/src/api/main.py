@@ -12,23 +12,31 @@ load_dotenv(f".env.{env}")
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 
+from src.api.auth import require_authenticated_user
 from src.api.middleware import setup_middleware
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
 from src.core.errors import register_exception_handlers
 from src.core.startup import StartupCheckError, runtime_manager
-from src.monitoring.metrics import metrics_endpoint
+from src.monitoring.metrics import daily_cost_usd, metrics_endpoint
 from src.monitoring.tracing import init_tracing, instrument_app
 from src.models.repository import db_repository
+from src.models.repositories.blog_session_repository import BlogSessionRepository
+from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.auth_user_repository import AuthUserRepository
+from src.services.budget_service import BudgetService
 from src.services.local_auth_service import LocalAuthService
 
 # Setup logging
-setup_logging(config.log_level)
+setup_logging(
+    config.log_level,
+    log_format=config.log_format,
+    mask_secrets=config.mask_secrets_in_logs,
+)
 logger = get_logger(__name__)
 
 
@@ -91,6 +99,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize distributed tracing
     init_tracing(service_name="blogify-api")
+    instrument_app(app)
 
     # Register signal handlers for graceful shutdown
     loop = asyncio.get_event_loop()
@@ -171,6 +180,7 @@ app.include_router(health.router, prefix="/api", tags=["Health"])  # Health at /
 app.include_router(health.router, prefix=API_PREFIX, tags=["Health"])
 
 if config.enable_canonical_routes:
+    from src.api.routes.admin_service_clients import router as admin_service_clients_router
     from src.api.routes.auth_local import router as auth_router
     from src.api.routes.canonical import canonical_router, internal_router
     from src.api.routes.notifications import router as notification_router
@@ -179,6 +189,8 @@ if config.enable_canonical_routes:
     app.include_router(canonical_router, tags=["Blog Generation"])
     app.include_router(notification_router, tags=["Notifications"])
     app.include_router(internal_router, tags=["Internal Service"])
+    if getattr(config, "enable_admin_routes", False):
+        app.include_router(admin_service_clients_router, tags=["Admin"])
     logger.info("canonical_routes_enabled")
 else:
     logger.info("canonical_routes_disabled")
@@ -204,52 +216,54 @@ async def root():
 
 
 @app.get("/metrics", tags=["Monitoring"])
-async def metrics():
+async def metrics(request: Request, x_internal_api_key: str | None = None):
     """
     Prometheus metrics endpoint.
     
     Returns metrics in Prometheus format for scraping.
     """
-    if config.enable_metrics:
-        return await metrics_endpoint()
-    return {"error": "Metrics disabled"}
+    if not config.enable_metrics:
+        return {"error": "Metrics disabled"}
+
+    if not config.metrics_public:
+        from src.api.routes.canonical import require_internal_service_client
+
+        await require_internal_service_client(request, x_internal_api_key)
+
+    return await metrics_endpoint()
 
 
 @app.get(f"{API_PREFIX}/costs", tags=["Monitoring"])
-async def get_cost_summary(user_id: str | None = None):
+async def get_cost_summary(request: Request):
     """
-    Get cost tracking summary.
-    
-    - **user_id**: Optional user ID to filter costs
-    
-    Returns:
-    - Daily cost totals
-    - Per-user breakdown (if admin)
-    - Cost by agent type
+    Return the current authenticated user's canonical budget snapshot.
     """
+    current_user = require_authenticated_user(request)
     from datetime import datetime as _dt
-    from src.models.repository import db_repository as _db
+    from src.api.routes.canonical import _resolve_standalone_budget
+
+    tenant_id, end_user_id = await _resolve_standalone_budget(current_user.user_id)
 
     try:
-        if user_id:
-            daily_cost = await _db.get_user_daily_cost(user_id)
-            blog_count = await _db.get_user_daily_blog_count(user_id)
-            return {
-                "user_id": user_id,
-                "date": _dt.utcnow().date().isoformat(),
-                "daily_cost_usd": daily_cost,
-                "daily_blog_count": blog_count,
-                "budget_limit_usd": config.per_user_daily_budget,
-                "budget_remaining_usd": max(0, config.per_user_daily_budget - daily_cost),
-            }
-        else:
-            return {
-                "date": _dt.utcnow().date().isoformat(),
-                "global_daily_budget_usd": config.global_daily_budget,
-                "per_blog_budget_usd": config.per_blog_cost_budget,
-                "per_user_daily_budget_usd": config.per_user_daily_budget,
-                "message": "Provide user_id for per-user costs",
-            }
+        async with db_repository.async_session() as session:
+            budget_service = BudgetService(
+                budget_repo=BudgetRepository(session),
+                session_repo=BlogSessionRepository(session),
+            )
+            snapshot = await budget_service.get_snapshot(tenant_id, end_user_id)
+            daily_cost_usd.labels(scope="user").set(snapshot.daily_spent_usd)
+
+        return {
+            "user_id": current_user.user_id,
+            "date": _dt.utcnow().date().isoformat(),
+            "daily_cost_usd": snapshot.daily_spent_usd,
+            "daily_spent_tokens": snapshot.daily_spent_tokens,
+            "daily_limit_usd": snapshot.daily_limit_usd,
+            "daily_limit_tokens": snapshot.daily_limit_tokens,
+            "active_sessions": snapshot.active_sessions,
+            "max_concurrent_sessions": snapshot.max_concurrent_sessions,
+            "remaining_revision_iterations": snapshot.remaining_revision_iterations,
+        }
     except Exception as e:
         logger.error("cost_summary_error", error=str(e))
         return {"error": "Failed to fetch cost summary"}
@@ -262,6 +276,9 @@ async def system_info():
     
     Returns environment, version, and configuration info.
     """
+    if config.environment == "prod":
+        raise HTTPException(status_code=404, detail="Not found")
+
     return {
         "version": API_VERSION,
         "environment": config.environment,

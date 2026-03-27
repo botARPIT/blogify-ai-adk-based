@@ -15,9 +15,10 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from src.api.auth import ensure_csrf_header, require_authenticated_user
+from src.guards.rate_limit_guard import rate_limit_guard
 from src.core.task_queue import QueueFullError, enqueue_blog_generation
 from src.core.session_store import redis_session_service
-from src.models.orm_models import BlogSessionStatus, EndUser
+from src.models.orm_models import BlogSessionStatus, EndUser, ServiceClient
 from src.models.repository import db_repository
 from src.models.repositories.auth_user_repository import AuthUserRepository
 from src.models.repositories.agent_run_repository import AgentRunRepository
@@ -31,6 +32,8 @@ from src.models.schemas import BudgetDecision, ResolvedIdentity
 from src.models.schemas import (
     AgentRunSummary,
     BlogContentView,
+    BlogSessionListItem,
+    BlogSessionListResponse,
     BlogSessionState,
     BlogVersionView,
     BudgetSnapshot,
@@ -43,12 +46,23 @@ from src.models.schemas import (
     OutlineSchema,
     SessionDetailView,
 )
+from src.models.repositories.service_client_budget_repository import (
+    ServiceClientBudgetRepository,
+)
 from src.services.adapter_auth_service import AdapterAuthError, AdapterAuthService
 from src.services.budget_service import BudgetService
 from src.services.local_auth_service import LocalAuthUser
 from src.services.notification_service import NotificationService
 from src.services.outline_review_service import OutlineReviewService
 from src.services.revision_service import RevisionService
+from src.services.service_client_budget_service import ServiceClientBudgetService
+from src.monitoring.metrics import (
+    blog_generations_total,
+    budget_exceeded_total,
+    daily_cost_usd,
+    service_client_budget_exhausted_total,
+    service_client_budget_preflight_total,
+)
 
 canonical_router = APIRouter(prefix="/api/v1", tags=["Blog Generation"])
 internal_router = APIRouter(prefix="/internal/ai", tags=["Internal Service"])
@@ -124,7 +138,15 @@ def _build_blog_version_view(version, session_id: int) -> BlogVersionView:
     )
 
 
-def _build_session_state(session, latest_version) -> BlogSessionState:
+def _remaining_revision_iterations(max_iterations: int, iteration_count: int) -> int:
+    return max(max_iterations - iteration_count, 0)
+
+
+def _build_session_state(
+    session,
+    latest_version,
+    remaining_revision_iterations: int,
+) -> BlogSessionState:
     return BlogSessionState(
         session_id=session.id,
         status=session.status,
@@ -138,8 +160,37 @@ def _build_session_state(session, latest_version) -> BlogSessionState:
         },
         budget_spent_usd=session.budget_spent_usd,
         budget_spent_tokens=session.budget_spent_tokens,
-        remaining_revision_iterations=0,
+        remaining_revision_iterations=remaining_revision_iterations,
         current_version_number=latest_version.version_number if latest_version else None,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        completed_at=session.completed_at,
+    )
+
+
+def _build_blog_session_list_item(
+    session,
+    latest_version,
+    remaining_revision_iterations: int,
+) -> BlogSessionListItem:
+    return BlogSessionListItem(
+        session_id=session.id,
+        status=session.status,
+        current_stage=session.current_stage,
+        iteration_count=session.iteration_count,
+        topic=session.topic,
+        audience=session.audience,
+        requires_human_review=session.status in {
+            BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
+            BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+        },
+        budget_spent_usd=session.budget_spent_usd,
+        budget_spent_tokens=session.budget_spent_tokens,
+        remaining_revision_iterations=remaining_revision_iterations,
+        current_version_number=latest_version.version_number if latest_version else None,
+        latest_title=latest_version.title if latest_version else None,
+        latest_word_count=latest_version.word_count if latest_version else 0,
+        latest_sources_count=latest_version.sources_count if latest_version else 0,
         created_at=session.created_at,
         updated_at=session.updated_at,
         completed_at=session.completed_at,
@@ -233,6 +284,42 @@ async def _resolve_service_identity(
                 external_tenant_id=external_tenant_id,
                 external_user_id=external_user_id,
             )
+
+
+async def require_internal_service_client(
+    request: Request,
+    raw_api_key: str | None,
+    *,
+    is_blog_request: bool = False,
+) -> ServiceClient:
+    if not raw_api_key:
+        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+
+    try:
+        async with db_repository.async_session() as session:
+            async with session.begin():
+                identity_repo = IdentityRepository(session)
+                auth_service = AdapterAuthService(identity_repo)
+                service_client = await auth_service.validate_service_api_key(raw_api_key)
+    except AdapterAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    allowed, message, rate_limit_info = await rate_limit_guard.check_service_request_limit(
+        service_client.client_key
+    )
+    request.state.rate_limit_info = rate_limit_info
+    if not allowed:
+        raise HTTPException(status_code=429, detail=message)
+
+    if is_blog_request:
+        allowed, message, rate_limit_info = await rate_limit_guard.check_service_blog_generation_limit(
+            service_client.client_key
+        )
+        request.state.rate_limit_info = rate_limit_info
+        if not allowed:
+            raise HTTPException(status_code=429, detail=message)
+
+    return service_client
 
 
 async def _resolve_standalone_budget(user_id: str) -> tuple[int, int]:
@@ -348,6 +435,7 @@ async def _get_session_detail(session_id: int, external_user_id: str | None = No
         version_repo = BlogVersionRepository(session)
         review_repo = HumanReviewRepository(session)
         run_repo = AgentRunRepository(session)
+        budget_repo = BudgetRepository(session)
 
         blog_session = await session_repo.get_by_id(session_id)
         if blog_session is None:
@@ -358,9 +446,20 @@ async def _get_session_detail(session_id: int, external_user_id: str | None = No
         latest_version = await version_repo.get_latest_for_session(session_id)
         review_events = await review_repo.get_for_session(session_id)
         agent_runs = await run_repo.get_for_session(session_id)
+        policy = await budget_repo.get_effective_policy(
+            blog_session.tenant_id, blog_session.end_user_id
+        )
+        max_iterations = policy.max_revision_iterations_per_session if policy else 0
 
         return SessionDetailView(
-            session=_build_session_state(blog_session, latest_version),
+            session=_build_session_state(
+                blog_session,
+                latest_version,
+                _remaining_revision_iterations(
+                    max_iterations,
+                    blog_session.iteration_count,
+                ),
+            ),
             outline=_build_outline_review_view(blog_session),
             latest_version=(
                 _build_blog_version_view(latest_version, session_id)
@@ -369,6 +468,45 @@ async def _get_session_detail(session_id: int, external_user_id: str | None = No
             ),
             review_events=[_build_review_event_view(event) for event in review_events],
             agent_runs=[_build_agent_run_summary(run) for run in agent_runs],
+        )
+
+
+async def _list_blog_sessions(
+    *,
+    end_user_id: int,
+    tenant_id: int,
+    limit: int = 20,
+    offset: int = 0,
+    status_filter: str | None = None,
+) -> BlogSessionListResponse:
+    async with db_repository.async_session() as session:
+        session_repo = BlogSessionRepository(session)
+        version_repo = BlogVersionRepository(session)
+        budget_repo = BudgetRepository(session)
+
+        sessions = await session_repo.list_for_end_user(
+            end_user_id=end_user_id,
+            limit=limit,
+            offset=offset,
+            status=status_filter,
+        )
+        total = await session_repo.count_for_end_user(end_user_id=end_user_id, status=status_filter)
+        latest_versions = await version_repo.get_latest_for_sessions([item.id for item in sessions])
+        policy = await budget_repo.get_effective_policy(tenant_id, end_user_id)
+        max_iterations = policy.max_revision_iterations_per_session if policy else 0
+
+        return BlogSessionListResponse(
+            items=[
+                _build_blog_session_list_item(
+                    item,
+                    latest_versions.get(int(item.id)),
+                    _remaining_revision_iterations(max_iterations, item.iteration_count),
+                )
+                for item in sessions
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
         )
 
 
@@ -505,6 +643,7 @@ async def _create_canonical_generation(
                 end_user_id=identity.end_user_id,
             )
             if not decision.allowed:
+                budget_exceeded_total.labels(budget_type="per_user").inc()
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail=decision.reason or "Budget exhausted",
@@ -619,7 +758,27 @@ async def generate_blog(request: GenerateBlogRequest, http_request: Request):
         audience=request.audience,
         tone=request.tone,
     )
+    blog_generations_total.labels(status="initiated").inc()
     return response
+
+
+@canonical_router.get("/blogs", response_model=BlogSessionListResponse)
+async def list_my_blogs(
+    request: Request,
+    limit: int = 20,
+    offset: int = 0,
+    status: str | None = None,
+):
+    """List the authenticated user's blog sessions."""
+    current_user = require_authenticated_user(request)
+    tenant_id, end_user_id = await _resolve_standalone_budget(current_user.user_id)
+    return await _list_blog_sessions(
+        end_user_id=end_user_id,
+        tenant_id=tenant_id,
+        limit=min(max(limit, 1), 100),
+        offset=max(offset, 0),
+        status_filter=status,
+    )
 
 
 @canonical_router.get("/blogs/{session_id}", response_model=SessionStatusResponse)
@@ -758,7 +917,9 @@ async def get_my_budget(request: Request):
             budget_repo=BudgetRepository(session),
             session_repo=BlogSessionRepository(session),
         )
-        return await budget_service.get_snapshot(tenant_id, end_user_id)
+        snapshot = await budget_service.get_snapshot(tenant_id, end_user_id)
+        daily_cost_usd.labels(scope="user").set(snapshot.daily_spent_usd)
+        return snapshot
 
 
 # ---------------------------------------------------------------------------
@@ -769,6 +930,7 @@ async def get_my_budget(request: Request):
 @internal_router.post("/blogs", response_model=GenerateBlogResponse)
 async def service_generate_blog(
     request: ServiceGenerateBlogRequest,
+    http_request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ):
     """Accept blog generation request from Blogify backend (service mode).
@@ -777,11 +939,11 @@ async def service_generate_blog(
         X-Internal-Api-Key: header with Blogify service API key
         tenant_id, end_user_id, request_id in body
     """
-    if not x_internal_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-Internal-Api-Key header is required for service mode",
-        )
+    await require_internal_service_client(
+        http_request,
+        x_internal_api_key,
+        is_blog_request=True,
+    )
 
     try:
         identity = await _resolve_service_identity(
@@ -792,6 +954,31 @@ async def service_generate_blog(
     except AdapterAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
 
+    async with db_repository.async_session() as session:
+        service_budget_service = ServiceClientBudgetService(
+            ServiceClientBudgetRepository(session)
+        )
+        service_budget_decision = await service_budget_service.preflight(
+            identity.service_client_id
+        )
+    if not service_budget_decision.allowed:
+        service_client_budget_preflight_total.labels(result="blocked").inc()
+        service_client_budget_exhausted_total.inc()
+        reset_at = (
+            service_budget_decision.reset_at.isoformat()
+            if service_budget_decision.reset_at is not None
+            else None
+        )
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "reason": service_budget_decision.reason
+                or "Service client's daily AI budget is exhausted",
+                "reset_at": reset_at,
+            },
+        )
+    service_client_budget_preflight_total.labels(result="allowed").inc()
+
     response, _ = await _create_canonical_generation(
         identity=identity,
         topic=request.topic,
@@ -800,17 +987,18 @@ async def service_generate_blog(
         external_request_id=request.request_id,
         external_blog_id=request.external_blog_id,
     )
+    blog_generations_total.labels(status="initiated").inc()
     return response
 
 
 @internal_router.get("/blogs/{session_id}", response_model=SessionStatusResponse)
 async def service_get_session(
     session_id: str,
+    request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ):
     """Get session status (service mode)."""
-    if not x_internal_api_key:
-        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    await require_internal_service_client(request, x_internal_api_key)
     try:
         return await _get_session_status(int(session_id))
     except ValueError:
@@ -820,10 +1008,10 @@ async def service_get_session(
 @internal_router.get("/blogs/{session_id}/outline", response_model=OutlineReviewView)
 async def service_get_outline(
     session_id: str,
+    request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ):
-    if not x_internal_api_key:
-        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    await require_internal_service_client(request, x_internal_api_key)
     try:
         return await _get_outline_review(int(session_id))
     except ValueError:
@@ -833,10 +1021,10 @@ async def service_get_outline(
 @internal_router.get("/blogs/{session_id}/versions/latest", response_model=BlogVersionView)
 async def service_get_latest_version(
     session_id: str,
+    request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ):
-    if not x_internal_api_key:
-        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    await require_internal_service_client(request, x_internal_api_key)
     try:
         return await _get_latest_version(int(session_id))
     except ValueError:
@@ -846,10 +1034,10 @@ async def service_get_latest_version(
 @internal_router.get("/blogs/{session_id}/content", response_model=BlogContentView)
 async def service_get_content(
     session_id: str,
+    request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ):
-    if not x_internal_api_key:
-        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    await require_internal_service_client(request, x_internal_api_key)
     try:
         return await _get_content_view(int(session_id))
     except ValueError:
@@ -859,10 +1047,10 @@ async def service_get_content(
 @internal_router.get("/blogs/{session_id}/detail", response_model=SessionDetailView)
 async def service_get_detail(
     session_id: str,
+    request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ):
-    if not x_internal_api_key:
-        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    await require_internal_service_client(request, x_internal_api_key)
     try:
         return await _get_session_detail(int(session_id))
     except ValueError:
@@ -876,10 +1064,10 @@ async def service_get_detail(
 async def service_submit_outline_review(
     session_id: str,
     request: OutlineReviewRequest,
+    http_request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ):
-    if not x_internal_api_key:
-        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    await require_internal_service_client(http_request, x_internal_api_key)
     try:
         return await _submit_outline_review(session_id=int(session_id), request=request)
     except ValueError as exc:
@@ -891,11 +1079,11 @@ async def service_submit_review(
     session_id: str,
     version_id: int,
     request: HumanReviewRequest,
+    http_request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ):
     """Submit review (service mode). Mirrors standalone /review endpoint."""
-    if not x_internal_api_key:
-        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    await require_internal_service_client(http_request, x_internal_api_key)
 
     try:
         blog_session_id = int(session_id)
@@ -919,13 +1107,13 @@ async def service_submit_review(
 
 @internal_router.get("/budgets/{end_user_id}", response_model=BudgetSnapshot)
 async def service_get_budget(
+    request: Request,
     end_user_id: str,
     tenant_id: Optional[str] = None,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
 ):
     """Return budget snapshot for a specific end user (service mode)."""
-    if not x_internal_api_key:
-        raise HTTPException(status_code=401, detail="X-Internal-Api-Key required")
+    await require_internal_service_client(request, x_internal_api_key)
 
     try:
         resolved_tenant_id, resolved_end_user_id = await _resolve_service_budget(
@@ -941,7 +1129,9 @@ async def service_get_budget(
             budget_repo=BudgetRepository(session),
             session_repo=BlogSessionRepository(session),
         )
-        return await budget_service.get_snapshot(
+        snapshot = await budget_service.get_snapshot(
             resolved_tenant_id,
             resolved_end_user_id,
         )
+        daily_cost_usd.labels(scope="user").set(snapshot.daily_spent_usd)
+        return snapshot

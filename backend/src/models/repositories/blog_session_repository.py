@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.orm_models import BlogSession, BlogSessionStatus
@@ -62,6 +62,52 @@ class BlogSessionRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def list_for_end_user(
+        self,
+        end_user_id: int,
+        limit: int = 20,
+        offset: int = 0,
+        status: str | None = None,
+    ) -> list[BlogSession]:
+        stmt = (
+            select(BlogSession)
+            .where(BlogSession.end_user_id == end_user_id)
+            .order_by(BlogSession.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        if status:
+            stmt = stmt.where(BlogSession.status == status)
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_for_end_user(
+        self,
+        end_user_id: int,
+        status: str | None = None,
+    ) -> int:
+        stmt = select(func.count(BlogSession.id)).where(BlogSession.end_user_id == end_user_id)
+        if status:
+            stmt = stmt.where(BlogSession.status == status)
+        result = await self._session.execute(stmt)
+        return int(result.scalar_one() or 0)
+
+    async def count_active_for_end_user(self, end_user_id: int) -> int:
+        active_statuses = [
+            BlogSessionStatus.QUEUED.value,
+            BlogSessionStatus.PROCESSING.value,
+            BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
+            BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+            BlogSessionStatus.REVISION_REQUESTED.value,
+        ]
+        result = await self._session.execute(
+            select(func.count(BlogSession.id)).where(
+                BlogSession.end_user_id == end_user_id,
+                BlogSession.status.in_(active_statuses),
+            )
+        )
+        return int(result.scalar_one() or 0)
 
     async def update_status(
         self,

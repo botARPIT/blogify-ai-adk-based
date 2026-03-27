@@ -1,3 +1,8 @@
+# Historical / Planning Artifact
+
+This audit document is retained for historical context and is not the current architecture reference.
+For the current backend architecture source of truth, use [ARCHITECTURE-blogify.md](/home/bot/repos/development/blogify-ai-adk-prod/backend/docs/ARCHITECTURE-blogify.md).
+
 # Post-Refactor Production Readiness Audit (UPDATED)
 
 **Date:** 2026-01-20  

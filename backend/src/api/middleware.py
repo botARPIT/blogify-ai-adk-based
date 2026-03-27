@@ -260,10 +260,10 @@ def setup_middleware(app):
     from src.config.env_config import config
     from src.api.auth import AuthMiddleware
     
-    # Determine if auth is required (default: false in dev, true in prod)
-    auth_required = os.getenv("AUTH_REQUIRED", "false").lower() == "true"
-    if config.environment == "prod":
-        auth_required = True
+    # Determine if auth is required (default: false in dev, true in stage/prod)
+    auth_required = config.environment in {"stage", "prod"}
+    if "AUTH_REQUIRED" in os.environ:
+        auth_required = os.getenv("AUTH_REQUIRED", "false").lower() == "true"
     
     # Add in reverse order of desired execution
     app.add_middleware(ConcurrencyLimitMiddleware, max_concurrent=config.max_concurrent_requests)

@@ -18,6 +18,7 @@ from src.core.redis_pool import close_pool as close_redis_pool, get_redis_client
 from src.core.task_queue import task_queue
 from src.guards.rate_limit_guard import rate_limit_guard
 from src.models.repository import db_repository
+from src.services.local_auth_service import LocalAuthService
 
 logger = get_logger(__name__)
 
@@ -142,6 +143,7 @@ class RuntimeManager:
     def check_configuration(self) -> ServiceCheck:
         """Validate central configuration before startup."""
         issues: list[str] = []
+        auth_service = LocalAuthService()
 
         if config.max_concurrent_requests <= 0:
             issues.append("max_concurrent_requests must be > 0")
@@ -152,6 +154,19 @@ class RuntimeManager:
         if hasattr(config, "cors_origins") and config.environment == "prod":
             if not config.cors_origins or "*" in config.cors_origins:
                 issues.append("cors_origins must be explicitly set in production")
+
+        if config.environment in {"stage", "prod"} and getattr(config, "log_format", "json") != "json":
+            issues.append("log_format must be json in stage and production")
+
+        if config.environment == "prod" and auth_service.is_production_secret_invalid():
+            issues.append("JWT_SECRET_KEY must be explicitly set in production")
+
+        if (
+            config.environment in {"stage", "prod"}
+            and getattr(config, "enable_admin_routes", False)
+            and not getattr(config, "admin_api_key", None)
+        ):
+            issues.append("ADMIN_API_KEY must be explicitly set when admin routes are enabled")
 
         if config.worker_heartbeat_ttl_seconds <= config.worker_heartbeat_interval_seconds:
             issues.append("worker_heartbeat_ttl_seconds must be greater than worker_heartbeat_interval_seconds")

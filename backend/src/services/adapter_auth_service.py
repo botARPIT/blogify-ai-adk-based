@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Optional
 
-from src.models.orm_models import ClientMode
+from src.models.orm_models import ClientMode, ServiceClient
 from src.models.repositories.identity_repository import IdentityRepository
 from src.models.schemas import ResolvedIdentity
 
@@ -36,14 +36,8 @@ class AdapterAuthService:
     def hash_api_key(raw_api_key: str) -> str:
         return hashlib.sha256(raw_api_key.encode()).hexdigest()
 
-    async def resolve_service_mode(
-        self,
-        raw_api_key: str,
-        external_tenant_id: Optional[str],
-        external_user_id: str,
-        external_request_id: Optional[str] = None,
-    ) -> ResolvedIdentity:
-        """Resolve identity for Blogify server-to-server calls."""
+    async def validate_service_api_key(self, raw_api_key: str) -> ServiceClient:
+        """Validate a Blogify service API key without creating tenant or user state."""
         hashed = self.hash_api_key(raw_api_key)
         client = await self._identity_repo.get_client_by_hashed_api_key(hashed)
         if not client:
@@ -53,6 +47,18 @@ class AdapterAuthService:
             raise AdapterAuthError(
                 f"API key is registered for mode '{client.mode}', not 'blogify_service'"
             )
+
+        return client
+
+    async def resolve_service_mode(
+        self,
+        raw_api_key: str,
+        external_tenant_id: Optional[str],
+        external_user_id: str,
+        external_request_id: Optional[str] = None,
+    ) -> ResolvedIdentity:
+        """Resolve identity for Blogify server-to-server calls."""
+        client = await self.validate_service_api_key(raw_api_key)
 
         tenant = await self._identity_repo.get_or_create_tenant(
             service_client_id=client.id,

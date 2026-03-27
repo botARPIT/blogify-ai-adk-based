@@ -1,0 +1,43 @@
+{
+  "title": "Pipeline Overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Blog Generations",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum by (status) (rate(blog_generations_total[5m]))", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Pipeline Duration",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, stage) (rate(blog_generation_duration_seconds_bucket[5m])))", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Agent Invocations",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [{"expr": "sum by (agent_name, success) (rate(agent_invocations_total[5m]))", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Agent Tokens and Cost",
+      "datasource": {"type": "prometheus", "uid": "Prometheus"},
+      "targets": [
+        {"expr": "sum by (agent_name) (rate(agent_token_usage_sum[5m]))", "refId": "A"},
+        {"expr": "sum by (agent_name) (rate(agent_cost_usd_sum[5m]))", "refId": "B"}
+      ],
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+    }
+  ]
+}

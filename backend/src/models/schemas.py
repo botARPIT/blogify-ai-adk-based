@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from src.models.orm_models import ClientMode
 
 # ---------------------------------------------------------------------------
 # Agent I/O schemas (legacy — unchanged)
@@ -123,6 +124,26 @@ class BudgetSnapshot(BaseModel):
     remaining_revision_iterations: int
 
 
+class ServiceClientBudgetView(BaseModel):
+    """Current service-client daily budget state."""
+
+    daily_budget_limit_usd: float
+    budget_window: str
+    currently_exhausted: bool
+    reset_at: Optional[datetime]
+    daily_spent_usd: float
+
+
+class ServiceClientBudgetDecision(BaseModel):
+    """Preflight decision for service-client daily budget enforcement."""
+
+    allowed: bool
+    reason: Optional[str] = None
+    daily_spent_usd: float = 0.0
+    daily_limit_usd: float = 0.0
+    reset_at: Optional[datetime] = None
+
+
 class BlogSessionState(BaseModel):
     """External representation of a blog session."""
 
@@ -140,6 +161,35 @@ class BlogSessionState(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime]
+
+
+class BlogSessionListItem(BaseModel):
+    """Detail-rich summary of a user's blog session."""
+
+    session_id: int
+    status: str
+    current_stage: Optional[str]
+    iteration_count: int
+    topic: str
+    audience: Optional[str]
+    requires_human_review: bool
+    budget_spent_usd: float
+    budget_spent_tokens: int
+    remaining_revision_iterations: int
+    current_version_number: Optional[int]
+    latest_title: Optional[str]
+    latest_word_count: int
+    latest_sources_count: int
+    created_at: datetime
+    updated_at: datetime
+    completed_at: Optional[datetime]
+
+
+class BlogSessionListResponse(BaseModel):
+    items: list[BlogSessionListItem]
+    total: int
+    limit: int
+    offset: int
 
 
 class BlogVersionView(BaseModel):
@@ -297,6 +347,37 @@ class NotificationListResponse(BaseModel):
 class MarkNotificationReadResponse(BaseModel):
     ok: bool
     updated: int
+
+
+class ServiceClientView(BaseModel):
+    client_key: str
+    name: str
+    mode: str
+    status: str
+    created_at: datetime
+    rotated_at: Optional[datetime]
+
+
+class ServiceClientListResponse(BaseModel):
+    items: list[ServiceClientView]
+
+
+class CreateServiceClientRequest(BaseModel):
+    client_key: str = Field(min_length=3, max_length=128)
+    name: str = Field(min_length=3, max_length=255)
+    mode: ClientMode
+
+
+class CreateServiceClientResponse(ServiceClientView):
+    api_key: str
+
+
+class RotateServiceClientResponse(ServiceClientView):
+    api_key: str
+
+
+class UpdateServiceClientBudgetRequest(BaseModel):
+    daily_budget_limit_usd: float = Field(ge=0.0)
 
 
 class HumanReviewEventView(BaseModel):

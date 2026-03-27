@@ -7,6 +7,7 @@ updates are handled here (pipeline_v2 is pure orchestration).
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from src.agents.pipeline_v2 import (
@@ -26,6 +27,13 @@ from src.models.repositories.blog_version_repository import BlogVersionRepositor
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.human_review_repository import HumanReviewRepository
 from src.models.repositories.notification_repository import NotificationRepository
+from src.monitoring.metrics import (
+    agent_cost_usd,
+    agent_invocations_total,
+    agent_token_usage,
+    blog_generation_duration_seconds,
+    blog_generations_total,
+)
 from src.monitoring.tracing import trace_span
 from src.services.budget_service import BudgetService
 from src.services.notification_service import NotificationService
@@ -74,6 +82,7 @@ class StageExecutor:
         PipelineResult with all stage outputs and cost info.
         """
         with trace_span("stage_executor.full_pipeline", {"blog_id": blog_id, "session_id": session_id}):
+            started_at = time.perf_counter()
             logger.info(
                 "pipeline_execution_start",
                 blog_id=blog_id,
@@ -105,9 +114,14 @@ class StageExecutor:
                     session_id=session_id,
                     error=result.error,
                 )
+                blog_generations_total.labels(status="failed").inc()
                 return result
 
             if canonical_session_id is not None and result.paused_for_confirmation:
+                self._emit_agent_metrics(result.costs)
+                blog_generation_duration_seconds.labels(stage="outline_gate").observe(
+                    max(time.perf_counter() - started_at, 0.0)
+                )
                 await self._store_outline_review_gate(
                     canonical_session_id=canonical_session_id,
                     result=result,
@@ -191,6 +205,11 @@ class StageExecutor:
                 total_tokens=total_tokens,
                 total_cost_usd=round(total_cost_usd, 6),
             )
+            self._emit_agent_metrics(result.costs)
+            blog_generations_total.labels(status="completed").inc()
+            blog_generation_duration_seconds.labels(stage="pipeline").observe(
+                max(time.perf_counter() - started_at, 0.0)
+            )
 
             return result
 
@@ -231,6 +250,7 @@ class StageExecutor:
                 canonical_session_id=canonical_session_id,
                 error=result.error,
             )
+            blog_generations_total.labels(status="failed").inc()
             return result
 
         title = ""
@@ -249,6 +269,8 @@ class StageExecutor:
             word_count=word_count,
             sources_count=sources_count,
         )
+        self._emit_agent_metrics(result.costs)
+        blog_generations_total.labels(status="completed").inc()
         return result
 
     # -- legacy compat shim for blog_worker.py stage loop --------
@@ -322,6 +344,17 @@ class StageExecutor:
                     stage=cost.stage,
                     error=str(exc),
                 )
+
+    def _emit_agent_metrics(self, costs: list[CostInfo]) -> None:
+        for cost in costs:
+            if cost.total_tokens == 0:
+                continue
+            success = "true"
+            agent_invocations_total.labels(agent_name=cost.stage, success=success).inc()
+            agent_token_usage.labels(agent_name=cost.stage).observe(cost.total_tokens)
+            agent_cost_usd.labels(agent_name=cost.stage).observe(
+                get_model_cost(cost.model, cost.total_tokens)
+            )
 
     async def _record_canonical_stage_costs(
         self,

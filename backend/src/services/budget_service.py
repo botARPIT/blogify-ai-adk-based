@@ -204,6 +204,7 @@ class BudgetService:
         daily_spent_tokens = await self._budget_repo.get_daily_spent(
             end_user_id, LedgerResourceType.TOKENS, today
         )
+        active_sessions = await self._session_repo.count_active_for_end_user(end_user_id)
         return BudgetSnapshot(
             end_user_id=end_user_id,
             tenant_id=tenant_id,
@@ -211,7 +212,7 @@ class BudgetService:
             daily_spent_tokens=int(daily_spent_tokens),
             daily_limit_usd=policy.daily_cost_limit_usd if policy else 0.0,
             daily_limit_tokens=policy.daily_token_limit if policy else 0,
-            active_sessions=0,  # TODO: query active sessions count
+            active_sessions=active_sessions,
             max_concurrent_sessions=policy.max_concurrent_sessions if policy else 0,
             remaining_revision_iterations=(
                 policy.max_revision_iterations_per_session if policy else 0

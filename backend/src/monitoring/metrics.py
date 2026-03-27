@@ -92,6 +92,17 @@ daily_cost_usd = Gauge(
     ["scope"],  # global, user
 )
 
+service_client_budget_exhausted_total = Counter(
+    "service_client_budget_exhausted_total",
+    "Total service-client budget exhaustion events",
+)
+
+service_client_budget_preflight_total = Counter(
+    "service_client_budget_preflight_total",
+    "Total service-client budget preflight checks",
+    ["result"],  # allowed, blocked
+)
+
 # Judge metrics
 judge_decisions_total = Counter(
     "judge_decisions_total",

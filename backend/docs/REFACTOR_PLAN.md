@@ -1,3 +1,8 @@
+# Historical / Planning Artifact
+
+This document is a historical implementation plan and not the current runtime source of truth.
+For the current backend architecture reference, use [ARCHITECTURE-blogify.md](/home/bot/repos/development/blogify-ai-adk-prod/backend/docs/ARCHITECTURE-blogify.md).
+
 # Production Hardening Refactor Plan
 
 **Document Type:** Implementation Blueprint  

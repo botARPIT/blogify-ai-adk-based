@@ -1,4 +1,8 @@
-"""Database repository for users, blogs, and cost records."""
+"""Database repository for legacy users, blogs, and cost records.
+
+Canonical runtime authority lives in blog_sessions, blog_versions, budget_ledger_entries,
+and user_notifications. This repository remains for compatibility and analytics paths only.
+"""
 
 from datetime import datetime
 from typing import Optional
@@ -8,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 
 from src.config.database_config import db_settings
 from src.config.logging_config import get_logger
+from src.monitoring.tracing import instrument_database
 from src.models.orm_models import Base, Blog, CostRecord, User
 
 logger = get_logger(__name__)
@@ -15,11 +20,12 @@ logger = get_logger(__name__)
 # Global engine and session factory (singleton pattern)
 _engine = None
 _async_session_factory = None
+_database_instrumented = False
 
 
 def get_engine():
     """Get or create the database engine singleton."""
-    global _engine
+    global _engine, _database_instrumented
     if _engine is None:
         _engine = create_async_engine(
             db_settings.database_url,
@@ -29,6 +35,9 @@ def get_engine():
             pool_recycle=3600,  # Recycle connections after 1 hour
             echo=False,
         )
+        if not _database_instrumented:
+            instrument_database(_engine)
+            _database_instrumented = True
         logger.info("database_engine_created")
     return _engine
 
@@ -152,7 +161,10 @@ class DatabaseRepository:
         success: bool = True,
         error_message: str | None = None,
     ) -> CostRecord:
-        """Create cost tracking record."""
+        """Create a legacy analytics cost record.
+
+        Budget enforcement must use canonical budget_ledger_entries, not cost_records.
+        """
         async with self.async_session() as session:
             async with session.begin():
                 cost_record = CostRecord(
@@ -180,7 +192,11 @@ class DatabaseRepository:
                 return cost_record
 
     async def get_user_daily_cost(self, user_id: str) -> float:
-        """Get user's total cost for today."""
+        """Get user's total legacy analytics cost for today.
+
+        This method is retained for compatibility only and must not be used for
+        budget enforcement or canonical API responses.
+        """
         async with self.async_session() as session:
             today = datetime.utcnow().date()
             result = await session.execute(
@@ -193,7 +209,11 @@ class DatabaseRepository:
             return sum(r.cost_usd for r in records)
 
     async def get_user_daily_blog_count(self, user_id: str) -> int:
-        """Get number of blogs user generated today."""
+        """Get legacy blog count for today.
+
+        This method is retained for compatibility only and must not be used for
+        budget enforcement or canonical API responses.
+        """
         async with self.async_session() as session:
             today = datetime.utcnow().date()
             result = await session.execute(

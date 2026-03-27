@@ -1,8 +1,12 @@
 """Enhanced rate limiter with global and per-user limits."""
 
+from datetime import datetime, timedelta
+
 from src.config import budget_settings, settings
+from src.config.env_config import config
 from src.config.logging_config import get_logger
 from src.core.redis_pool import get_redis_client
+from src.monitoring.metrics import rate_limit_rejections_total
 
 logger = get_logger(__name__)
 
@@ -26,6 +30,14 @@ class EnhancedRateLimiter:
     async def close(self) -> None:
         """No-op. Pool cleanup is centralised in redis_pool."""
         return None
+
+    def _rate_limit_info(self, *, limit: int, remaining: int, window_seconds: int) -> dict[str, int]:
+        reset_time = int((datetime.utcnow() + timedelta(seconds=window_seconds)).timestamp())
+        return {
+            "limit": limit,
+            "remaining": max(0, remaining),
+            "reset": reset_time,
+        }
 
     async def check_global_request_limit(self) -> tuple[bool, str]:
         """Check global request rate limit."""
@@ -145,6 +157,62 @@ class EnhancedRateLimiter:
                 return False, msg
 
         return True, ""
+
+    async def check_service_request_limit(
+        self, client_key: str
+    ) -> tuple[bool, str, dict[str, int]]:
+        """Check per-service-client request rate limit."""
+        client = get_redis_client()
+        limit = config.service_rate_limit_requests_per_minute
+        window_seconds = 60
+        key = f"rate_limit:service:requests:{client_key}"
+        current = int(await client.get(key) or 0)
+
+        if current >= limit:
+            info = self._rate_limit_info(limit=limit, remaining=0, window_seconds=window_seconds)
+            info["retry_after"] = window_seconds
+            rate_limit_rejections_total.labels(limit_type="service_request").inc()
+            logger.warning("service_request_limit_exceeded", client_key=client_key, current=current)
+            return False, f"Service request limit exceeded. Limit: {limit}/minute", info
+
+        pipe = client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, window_seconds)
+        await pipe.execute()
+
+        return True, "", self._rate_limit_info(
+            limit=limit,
+            remaining=limit - (current + 1),
+            window_seconds=window_seconds,
+        )
+
+    async def check_service_blog_generation_limit(
+        self, client_key: str
+    ) -> tuple[bool, str, dict[str, int]]:
+        """Check per-service-client daily blog generation rate limit."""
+        client = get_redis_client()
+        limit = config.service_rate_limit_blog_generations_per_day
+        window_seconds = 86400
+        key = f"rate_limit:service:blogs:{client_key}"
+        current = int(await client.get(key) or 0)
+
+        if current >= limit:
+            info = self._rate_limit_info(limit=limit, remaining=0, window_seconds=window_seconds)
+            info["retry_after"] = window_seconds
+            rate_limit_rejections_total.labels(limit_type="service_blog").inc()
+            logger.warning("service_blog_limit_exceeded", client_key=client_key, current=current)
+            return False, f"Service daily blog generation limit reached. Limit: {limit}/day", info
+
+        pipe = client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, window_seconds)
+        await pipe.execute()
+
+        return True, "", self._rate_limit_info(
+            limit=limit,
+            remaining=limit - (current + 1),
+            window_seconds=window_seconds,
+        )
 
 
 # Global instance

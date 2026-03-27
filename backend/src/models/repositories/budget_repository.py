@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.orm_models import (
@@ -88,14 +88,25 @@ class BudgetRepository:
     async def get_daily_spent(
         self, end_user_id: int, resource_type: LedgerResourceType, date_utc: datetime
     ) -> float:
-        """Sum committed + reserved entries for today."""
+        """Return net reserved and committed spend for today."""
         start_of_day = date_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        signed_quantity = case(
+            (
+                BudgetLedgerEntry.entry_type == LedgerEntryType.RELEASE.value,
+                -BudgetLedgerEntry.quantity,
+            ),
+            else_=BudgetLedgerEntry.quantity,
+        )
         result = await self._session.execute(
-            select(func.coalesce(func.sum(BudgetLedgerEntry.quantity), 0.0)).where(
+            select(func.coalesce(func.sum(signed_quantity), 0.0)).where(
                 BudgetLedgerEntry.end_user_id == end_user_id,
                 BudgetLedgerEntry.resource_type == resource_type.value,
                 BudgetLedgerEntry.entry_type.in_(
-                    [LedgerEntryType.COMMIT.value, LedgerEntryType.RESERVE.value]
+                    [
+                        LedgerEntryType.COMMIT.value,
+                        LedgerEntryType.RESERVE.value,
+                        LedgerEntryType.RELEASE.value,
+                    ]
                 ),
                 BudgetLedgerEntry.created_at >= start_of_day,
             )

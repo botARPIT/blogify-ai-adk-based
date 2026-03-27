@@ -30,6 +30,7 @@ from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.human_review_repository import HumanReviewRepository
 from src.models.repositories.notification_repository import NotificationRepository
 from src.models.schemas import HumanReviewDecision, HumanReviewRequest
+from src.monitoring.metrics import judge_decisions_total, judge_quality_score
 from src.services.notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,8 @@ class RevisionService:
         )
 
         if action == HumanReviewAction.APPROVE:
+            judge_decisions_total.labels(decision="approved").inc()
+            judge_quality_score.observe(1.0)
             await self._version_repo.mark_approved(blog_version_id)
             await self._session_repo.update_status(
                 blog_session_id, BlogSessionStatus.COMPLETED
@@ -138,6 +141,8 @@ class RevisionService:
             )
 
         elif action == HumanReviewAction.REJECT:
+            judge_decisions_total.labels(decision="rejected").inc()
+            judge_quality_score.observe(0.0)
             await self._version_repo.mark_rejected(blog_version_id)
             await self._session_repo.update_status(
                 blog_session_id, BlogSessionStatus.FAILED
@@ -160,6 +165,8 @@ class RevisionService:
             )
 
         elif action == HumanReviewAction.REQUEST_REVISION:
+            judge_decisions_total.labels(decision="revision_requested").inc()
+            judge_quality_score.observe(0.5)
             # Check revision limit
             if session.iteration_count >= policy_max_iterations:
                 await self._session_repo.update_status(

@@ -2,10 +2,16 @@
 
 import asyncio
 import os
+import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 # Set test environment - use 'dev' as it's a valid config value
 os.environ["ENVIRONMENT"] = "dev"
@@ -13,6 +19,7 @@ os.environ["GOOGLE_API_KEY"] = "test-api-key"
 os.environ["TAVILY_API_KEY"] = "test-tavily-key"
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://test:test@localhost:5432/test"
 os.environ["REDIS_URL"] = "redis://localhost:6379/0"
+os.environ["ENABLE_CANONICAL_ROUTES"] = "false"
 
 
 

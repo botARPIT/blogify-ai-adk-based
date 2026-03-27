@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 env = os.getenv("ENVIRONMENT", "dev")
 load_dotenv(f".env.{env}")
 
+from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
 from src.core.startup import StartupCheckError, runtime_manager
 from src.core.task_queue import task_queue, TaskStatus
@@ -40,7 +41,11 @@ from src.models.repositories.notification_repository import NotificationReposito
 from src.services.budget_service import BudgetService
 from src.services.notification_service import NotificationService
 
-setup_logging("INFO")
+setup_logging(
+    config.log_level,
+    log_format=config.log_format,
+    mask_secrets=config.mask_secrets_in_logs,
+)
 logger = get_logger(__name__)
 
 # Worker configuration
