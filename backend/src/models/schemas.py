@@ -102,12 +102,39 @@ class BudgetDecision(BaseModel):
 
     allowed: bool
     reason: Optional[str] = None
+    error_code: Optional[str] = None
+    effective_policy_id: Optional[int] = None
+    estimated_usd: float = 0.0
+    estimated_tokens: int = 0
     reserved_usd: float = 0.0
     reserved_tokens: int = 0
     daily_remaining_usd: float = 0.0
     daily_remaining_tokens: int = 0
     session_remaining_usd: float = 0.0
     session_remaining_tokens: int = 0
+    daily_remaining_blog_count: int = 0
+    remaining_active_session_slots: int = 0
+    soft_stop_enabled: bool = False
+
+
+class BudgetExhaustedDetail(BaseModel):
+    """Structured 402 error body returned when any budget limit is exceeded.
+
+    Returned by all internal service endpoints as the JSON error body so that
+    downstream callers can react programmatically rather than parsing a string.
+    """
+
+    error: str = "budget_exhausted"
+    error_code: str  # BUDGET_EXCEEDED | SERVICE_CLIENT_BUDGET_EXCEEDED
+    reason: str
+    daily_remaining_usd: float = 0.0
+    daily_remaining_tokens: int = 0
+    daily_remaining_blog_count: int = 0
+    remaining_active_session_slots: int = 0
+    estimated_reset_at: Optional[datetime] = Field(
+        default=None,
+        description="UTC timestamp when the daily budget window resets (midnight UTC)",
+    )
 
 
 class BudgetSnapshot(BaseModel):
@@ -115,13 +142,25 @@ class BudgetSnapshot(BaseModel):
 
     end_user_id: int
     tenant_id: int
+    policy_id: Optional[int] = None
+    policy_scope: Optional[str] = None
     daily_spent_usd: float
     daily_spent_tokens: int
+    daily_committed_spend_usd: float = 0.0
+    daily_committed_tokens: int = 0
+    daily_reserved_exposure_usd: float = 0.0
+    daily_reserved_exposure_tokens: int = 0
+    daily_total_exposure_usd: float = 0.0
+    daily_total_exposure_tokens: int = 0
     daily_limit_usd: float
     daily_limit_tokens: int
+    daily_blog_limit: int = 0
+    daily_blog_count_committed: int = 0
+    daily_blog_count_reserved: int = 0
     active_sessions: int
     max_concurrent_sessions: int
     remaining_revision_iterations: int
+    soft_stop_enabled: bool = False
 
 
 class ServiceClientBudgetView(BaseModel):

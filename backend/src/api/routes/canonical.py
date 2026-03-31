@@ -12,9 +12,13 @@ from __future__ import annotations
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.api.auth import ensure_csrf_header, require_authenticated_user
+from src.config.logging_config import get_logger
+from src.core.errors import format_error_response
+from src.core.idempotency import IdempotencyState, idempotency_store
 from src.guards.rate_limit_guard import rate_limit_guard
 from src.core.task_queue import QueueFullError, enqueue_blog_generation
 from src.core.session_store import redis_session_service
@@ -28,7 +32,7 @@ from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.human_review_repository import HumanReviewRepository
 from src.models.repositories.identity_repository import IdentityRepository
 from src.models.repositories.notification_repository import NotificationRepository
-from src.models.schemas import BudgetDecision, ResolvedIdentity
+from src.models.schemas import BudgetDecision, BudgetExhaustedDetail, ResolvedIdentity
 from src.models.schemas import (
     AgentRunSummary,
     BlogContentView,
@@ -68,6 +72,58 @@ canonical_router = APIRouter(prefix="/api/v1", tags=["Blog Generation"])
 internal_router = APIRouter(prefix="/internal/ai", tags=["Internal Service"])
 APP_NAME = "blogify"
 REQUEST_CONFIRMATION_FUNCTION_CALL_NAME = "adk_request_confirmation"
+logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Budget exhaustion helper
+# ---------------------------------------------------------------------------
+
+
+def _raise_budget_exhausted(decision: BudgetDecision) -> None:
+    """Raise a structured HTTP 402 from a denied BudgetDecision.
+
+    Produces a JSON body that downstream service clients can deserialize:
+
+        {
+            "error": "budget_exhausted",
+            "error_code": "BUDGET_EXCEEDED",          # or SERVICE_CLIENT_BUDGET_EXCEEDED
+            "reason": "Daily USD budget exhausted: ...",
+            "daily_remaining_usd": 0.0,
+            "daily_remaining_tokens": 0,
+            "daily_remaining_blog_count": 0,
+            "remaining_active_session_slots": 2,
+            "estimated_reset_at": "2026-04-01T00:00:00Z"
+        }
+    """
+    from datetime import datetime, timezone
+
+    # Next midnight UTC
+    now = datetime.now(timezone.utc)
+    reset_at = datetime(
+        year=now.year,
+        month=now.month,
+        day=now.day,
+        tzinfo=timezone.utc,
+    ).replace(hour=0, minute=0, second=0, microsecond=0)
+    # If already past midnight (i.e., today's midnight is in the past), roll to next day
+    if reset_at <= now:
+        from datetime import timedelta
+        reset_at = reset_at + timedelta(days=1)
+
+    body = BudgetExhaustedDetail(
+        error_code=decision.error_code or "BUDGET_EXCEEDED",
+        reason=decision.reason or "Budget exhausted",
+        daily_remaining_usd=decision.daily_remaining_usd,
+        daily_remaining_tokens=decision.daily_remaining_tokens,
+        daily_remaining_blog_count=decision.daily_remaining_blog_count,
+        remaining_active_session_slots=decision.remaining_active_session_slots,
+        estimated_reset_at=reset_at,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+        detail=body.model_dump(mode="json"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +196,19 @@ def _build_blog_version_view(version, session_id: int) -> BlogVersionView:
 
 def _remaining_revision_iterations(max_iterations: int, iteration_count: int) -> int:
     return max(max_iterations - iteration_count, 0)
+
+
+async def _restore_revision_denied_state(blog_session_id: int) -> None:
+    """Compensate a revision request when downstream budget reservation is denied."""
+    async with db_repository.async_session() as session:
+        async with session.begin():
+            session_repo = BlogSessionRepository(session)
+            blog_session = await session_repo.get_by_id(blog_session_id)
+            if blog_session is None:
+                return
+            blog_session.iteration_count = max(0, blog_session.iteration_count - 1)
+            blog_session.status = BlogSessionStatus.AWAITING_HUMAN_REVIEW
+            blog_session.current_stage = "awaiting_review"
 
 
 def _build_session_state(
@@ -338,6 +407,15 @@ async def _resolve_service_budget(
         external_tenant_id=external_tenant_id,
     )
     return identity.tenant_id, identity.end_user_id
+
+
+async def _get_session_identity(session_id: int) -> tuple[int, int]:
+    async with db_repository.async_session() as session:
+        session_repo = BlogSessionRepository(session)
+        blog_session = await session_repo.get_by_id(session_id)
+        if blog_session is None:
+            raise HTTPException(status_code=404, detail="Blog session not found")
+        return blog_session.tenant_id, blog_session.end_user_id
 
 
 async def _get_session_status(session_id: int, external_user_id: str | None = None) -> SessionStatusResponse:
@@ -576,6 +654,143 @@ async def _submit_outline_review(
     return decision
 
 
+async def _submit_human_review(
+    *,
+    blog_session_id: int,
+    version_id: int,
+    request: HumanReviewRequest,
+    external_user_id: str | None = None,
+) -> HumanReviewDecision:
+    decision: HumanReviewDecision
+    blog_session = None
+    end_user = None
+    async with db_repository.async_session() as session:
+        async with session.begin():
+            session_repo = BlogSessionRepository(session)
+            existing_session = await session_repo.get_by_id(blog_session_id)
+            if existing_session is None:
+                raise HTTPException(status_code=404, detail="Blog session not found")
+            if external_user_id is not None:
+                await _assert_owned_session(existing_session, external_user_id, session)
+            revision_service = RevisionService(
+                session_repo=session_repo,
+                version_repo=BlogVersionRepository(session),
+                review_repo=HumanReviewRepository(session),
+                budget_repo=BudgetRepository(session),
+            )
+            try:
+                decision = await revision_service.process_review(
+                    blog_session_id=blog_session_id,
+                    blog_version_id=version_id,
+                    request=request,
+                )
+            except ValueError as exc:
+                detail = str(exc)
+                if "not found" in detail.lower():
+                    raise HTTPException(status_code=404, detail=detail) from exc
+                raise HTTPException(status_code=409, detail=detail) from exc
+            blog_session = await session_repo.get_by_id(blog_session_id)
+            if blog_session is not None:
+                end_user = await session.get(EndUser, blog_session.end_user_id)
+
+    if request.action == "request_revision" and blog_session is not None:
+        if end_user is None:
+            raise HTTPException(status_code=500, detail="Unable to resolve the current user session.")
+        async with db_repository.async_session() as session:
+            async with session.begin():
+                session_repo = BlogSessionRepository(session)
+                budget_service = BudgetService(
+                    budget_repo=BudgetRepository(session),
+                    session_repo=session_repo,
+                )
+                current_session = await session_repo.get_by_id(blog_session_id)
+                if current_session is None:
+                    raise HTTPException(status_code=404, detail="Blog session not found")
+                reservation_context = await budget_service.reserve_revision_budget(
+                    tenant_id=current_session.tenant_id,
+                    end_user_id=current_session.end_user_id,
+                    service_client_id=current_session.service_client_id,
+                    blog_session_id=current_session.id,
+                    iteration_number=current_session.iteration_count,
+                    current_session_spent_usd=current_session.budget_spent_usd,
+                    current_session_spent_tokens=current_session.budget_spent_tokens,
+                )
+                if not reservation_context.decision.allowed:
+                    budget_exceeded_total.labels(
+                        budget_type=reservation_context.decision.error_code or "per_user"
+                    ).inc()
+                    denied_reason = reservation_context.decision.reason or "Budget exhausted"
+                    denied_decision = reservation_context.decision
+                else:
+                    current_session.budget_reserved_usd += reservation_context.decision.reserved_usd
+                    current_session.budget_reserved_tokens += reservation_context.decision.reserved_tokens
+                    denied_reason = None
+                    denied_decision = None
+        if denied_reason is not None and denied_decision is not None:
+            await _restore_revision_denied_state(blog_session_id)
+            _raise_budget_exhausted(denied_decision)
+
+        try:
+            await enqueue_blog_generation(
+                user_id=end_user.external_user_id,
+                topic=blog_session.topic,
+                audience=blog_session.audience,
+                session_id=str(blog_session.id),
+                blog_id=None,
+                canonical_session_id=blog_session.id,
+                tenant_id=blog_session.tenant_id,
+                end_user_id=blog_session.end_user_id,
+                job_phase="outline_gate",
+            )
+        except QueueFullError as exc:
+            async with db_repository.async_session() as session:
+                async with session.begin():
+                    session_repo = BlogSessionRepository(session)
+                    budget_service = BudgetService(
+                        budget_repo=BudgetRepository(session),
+                        session_repo=session_repo,
+                    )
+                    current_session = await session_repo.get_by_id(blog_session_id)
+                    await session_repo.update_status(
+                        blog_session_id,
+                        status=BlogSessionStatus.AWAITING_HUMAN_REVIEW,
+                        current_stage="awaiting_review",
+                    )
+                    if current_session is not None:
+                        await budget_service.release(
+                            tenant_id=current_session.tenant_id,
+                            end_user_id=current_session.end_user_id,
+                            service_client_id=current_session.service_client_id,
+                            blog_session_id=blog_session_id,
+                            reason="revision_queue_rejected",
+                        )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+
+        async with db_repository.async_session() as session:
+            async with session.begin():
+                session_repo = BlogSessionRepository(session)
+                await session_repo.update_status(
+                    blog_session_id,
+                    status=BlogSessionStatus.QUEUED,
+                    current_stage="intent",
+                )
+
+        return HumanReviewDecision(
+            session_id=decision.session_id,
+            version_id=decision.version_id,
+            action=decision.action,
+            new_status=BlogSessionStatus.QUEUED.value,
+            iteration_count=decision.iteration_count,
+            requires_human_review=False,
+            message="Revision requested. The session has been re-queued and will restart from intent.",
+        )
+
+    return decision
+
+
 async def _get_pending_outline_confirmation(
     *,
     session_id: int,
@@ -638,17 +853,9 @@ async def _create_canonical_generation(
                         str(existing.id),
                     )
 
-            decision = await budget_service.preflight(
-                tenant_id=identity.tenant_id,
-                end_user_id=identity.end_user_id,
+            current_active_sessions = await session_repo.count_active_for_end_user(
+                identity.end_user_id
             )
-            if not decision.allowed:
-                budget_exceeded_total.labels(budget_type="per_user").inc()
-                raise HTTPException(
-                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail=decision.reason or "Budget exhausted",
-                )
-
             canonical_session = await session_repo.create(
                 tenant_id=identity.tenant_id,
                 end_user_id=identity.end_user_id,
@@ -658,15 +865,23 @@ async def _create_canonical_generation(
                 tone=tone,
                 external_request_id=external_request_id,
                 external_blog_id=external_blog_id,
-                budget_reserved_usd=decision.reserved_usd,
-                budget_reserved_tokens=decision.reserved_tokens,
             )
-            await budget_service.reserve(
+            reservation_context = await budget_service.reserve_generation_budget(
                 tenant_id=identity.tenant_id,
                 end_user_id=identity.end_user_id,
+                service_client_id=identity.service_client_id,
                 blog_session_id=canonical_session.id,
-                decision=decision,
+                current_active_sessions_override=current_active_sessions,
             )
+            decision = reservation_context.decision
+            if not decision.allowed:
+                budget_exceeded_total.labels(
+                    budget_type=decision.error_code or "per_user"
+                ).inc()
+                _raise_budget_exhausted(decision)
+
+            canonical_session.budget_reserved_usd = decision.reserved_usd
+            canonical_session.budget_reserved_tokens = decision.reserved_tokens
             canonical_session_id = int(canonical_session.id)
 
     try:
@@ -697,9 +912,9 @@ async def _create_canonical_generation(
                 await budget_service.release(
                     tenant_id=identity.tenant_id,
                     end_user_id=identity.end_user_id,
+                    service_client_id=identity.service_client_id,
                     blog_session_id=canonical_session_id,
-                    reserved_usd=decision.reserved_usd,
-                    reserved_tokens=decision.reserved_tokens,
+                    reason="queue_rejected",
                 )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -721,9 +936,9 @@ async def _create_canonical_generation(
                 await budget_service.release(
                     tenant_id=identity.tenant_id,
                     end_user_id=identity.end_user_id,
+                    service_client_id=identity.service_client_id,
                     blog_session_id=canonical_session_id,
-                    reserved_usd=decision.reserved_usd,
-                    reserved_tokens=decision.reserved_tokens,
+                    reason="queue_failed",
                 )
         raise
 
@@ -738,13 +953,129 @@ async def _create_canonical_generation(
     )
 
 
+async def _create_generation_response(
+    *,
+    identity: ResolvedIdentity,
+    topic: str,
+    audience: Optional[str],
+    tone: Optional[str],
+    external_request_id: Optional[str] = None,
+    external_blog_id: Optional[str] = None,
+) -> GenerateBlogResponse:
+    response, _ = await _create_canonical_generation(
+        identity=identity,
+        topic=topic,
+        audience=audience,
+        tone=tone,
+        external_request_id=external_request_id,
+        external_blog_id=external_blog_id,
+    )
+    return response
+
+
+async def _run_idempotent_action(
+    *,
+    user_scope: str,
+    endpoint: str,
+    idempotency_key: str | None,
+    request_body: dict,
+    action,
+    cacheable_error_statuses: set[int],
+):
+    if not idempotency_key:
+        return await action()
+
+    try:
+        result = await idempotency_store.check_and_set(
+            user_scope=user_scope,
+            endpoint=endpoint,
+            idempotency_key=idempotency_key,
+            request_body=request_body,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("idempotency_check_failed", endpoint=endpoint, error=str(exc))
+        return await action()
+
+    if result.state == IdempotencyState.CACHED:
+        if result.status_code is not None and result.status_code >= 400:
+            return JSONResponse(status_code=result.status_code, content=result.response or {})
+        return result.response or {}
+
+    if result.state == IdempotencyState.MISMATCH:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Idempotency-Key was already used with a different request payload.",
+        )
+
+    if result.state == IdempotencyState.IN_PROGRESS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An identical request is already being processed.",
+        )
+
+    try:
+        response = await action()
+    except HTTPException as exc:
+        should_cache = exc.status_code in cacheable_error_statuses and exc.status_code not in {401, 403}
+        if should_cache:
+            try:
+                await idempotency_store.set_response(
+                    user_scope=user_scope,
+                    endpoint=endpoint,
+                    idempotency_key=idempotency_key,
+                    request_body=request_body,
+                    status_code=exc.status_code,
+                    response_body=format_error_response(exc).model_dump(),
+                )
+            except Exception as cache_exc:  # noqa: BLE001
+                logger.warning("idempotency_cache_failed", endpoint=endpoint, error=str(cache_exc))
+        else:
+            try:
+                await idempotency_store.clear(
+                    user_scope=user_scope,
+                    endpoint=endpoint,
+                    idempotency_key=idempotency_key,
+                )
+            except Exception as clear_exc:  # noqa: BLE001
+                logger.warning("idempotency_clear_failed", endpoint=endpoint, error=str(clear_exc))
+        raise
+    except Exception:
+        try:
+            await idempotency_store.clear(
+                user_scope=user_scope,
+                endpoint=endpoint,
+                idempotency_key=idempotency_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("idempotency_clear_failed", endpoint=endpoint, error=str(exc))
+        raise
+
+    try:
+        await idempotency_store.set_response(
+            user_scope=user_scope,
+            endpoint=endpoint,
+            idempotency_key=idempotency_key,
+            request_body=request_body,
+            status_code=200,
+            response_body=response.model_dump() if hasattr(response, "model_dump") else response,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("idempotency_cache_failed", endpoint=endpoint, error=str(exc))
+
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Standalone routes
 # ---------------------------------------------------------------------------
 
 
 @canonical_router.post("/blogs/generate", response_model=GenerateBlogResponse)
-async def generate_blog(request: GenerateBlogRequest, http_request: Request):
+async def generate_blog(
+    request: GenerateBlogRequest,
+    http_request: Request,
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
+):
     """Accept a new blog generation request (standalone mode).
 
     Resolves standalone identity, reserves budget, creates a canonical session,
@@ -752,11 +1083,18 @@ async def generate_blog(request: GenerateBlogRequest, http_request: Request):
     """
     ensure_csrf_header(http_request)
     _, identity = await _resolve_authenticated_identity(http_request)
-    response, _ = await _create_canonical_generation(
-        identity=identity,
-        topic=request.topic,
-        audience=request.audience,
-        tone=request.tone,
+    response = await _run_idempotent_action(
+        user_scope=f"standalone:{identity.tenant_id}:{identity.end_user_id}",
+        endpoint="/api/v1/blogs/generate",
+        idempotency_key=idempotency_key,
+        request_body=request.model_dump(exclude={"user_id"}, exclude_none=True),
+        action=lambda: _create_generation_response(
+            identity=identity,
+            topic=request.topic,
+            audience=request.audience,
+            tone=request.tone,
+        ),
+        cacheable_error_statuses={402, 409, 503},
     )
     blog_generations_total.labels(status="initiated").inc()
     return response
@@ -834,18 +1172,30 @@ async def submit_outline_review(
     session_id: str,
     request: OutlineReviewRequest,
     http_request: Request,
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
 ):
     """Save outline edits or approve the outline and resume drafting."""
     try:
         ensure_csrf_header(http_request)
         current_user = require_authenticated_user(http_request)
+        tenant_id, end_user_id = await _resolve_standalone_budget(current_user.user_id)
         normalized = request.model_copy(
             update={"reviewer_user_id": current_user.email or current_user.user_id}
         )
-        return await _submit_outline_review(
-            session_id=int(session_id),
-            request=normalized,
-            external_user_id=current_user.user_id,
+        return await _run_idempotent_action(
+            user_scope=f"standalone:{tenant_id}:{end_user_id}",
+            endpoint="/api/v1/blogs/{session_id}/outline/review",
+            idempotency_key=idempotency_key,
+            request_body={
+                "session_id": int(session_id),
+                **normalized.model_dump(exclude_none=True),
+            },
+            action=lambda: _submit_outline_review(
+                session_id=int(session_id),
+                request=normalized,
+                external_user_id=current_user.user_id,
+            ),
+            cacheable_error_statuses={404, 409, 503},
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -861,6 +1211,7 @@ async def submit_human_review(
     version_id: int,
     request: HumanReviewRequest,
     http_request: Request,
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
 ):
     """Phase 5: HITL review endpoint.
 
@@ -883,28 +1234,27 @@ async def submit_human_review(
     ensure_csrf_header(http_request)
     current_user = require_authenticated_user(http_request)
 
-    async with db_repository.async_session() as session:
-        async with session.begin():
-            session_repo = BlogSessionRepository(session)
-            existing_session = await session_repo.get_by_id(blog_session_id)
-            if existing_session is None:
-                raise HTTPException(status_code=404, detail="Blog session not found")
-            await _assert_owned_session(existing_session, current_user.user_id, session)
-            revision_service = RevisionService(
-                session_repo=session_repo,
-                version_repo=BlogVersionRepository(session),
-                review_repo=HumanReviewRepository(session),
-                budget_repo=BudgetRepository(session),
-                auth_user_repo=AuthUserRepository(session),
-                notification_repo=NotificationRepository(session),
-            )
-            return await revision_service.process_review(
-                blog_session_id=blog_session_id,
-                blog_version_id=version_id,
-                request=request.model_copy(
-                    update={"reviewer_user_id": current_user.email or current_user.user_id}
-                ),
-            )
+    normalized = request.model_copy(
+        update={"reviewer_user_id": current_user.email or current_user.user_id}
+    )
+    tenant_id, end_user_id = await _resolve_standalone_budget(current_user.user_id)
+    return await _run_idempotent_action(
+        user_scope=f"standalone:{tenant_id}:{end_user_id}",
+        endpoint="/api/v1/blogs/{session_id}/review",
+        idempotency_key=idempotency_key,
+        request_body={
+            "session_id": blog_session_id,
+            "version_id": version_id,
+            **normalized.model_dump(exclude_none=True),
+        },
+        action=lambda: _submit_human_review(
+            blog_session_id=blog_session_id,
+            version_id=version_id,
+            request=normalized,
+            external_user_id=current_user.user_id,
+        ),
+        cacheable_error_statuses={402, 404, 409, 503},
+    )
 
 
 @canonical_router.get("/budgets/me", response_model=BudgetSnapshot)
@@ -932,6 +1282,7 @@ async def service_generate_blog(
     request: ServiceGenerateBlogRequest,
     http_request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
 ):
     """Accept blog generation request from Blogify backend (service mode).
 
@@ -954,38 +1305,20 @@ async def service_generate_blog(
     except AdapterAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
 
-    async with db_repository.async_session() as session:
-        service_budget_service = ServiceClientBudgetService(
-            ServiceClientBudgetRepository(session)
-        )
-        service_budget_decision = await service_budget_service.preflight(
-            identity.service_client_id
-        )
-    if not service_budget_decision.allowed:
-        service_client_budget_preflight_total.labels(result="blocked").inc()
-        service_client_budget_exhausted_total.inc()
-        reset_at = (
-            service_budget_decision.reset_at.isoformat()
-            if service_budget_decision.reset_at is not None
-            else None
-        )
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail={
-                "reason": service_budget_decision.reason
-                or "Service client's daily AI budget is exhausted",
-                "reset_at": reset_at,
-            },
-        )
-    service_client_budget_preflight_total.labels(result="allowed").inc()
-
-    response, _ = await _create_canonical_generation(
-        identity=identity,
-        topic=request.topic,
-        audience=request.audience,
-        tone=request.tone,
-        external_request_id=request.request_id,
-        external_blog_id=request.external_blog_id,
+    response = await _run_idempotent_action(
+        user_scope=f"service:{identity.service_client_id}:{identity.tenant_id}:{identity.end_user_id}",
+        endpoint="/internal/ai/blogs",
+        idempotency_key=idempotency_key or request.request_id,
+        request_body=request.model_dump(exclude_none=True),
+        action=lambda: _create_generation_response(
+            identity=identity,
+            topic=request.topic,
+            audience=request.audience,
+            tone=request.tone,
+            external_request_id=request.request_id,
+            external_blog_id=request.external_blog_id,
+        ),
+        cacheable_error_statuses={402, 409, 503},
     )
     blog_generations_total.labels(status="initiated").inc()
     return response
@@ -1066,10 +1399,23 @@ async def service_submit_outline_review(
     request: OutlineReviewRequest,
     http_request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
 ):
-    await require_internal_service_client(http_request, x_internal_api_key)
+    service_client = await require_internal_service_client(http_request, x_internal_api_key)
     try:
-        return await _submit_outline_review(session_id=int(session_id), request=request)
+        blog_session_id = int(session_id)
+        tenant_id, end_user_id = await _get_session_identity(blog_session_id)
+        return await _run_idempotent_action(
+            user_scope=f"service:{service_client.id}:{tenant_id}:{end_user_id}",
+            endpoint="/internal/ai/blogs/{session_id}/outline/review",
+            idempotency_key=idempotency_key,
+            request_body={
+                "session_id": blog_session_id,
+                **request.model_dump(exclude_none=True),
+            },
+            action=lambda: _submit_outline_review(session_id=blog_session_id, request=request),
+            cacheable_error_statuses={404, 409, 503},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1081,28 +1427,32 @@ async def service_submit_review(
     request: HumanReviewRequest,
     http_request: Request,
     x_internal_api_key: Annotated[Optional[str], Header()] = None,
+    idempotency_key: Annotated[Optional[str], Header(alias="Idempotency-Key")] = None,
 ):
     """Submit review (service mode). Mirrors standalone /review endpoint."""
-    await require_internal_service_client(http_request, x_internal_api_key)
+    service_client = await require_internal_service_client(http_request, x_internal_api_key)
 
     try:
         blog_session_id = int(session_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="session_id must be an integer")
-
-    async with db_repository.async_session() as session:
-        async with session.begin():
-            revision_service = RevisionService(
-                session_repo=BlogSessionRepository(session),
-                version_repo=BlogVersionRepository(session),
-                review_repo=HumanReviewRepository(session),
-                budget_repo=BudgetRepository(session),
-            )
-            return await revision_service.process_review(
-                blog_session_id=blog_session_id,
-                blog_version_id=version_id,
-                request=request,
-            )
+    tenant_id, end_user_id = await _get_session_identity(blog_session_id)
+    return await _run_idempotent_action(
+        user_scope=f"service:{service_client.id}:{tenant_id}:{end_user_id}",
+        endpoint="/internal/ai/blogs/{session_id}/review",
+        idempotency_key=idempotency_key,
+        request_body={
+            "session_id": blog_session_id,
+            "version_id": version_id,
+            **request.model_dump(exclude_none=True),
+        },
+        action=lambda: _submit_human_review(
+            blog_session_id=blog_session_id,
+            version_id=version_id,
+            request=request,
+        ),
+        cacheable_error_statuses={402, 404, 409, 503},
+    )
 
 
 @internal_router.get("/budgets/{end_user_id}", response_model=BudgetSnapshot)
