@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -156,3 +156,212 @@ class BlogSessionRepository:
             blog_session.updated_at = datetime.now(timezone.utc)
             return blog_session.iteration_count
         return 0
+
+    # ------------------------------------------------------------------
+    # Lease-based ownership (DB-authoritative reaper support)
+    # ------------------------------------------------------------------
+
+    async def claim_session(
+        self,
+        session_id: int,
+        worker_id: str,
+    ) -> int | None:
+        """Atomically claim a session for processing.
+
+        Uses SELECT FOR UPDATE to prevent race conditions.
+
+        Returns:
+            The new lease_version on success, or None if the session
+            cannot be claimed (already owned / wrong status).
+        """
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(BlogSession.id == session_id)
+            .with_for_update()
+        )
+        blog_session = result.scalar_one_or_none()
+
+        if blog_session is None:
+            return None
+
+        # Only claim sessions that are queued (fresh) or processing-but-unowned
+        # (re-queued by reaper after a stale worker was evicted).
+        if blog_session.status not in (
+            BlogSessionStatus.QUEUED,
+            BlogSessionStatus.PROCESSING,
+        ):
+            return None
+
+        # If already owned by another live worker, reject.
+        if (
+            blog_session.owned_by is not None
+            and blog_session.owned_by != worker_id
+            and blog_session.status == BlogSessionStatus.PROCESSING
+        ):
+            return None
+
+        now = datetime.now(timezone.utc)
+        blog_session.status = BlogSessionStatus.PROCESSING
+        blog_session.owned_by = worker_id
+        blog_session.claimed_at = now
+        blog_session.last_heartbeat_at = now
+        blog_session.lease_version += 1
+        blog_session.updated_at = now
+
+        return blog_session.lease_version
+
+    async def heartbeat(
+        self,
+        session_id: int,
+        lease_version: int,
+        worker_id: str,
+    ) -> bool:
+        """Update heartbeat timestamp for a leased session.
+
+        Returns False if the lease is stale (reaper took it).
+        """
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(
+                BlogSession.id == session_id,
+                BlogSession.lease_version == lease_version,
+                BlogSession.owned_by == worker_id,
+                BlogSession.status == BlogSessionStatus.PROCESSING,
+            )
+        )
+        blog_session = result.scalar_one_or_none()
+
+        if blog_session is None:
+            return False
+
+        blog_session.last_heartbeat_at = datetime.now(timezone.utc)
+        return True
+
+    async def complete_with_lease(
+        self,
+        session_id: int,
+        lease_version: int,
+        worker_id: str,
+    ) -> bool:
+        """Mark session completed — only if the lease is still valid.
+
+        Returns False if a stale worker tries to complete an already-reaped job.
+        """
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(
+                BlogSession.id == session_id,
+                BlogSession.lease_version == lease_version,
+                BlogSession.owned_by == worker_id,
+                BlogSession.status == BlogSessionStatus.PROCESSING,
+            )
+            .with_for_update()
+        )
+        blog_session = result.scalar_one_or_none()
+
+        if blog_session is None:
+            return False
+
+        now = datetime.now(timezone.utc)
+        blog_session.status = BlogSessionStatus.COMPLETED
+        blog_session.completed_at = now
+        blog_session.owned_by = None
+        blog_session.last_heartbeat_at = None
+        blog_session.updated_at = now
+
+        return True
+
+    async def fail_with_lease(
+        self,
+        session_id: int,
+        lease_version: int,
+        worker_id: str,
+        requeue: bool = False,
+    ) -> bool:
+        """Mark session failed — only if the lease is still valid.
+
+        If ``requeue`` is True, reset to QUEUED for retry instead of FAILED.
+        Returns False if a stale worker tries to mutate an already-reaped job.
+        """
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(
+                BlogSession.id == session_id,
+                BlogSession.lease_version == lease_version,
+                BlogSession.owned_by == worker_id,
+                BlogSession.status == BlogSessionStatus.PROCESSING,
+            )
+            .with_for_update()
+        )
+        blog_session = result.scalar_one_or_none()
+
+        if blog_session is None:
+            return False
+
+        now = datetime.now(timezone.utc)
+        if requeue:
+            blog_session.status = BlogSessionStatus.QUEUED
+            blog_session.lease_version += 1
+            blog_session.owned_by = None
+            blog_session.claimed_at = None
+            blog_session.last_heartbeat_at = None
+        else:
+            blog_session.status = BlogSessionStatus.FAILED
+            blog_session.owned_by = None
+            blog_session.last_heartbeat_at = None
+        blog_session.updated_at = now
+
+        return True
+
+    async def find_stale_processing(
+        self,
+        threshold_seconds: int = 120,
+    ) -> list[BlogSession]:
+        """Find processing sessions whose heartbeat has gone stale.
+
+        Returns sessions where ``last_heartbeat_at < now - threshold``.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            seconds=threshold_seconds
+        )
+        result = await self._session.execute(
+            select(BlogSession).where(
+                BlogSession.status == BlogSessionStatus.PROCESSING,
+                BlogSession.last_heartbeat_at.isnot(None),
+                BlogSession.last_heartbeat_at < cutoff,
+            )
+        )
+        return list(result.scalars().all())
+
+    async def reap_session(self, session_id: int) -> int | None:
+        """Reap a stale session: reset to QUEUED, bump lease, clear ownership.
+
+        Uses SELECT FOR UPDATE for atomicity.
+
+        Returns:
+            The new lease_version, or None if the session is no longer reapable.
+        """
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(BlogSession.id == session_id)
+            .with_for_update()
+        )
+        blog_session = result.scalar_one_or_none()
+
+        if blog_session is None:
+            return None
+
+        # Only reap sessions that are still processing.
+        if blog_session.status != BlogSessionStatus.PROCESSING:
+            return None
+
+        now = datetime.now(timezone.utc)
+        blog_session.status = BlogSessionStatus.QUEUED
+        blog_session.lease_version += 1
+        blog_session.owned_by = None
+        blog_session.claimed_at = None
+        blog_session.last_heartbeat_at = None
+        blog_session.updated_at = now
+
+        return blog_session.lease_version
+

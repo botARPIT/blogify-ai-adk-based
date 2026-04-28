@@ -465,6 +465,14 @@ class BlogSession(Base):
     budget_spent_usd: Mapped[float] = mapped_column(Float, default=0.0)
     budget_spent_tokens: Mapped[int] = mapped_column(Integer, default=0)
 
+    # Lease-based ownership (DB-authoritative reaper support)
+    lease_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    owned_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now

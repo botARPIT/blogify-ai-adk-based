@@ -29,17 +29,21 @@ load_dotenv(f".env.{env}")
 
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
+from src.core.job_reaper import job_reaper
 from src.core.startup import StartupCheckError, runtime_manager
 from src.core.task_queue import task_queue, TaskStatus
 from src.models.orm_models import BlogSessionStatus
 from src.models.orm_models import EndUser
-from src.models.repository import db_repository
+from src.models.repository import db_repository, get_session_factory
 from src.models.repositories.auth_user_repository import AuthUserRepository
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.notification_repository import NotificationRepository
 from src.services.budget_service import BudgetService
 from src.services.notification_service import NotificationService
+
+# Lease heartbeat configuration
+HEARTBEAT_INTERVAL = 15  # seconds between heartbeat updates
 
 setup_logging(
     config.log_level,
@@ -90,8 +94,8 @@ async def run_worker(worker_id: str | None = None):
     
     jobs_processed = 0
     try:
-        # Start job reclaim loop
-        await task_queue.start_reclaim_loop(interval=60)
+        # Start DB-authoritative job reaper (replaces Redis-only reclaim)
+        await job_reaper.start()
 
         from src.workers.stage_executor import StageExecutor
 
@@ -144,6 +148,7 @@ async def run_worker(worker_id: str | None = None):
         while job_semaphore._value < MAX_CONCURRENT_JOBS:
             await asyncio.sleep(0.5)
 
+        await job_reaper.stop()
         await runtime_manager.shutdown_worker(worker_id)
 
         logger.info(
@@ -172,12 +177,61 @@ async def process_with_semaphore(job: dict, executor: StageExecutor, worker_id: 
             active_jobs -= 1
 
 
+async def _run_heartbeat(
+    canonical_session_id: int,
+    lease_version: int,
+    worker_id: str,
+) -> asyncio.Event:
+    """Run a background heartbeat loop for a leased session.
+
+    Returns a stop event — set it to terminate the loop.
+    Also returns a 'stale' flag via the event's internal state.
+    """
+    stop_event = asyncio.Event()
+    stop_event._lease_valid = True  # type: ignore[attr-defined]
+
+    async def _beat():
+        while not stop_event.is_set():
+            try:
+                async with get_session_factory()() as db:
+                    async with db.begin():
+                        repo = BlogSessionRepository(db)
+                        alive = await repo.heartbeat(
+                            canonical_session_id, lease_version, worker_id
+                        )
+                        if not alive:
+                            logger.warning(
+                                "heartbeat_lease_lost",
+                                session_id=canonical_session_id,
+                                lease_version=lease_version,
+                                worker_id=worker_id,
+                            )
+                            stop_event._lease_valid = False  # type: ignore[attr-defined]
+                            stop_event.set()
+                            return
+            except Exception as e:
+                logger.error(
+                    "heartbeat_error",
+                    session_id=canonical_session_id,
+                    error=str(e),
+                )
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+    asyncio.create_task(_beat())
+    return stop_event
+
+
 async def process_full_blog(job: dict, executor: StageExecutor, worker_id: str):
     """
     Process a complete blog generation (all stages).
     
     Runs all pipeline stages in sequence:
     intent → outline → research → writing → completed
+
+    Uses DB-authoritative lease ownership:
+    - Claims session with SELECT FOR UPDATE before processing
+    - Runs per-job heartbeat to prove liveness
+    - Verifies lease on complete/fail to reject stale workers
     """
     job_id = job["id"]
     payload = job.get("payload", {})
@@ -198,13 +252,42 @@ async def process_full_blog(job: dict, executor: StageExecutor, worker_id: str):
         await task_queue.update_task(job_id, status=TaskStatus.FAILED, error="Missing blog_id")
         return
     
+    # ── Lease claim (DB-authoritative) ──────────────────────────────
+    lease_version: int | None = None
+    heartbeat_stop: asyncio.Event | None = None
+
+    if canonical_session_id is not None:
+        async with get_session_factory()() as db:
+            async with db.begin():
+                repo = BlogSessionRepository(db)
+                lease_version = await repo.claim_session(
+                    canonical_session_id, worker_id
+                )
+        if lease_version is None:
+            logger.warning(
+                "claim_rejected",
+                session_id=canonical_session_id,
+                worker_id=worker_id,
+            )
+            return
+        logger.info(
+            "session_claimed",
+            session_id=canonical_session_id,
+            worker_id=worker_id,
+            lease_version=lease_version,
+        )
+        # Start per-job heartbeat loop
+        heartbeat_stop = await _run_heartbeat(
+            canonical_session_id, lease_version, worker_id
+        )
+
     current_stage = "intent"
     
     try:
-        # Update job status to processing
+        # Update Redis job status
         await task_queue.update_task(job_id, status=TaskStatus.PROCESSING)
         
-        # Update blog status
+        # Update blog status (legacy path)
         if blog_id is not None:
             await db_repository.update_blog(session_id=session_id, status="processing")
         if canonical_session_id is not None:
@@ -226,7 +309,16 @@ async def process_full_blog(job: dict, executor: StageExecutor, worker_id: str):
             )
             print(f"  ➡️  Stage: {current_stage}")
             
-            # Extend visibility timeout before each stage
+            # Check if our lease is still valid before each stage
+            if heartbeat_stop is not None and not heartbeat_stop._lease_valid:  # type: ignore[attr-defined]
+                logger.warning(
+                    "lease_lost_before_stage",
+                    session_id=canonical_session_id,
+                    stage=current_stage,
+                )
+                return  # Silently exit — reaper has taken over
+
+            # Extend Redis visibility timeout before each stage
             await task_queue.extend_visibility(job_id, 300)
             
             # Execute the stage
@@ -279,7 +371,27 @@ async def process_full_blog(job: dict, executor: StageExecutor, worker_id: str):
             
             current_stage = next_stage
         
-        # All stages complete
+        # ── Lease-verified completion ────────────────────────────────
+        if heartbeat_stop is not None:
+            heartbeat_stop.set()  # Stop heartbeat loop
+
+        if canonical_session_id is not None and lease_version is not None:
+            async with get_session_factory()() as db:
+                async with db.begin():
+                    repo = BlogSessionRepository(db)
+                    accepted = await repo.complete_with_lease(
+                        canonical_session_id, lease_version, worker_id
+                    )
+            if not accepted:
+                logger.warning(
+                    "stale_worker_completion_rejected",
+                    session_id=canonical_session_id,
+                    lease_version=lease_version,
+                    worker_id=worker_id,
+                )
+                return
+
+        # Update Redis job status
         await task_queue.update_task(
             job_id,
             status=TaskStatus.COMPLETED,
@@ -293,6 +405,10 @@ async def process_full_blog(job: dict, executor: StageExecutor, worker_id: str):
             print(f"✅ Blog {session_id[:8]} completed!")
         
     except Exception as e:
+        # Stop heartbeat on failure path
+        if heartbeat_stop is not None:
+            heartbeat_stop.set()
+
         logger.error(
             "job_processing_failed",
             job_id=job_id,
@@ -302,15 +418,27 @@ async def process_full_blog(job: dict, executor: StageExecutor, worker_id: str):
         )
         print(f"❌ Job failed at stage {current_stage}: {str(e)[:100]}")
         
-        await handle_job_failure(job, str(e), current_stage)
+        await handle_job_failure(
+            job, str(e), current_stage,
+            lease_version=lease_version,
+            worker_id=worker_id,
+        )
 
 
-async def handle_job_failure(job: dict, error: str, stage: str = "unknown"):
+async def handle_job_failure(
+    job: dict,
+    error: str,
+    stage: str = "unknown",
+    *,
+    lease_version: int | None = None,
+    worker_id: str | None = None,
+):
     """
-    Handle job failure with retry logic.
+    Handle job failure with retry logic + lease verification.
     
     Uses exponential backoff for retries.
     Moves to dead letter queue after max attempts.
+    If a lease is active, verifies ownership before mutating DB state.
     """
     job_id = job["id"]
     payload = job.get("payload", {})
@@ -319,7 +447,7 @@ async def handle_job_failure(job: dict, error: str, stage: str = "unknown"):
     attempts = job.get("retries", 0) + 1
     max_attempts = job.get("max_retries", 3)
     
-    # Update blog with error
+    # Update blog with error (legacy path)
     if payload.get("blog_id") is not None:
         await db_repository.update_blog(
             session_id=session_id,
@@ -327,15 +455,29 @@ async def handle_job_failure(job: dict, error: str, stage: str = "unknown"):
         )
 
     if attempts < max_attempts:
-        # Retry with exponential backoff
-        backoff_seconds = min(300, 2 ** attempts * 10)
-        
+        # Retry — use lease-verified requeue if we have a lease
+        if canonical_session_id is not None and lease_version is not None and worker_id is not None:
+            async with get_session_factory()() as db:
+                async with db.begin():
+                    repo = BlogSessionRepository(db)
+                    accepted = await repo.fail_with_lease(
+                        canonical_session_id, lease_version, worker_id,
+                        requeue=True,
+                    )
+            if not accepted:
+                logger.warning(
+                    "stale_worker_retry_rejected",
+                    session_id=canonical_session_id,
+                    lease_version=lease_version,
+                    worker_id=worker_id,
+                )
+                return
+
         logger.info(
             "job_retry_scheduled",
             job_id=job_id,
             attempt=attempts,
             max_attempts=max_attempts,
-            backoff_seconds=backoff_seconds,
         )
         print(f"🔄 Retry scheduled ({attempts}/{max_attempts})")
         
