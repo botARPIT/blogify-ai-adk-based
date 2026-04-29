@@ -1,0 +1,67 @@
+# Local development docker-compose for Blogify AI
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=local
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - DATABASE_URL=postgresql+asyncpg://blogify:changeme@postgres:5432/blogify
+      - REDIS_URL=redis://redis:6379/0
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "src.workers.blog_worker"]
+    environment:
+      - ENVIRONMENT=local
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - DATABASE_URL=postgresql+asyncpg://blogify:changeme@postgres:5432/blogify
+      - REDIS_URL=redis://redis:6379/0
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - api
+    restart: unless-stopped

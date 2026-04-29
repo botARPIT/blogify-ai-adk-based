@@ -1,62 +1,100 @@
 #!/bin/bash
-# Deploy Blogify AI to Google Cloud Run / Vertex AI
-# Usage: ./scripts/deploy.sh [PROJECT_ID] [REGION]
+# Deploy Blogify AI to EC2
+# Usage: ./deploy.sh [mode] [environment]
+#   mode: local or vpc (default: local)
+#   environment: staging or production (default: staging)
 
 set -e
 
-PROJECT_ID="${1:-your-project-id}"
-REGION="${2:-us-central1}"
+MODE="${1:-local}"
+ENVIRONMENT="${2:-staging}"
+
+PROJECT_ID="${PROJECT_ID:-your-project-id}"
+REGION="${REGION:-us-central1}"
 SERVICE_NAME="blogify-api"
-IMAGE_NAME="gcr.io/${PROJECT_ID}/${SERVICE_NAME}"
+IMAGE_NAME="ghcr.io/${PROJECT_ID}/${SERVICE_NAME}"
 
-echo "🚀 Deploying Blogify AI to Google Cloud"
-echo "Project: ${PROJECT_ID}"
-echo "Region: ${REGION}"
-echo "Service: ${SERVICE_NAME}"
-echo ""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPOSE_FILE=""
 
-# Check if gcloud is installed
-if ! command -v gcloud &> /dev/null; then
-    echo "❌ gcloud CLI not found. Please install Google Cloud SDK."
+if [ "$MODE" = "local" ]; then
+    COMPOSE_FILE="docker-compose.local.yml"
+elif [ "$MODE" = "vpc" ]; then
+    COMPOSE_FILE="docker-compose.vpc.yml"
+else
+    echo "ERROR: Invalid mode. Use 'local' or 'vpc'"
     exit 1
 fi
 
-# Authenticate (if needed)
-echo "📋 Setting project..."
-gcloud config set project ${PROJECT_ID}
-
-# Build the Docker image
-echo "🔨 Building Docker image..."
-docker build -t ${IMAGE_NAME}:latest .
-
-# Push to Google Container Registry
-echo "📤 Pushing to GCR..."
-docker push ${IMAGE_NAME}:latest
-
-# Deploy to Cloud Run
-echo "☁️ Deploying to Cloud Run..."
-gcloud run deploy ${SERVICE_NAME} \
-    --image ${IMAGE_NAME}:latest \
-    --platform managed \
-    --region ${REGION} \
-    --allow-unauthenticated \
-    --memory 1Gi \
-    --cpu 1 \
-    --min-instances 1 \
-    --max-instances 10 \
-    --timeout 300 \
-    --set-env-vars "ENVIRONMENT=production" \
-    --set-secrets "GOOGLE_API_KEY=google-api-key:latest,TAVILY_API_KEY=tavily-api-key:latest,DATABASE_URL=database-url:latest"
-
-echo ""
-echo "✅ Deployment complete!"
+echo "========================================="
+echo "  Blogify AI Deployment"
+echo "========================================="
+echo "Mode: ${MODE}"
+echo "Environment: ${ENVIRONMENT}"
+echo "Compose file: ${COMPOSE_FILE}"
 echo ""
 
-# Get the URL
-URL=$(gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format 'value(status.url)')
-echo "🌐 Service URL: ${URL}"
+if ! command -v docker &> /dev/null; then
+    echo "ERROR: Docker not found. Please install Docker."
+    exit 1
+fi
+
+if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+    echo "ERROR: docker-compose not found. Please install Docker Compose."
+    exit 1
+fi
+
+DOCKER_COMPOSE_CMD="docker compose"
+if ! docker compose version &> /dev/null; then
+    DOCKER_COMPOSE_CMD="docker-compose"
+fi
+
+echo "Loading environment from .env.${ENVIRONMENT}..."
+if [ -f "${SCRIPT_DIR}/../.env.${ENVIRONMENT}" ]; then
+    set -a
+    source "${SCRIPT_DIR}/../.env.${ENVIRONMENT}"
+    set +a
+else
+    echo "WARNING: .env.${ENVIRONMENT} not found, using .env if exists"
+    if [ -f "${SCRIPT_DIR}/../.env" ]; then
+        set -a
+        source "${SCRIPT_DIR}/../.env"
+        set +a
+    fi
+fi
+
+echo "Pulling latest images..."
+${DOCKER_COMPOSE_CMD} -f "${COMPOSE_FILE}" pull
+
+echo "Stopping existing containers..."
+${DOCKER_COMPOSE_CMD} -f "${COMPOSE_FILE}" down
+
+echo "Starting services..."
+${DOCKER_COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+
+echo ""
+echo "========================================="
+echo "  Deployment Complete!"
+echo "========================================="
 echo ""
 
-# Health check
-echo "🔍 Running health check..."
-curl -s "${URL}/api/health" | jq .
+echo "Checking service health..."
+sleep 5
+
+API_HEALTH=$(${DOCKER_COMPOSE_CMD} -f "${COMPOSE_FILE}" ps api 2>/dev/null | grep -c "Up" || echo "0")
+WORKER_HEALTH=$(${DOCKER_COMPOSE_CMD} -f "${COMPOSE_FILE}" ps worker 2>/dev/null | grep -c "Up" || echo "0")
+
+if [ "$API_HEALTH" -gt 0 ]; then
+    echo "  ✓ API service is running"
+else
+    echo "  ✗ API service is not running"
+fi
+
+if [ "$WORKER_HEALTH" -gt 0 ]; then
+    echo "  ✓ Worker service is running"
+else
+    echo "  ✗ Worker service is not running"
+fi
+
+echo ""
+echo "Run '${DOCKER_COMPOSE_CMD} -f ${COMPOSE_FILE} logs -f' to view logs"
