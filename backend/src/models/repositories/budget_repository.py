@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.orm_models import (
+    BlogSession,
     BudgetLedgerEntry,
     BudgetPolicy,
     BudgetPolicyScope,
@@ -88,17 +89,64 @@ class BudgetRepository:
     async def get_daily_spent(
         self, end_user_id: int, resource_type: LedgerResourceType, date_utc: datetime
     ) -> float:
-        """Return net reserved and committed spend for today."""
+        """Return total budget exposure for today.
+
+        PostgreSQL is the authority for budget state. Exposure is committed
+        usage plus outstanding reservations; Redis queue state is deliberately
+        ignored here.
+        """
+        committed = await self.get_daily_committed(end_user_id, resource_type, date_utc)
+        reserved = await self.get_daily_reserved_exposure(end_user_id, resource_type, date_utc)
+        return committed + reserved
+
+    async def get_daily_committed(
+        self, end_user_id: int, resource_type: LedgerResourceType, date_utc: datetime
+    ) -> float:
+        """Return committed usage for the current UTC day."""
         start_of_day = date_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        signed_quantity = case(
+        return await self._sum_entries(
+            end_user_id=end_user_id,
+            resource_type=resource_type,
+            entry_type=LedgerEntryType.COMMIT,
+            start_of_day=start_of_day,
+        )
+
+    async def get_daily_reserved_exposure(
+        self, end_user_id: int, resource_type: LedgerResourceType, date_utc: datetime
+    ) -> float:
+        """Return outstanding reserved exposure for the current UTC day."""
+        start_of_day = date_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        reserved = case(
+            (
+                BudgetLedgerEntry.entry_type == LedgerEntryType.RESERVE.value,
+                BudgetLedgerEntry.quantity,
+            ),
+            else_=0.0,
+        )
+        released = case(
             (
                 BudgetLedgerEntry.entry_type == LedgerEntryType.RELEASE.value,
-                -BudgetLedgerEntry.quantity,
+                BudgetLedgerEntry.quantity,
             ),
-            else_=BudgetLedgerEntry.quantity,
+            else_=0.0,
         )
-        result = await self._session.execute(
-            select(func.coalesce(func.sum(signed_quantity), 0.0)).where(
+        committed = case(
+            (
+                BudgetLedgerEntry.entry_type == LedgerEntryType.COMMIT.value,
+                BudgetLedgerEntry.quantity,
+            ),
+            else_=0.0,
+        )
+        per_session = (
+            select(
+                BudgetLedgerEntry.blog_session_id.label("blog_session_id"),
+                (
+                    func.coalesce(func.sum(reserved), 0.0)
+                    - func.coalesce(func.sum(released), 0.0)
+                    - func.coalesce(func.sum(committed), 0.0)
+                ).label("outstanding"),
+            )
+            .where(
                 BudgetLedgerEntry.end_user_id == end_user_id,
                 BudgetLedgerEntry.resource_type == resource_type.value,
                 BudgetLedgerEntry.entry_type.in_(
@@ -110,8 +158,34 @@ class BudgetRepository:
                 ),
                 BudgetLedgerEntry.created_at >= start_of_day,
             )
+            .group_by(BudgetLedgerEntry.blog_session_id)
+            .subquery()
+        )
+        result = await self._session.execute(
+            select(func.coalesce(func.sum(func.greatest(per_session.c.outstanding, 0.0)), 0.0))
         )
         return float(result.scalar_one() or 0.0)
+
+    async def get_session_reserved_exposure(
+        self, blog_session_id: int, resource_type: LedgerResourceType
+    ) -> float:
+        """Return outstanding reservation for a session/resource."""
+        reserved = await self._sum_session_entries(
+            blog_session_id=blog_session_id,
+            resource_type=resource_type,
+            entry_type=LedgerEntryType.RESERVE,
+        )
+        released = await self._sum_session_entries(
+            blog_session_id=blog_session_id,
+            resource_type=resource_type,
+            entry_type=LedgerEntryType.RELEASE,
+        )
+        committed = await self._sum_session_entries(
+            blog_session_id=blog_session_id,
+            resource_type=resource_type,
+            entry_type=LedgerEntryType.COMMIT,
+        )
+        return max(0.0, reserved - released - committed)
 
     async def get_session_spent(
         self, blog_session_id: int, resource_type: LedgerResourceType
@@ -121,6 +195,40 @@ class BudgetRepository:
                 BudgetLedgerEntry.blog_session_id == blog_session_id,
                 BudgetLedgerEntry.resource_type == resource_type.value,
                 BudgetLedgerEntry.entry_type == LedgerEntryType.COMMIT.value,
+            )
+        )
+        return float(result.scalar_one() or 0.0)
+
+    async def _sum_entries(
+        self,
+        *,
+        end_user_id: int,
+        resource_type: LedgerResourceType,
+        entry_type: LedgerEntryType,
+        start_of_day: datetime,
+    ) -> float:
+        result = await self._session.execute(
+            select(func.coalesce(func.sum(BudgetLedgerEntry.quantity), 0.0)).where(
+                BudgetLedgerEntry.end_user_id == end_user_id,
+                BudgetLedgerEntry.resource_type == resource_type.value,
+                BudgetLedgerEntry.entry_type == entry_type.value,
+                BudgetLedgerEntry.created_at >= start_of_day,
+            )
+        )
+        return float(result.scalar_one() or 0.0)
+
+    async def _sum_session_entries(
+        self,
+        *,
+        blog_session_id: int,
+        resource_type: LedgerResourceType,
+        entry_type: LedgerEntryType,
+    ) -> float:
+        result = await self._session.execute(
+            select(func.coalesce(func.sum(BudgetLedgerEntry.quantity), 0.0)).where(
+                BudgetLedgerEntry.blog_session_id == blog_session_id,
+                BudgetLedgerEntry.resource_type == resource_type.value,
+                BudgetLedgerEntry.entry_type == entry_type.value,
             )
         )
         return float(result.scalar_one() or 0.0)
@@ -165,6 +273,7 @@ class BudgetRepository:
         blog_session_id: int,
         estimated_usd: float,
         estimated_tokens: int,
+        reserve_blog_count: bool = False,
     ) -> None:
         """Reserve budget before starting generation."""
         await self.append_entry(
@@ -183,6 +292,15 @@ class BudgetRepository:
             quantity=float(estimated_tokens),
             blog_session_id=blog_session_id,
         )
+        if reserve_blog_count:
+            await self.append_entry(
+                tenant_id=tenant_id,
+                end_user_id=end_user_id,
+                entry_type=LedgerEntryType.RESERVE,
+                resource_type=LedgerResourceType.BLOG_COUNT,
+                quantity=1.0,
+                blog_session_id=blog_session_id,
+            )
 
     async def commit(
         self,
@@ -220,6 +338,7 @@ class BudgetRepository:
         blog_session_id: int,
         release_usd: float,
         release_tokens: int,
+        release_blog_count: bool = False,
     ) -> None:
         """Release unused reserved budget after failure or cancellation."""
         if release_usd > 0:
@@ -240,3 +359,38 @@ class BudgetRepository:
                 quantity=float(release_tokens),
                 blog_session_id=blog_session_id,
             )
+        if release_blog_count:
+            outstanding_blog_count = await self.get_session_reserved_exposure(
+                blog_session_id, LedgerResourceType.BLOG_COUNT
+            )
+            if outstanding_blog_count > 0:
+                await self.append_entry(
+                    tenant_id=tenant_id,
+                    end_user_id=end_user_id,
+                    entry_type=LedgerEntryType.RELEASE,
+                    resource_type=LedgerResourceType.BLOG_COUNT,
+                    quantity=outstanding_blog_count,
+                    blog_session_id=blog_session_id,
+                )
+
+    async def release_reservation(self, blog_session_id: int) -> None:
+        """Release all outstanding reservations for a permanently failed session."""
+        blog_session = await self._session.get(BlogSession, blog_session_id)
+        if blog_session is None:
+            return
+        release_usd = await self.get_session_reserved_exposure(
+            blog_session_id, LedgerResourceType.USD
+        )
+        release_tokens = int(
+            await self.get_session_reserved_exposure(
+                blog_session_id, LedgerResourceType.TOKENS
+            )
+        )
+        await self.release(
+            tenant_id=blog_session.tenant_id,
+            end_user_id=blog_session.end_user_id,
+            blog_session_id=blog_session_id,
+            release_usd=release_usd,
+            release_tokens=release_tokens,
+            release_blog_count=True,
+        )

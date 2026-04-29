@@ -51,15 +51,49 @@ class ServiceClientBudgetRepository:
 
     async def get_daily_spent_usd(self, service_client_id: int, date_utc: datetime) -> float:
         start_of_day = date_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        signed_quantity = case(
+        committed_result = await self._session.execute(
+            select(func.coalesce(func.sum(BudgetLedgerEntry.quantity), 0.0))
+            .select_from(BudgetLedgerEntry)
+            .join(Tenant, Tenant.id == BudgetLedgerEntry.tenant_id)
+            .where(
+                Tenant.service_client_id == service_client_id,
+                BudgetLedgerEntry.resource_type == LedgerResourceType.USD.value,
+                BudgetLedgerEntry.entry_type == LedgerEntryType.COMMIT.value,
+                BudgetLedgerEntry.created_at >= start_of_day,
+            )
+        )
+        committed = float(committed_result.scalar_one() or 0.0)
+
+        reserved = case(
+            (
+                BudgetLedgerEntry.entry_type == LedgerEntryType.RESERVE.value,
+                BudgetLedgerEntry.quantity,
+            ),
+            else_=0.0,
+        )
+        released = case(
             (
                 BudgetLedgerEntry.entry_type == LedgerEntryType.RELEASE.value,
-                -BudgetLedgerEntry.quantity,
+                BudgetLedgerEntry.quantity,
             ),
-            else_=BudgetLedgerEntry.quantity,
+            else_=0.0,
         )
-        result = await self._session.execute(
-            select(func.coalesce(func.sum(signed_quantity), 0.0))
+        committed_case = case(
+            (
+                BudgetLedgerEntry.entry_type == LedgerEntryType.COMMIT.value,
+                BudgetLedgerEntry.quantity,
+            ),
+            else_=0.0,
+        )
+        per_session = (
+            select(
+                BudgetLedgerEntry.blog_session_id.label("blog_session_id"),
+                (
+                    func.coalesce(func.sum(reserved), 0.0)
+                    - func.coalesce(func.sum(released), 0.0)
+                    - func.coalesce(func.sum(committed_case), 0.0)
+                ).label("outstanding"),
+            )
             .select_from(BudgetLedgerEntry)
             .join(Tenant, Tenant.id == BudgetLedgerEntry.tenant_id)
             .where(
@@ -74,5 +108,10 @@ class ServiceClientBudgetRepository:
                 ),
                 BudgetLedgerEntry.created_at >= start_of_day,
             )
+            .group_by(BudgetLedgerEntry.blog_session_id)
+            .subquery()
         )
-        return float(result.scalar_one() or 0.0)
+        reserved_result = await self._session.execute(
+            select(func.coalesce(func.sum(func.greatest(per_session.c.outstanding, 0.0)), 0.0))
+        )
+        return committed + float(reserved_result.scalar_one() or 0.0)
