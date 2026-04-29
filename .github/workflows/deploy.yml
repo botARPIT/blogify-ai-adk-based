@@ -1,0 +1,97 @@
+name: Deploy to EC2
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Deployment mode'
+        required: true
+        default: 'local'
+        type: choice
+        options:
+          - local
+          - vpc
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+    secrets:
+      SSH_PRIVATE_KEY:
+        required: true
+      EC2_HOST:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/blogify-backend:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/blogify-backend:${{ github.event.inputs.environment }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/blogify-frontend:${{ github.sha }}
+            ghcr.io/${{ github.repository }}/blogify-frontend:${{ github.event.inputs.environment }}
+
+      - name: Copy deployment files to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          source: ".github/workflows/deploy-ec2.sh,docker-compose.${{ github.event.inputs.mode }}.yml"
+          target: /home/ubuntu/blogify
+          strip_components: 1
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script: |
+            cd /home/ubuntu/blogify
+            
+            # Login to GHCR
+            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            
+            # Pull latest images
+            docker compose -f docker-compose.${{ github.event.inputs.mode }}.yml pull
+            
+            # Restart services
+            docker compose -f docker-compose.${{ github.event.inputs.mode }}.yml up -d
+            
+            # Cleanup unused images
+            docker image prune -f
