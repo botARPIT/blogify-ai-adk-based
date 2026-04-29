@@ -70,6 +70,32 @@ services:
           cpus: '1'
           memory: 1G
 
+  reaper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "src.workers.reaper"]
+    environment:
+      - ENVIRONMENT=production
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_SERVICE_NAME=blogify-reaper
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
   frontend:
     build:
       context: ../frontend

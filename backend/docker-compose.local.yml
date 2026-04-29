@@ -54,6 +54,24 @@ services:
     deploy:
       replicas: 2
 
+  reaper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "src.workers.reaper"]
+    environment:
+      - ENVIRONMENT=local
+      - DATABASE_URL=postgresql+asyncpg://blogify:changeme@postgres:5432/blogify
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src:ro
+    restart: unless-stopped
+
   frontend:
     build:
       context: ../frontend

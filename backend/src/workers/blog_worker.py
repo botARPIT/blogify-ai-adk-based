@@ -5,9 +5,9 @@ the full LLM pipeline. No LLM calls happen in the API layer.
 
 Features:
 - Visibility timeout for crash recovery
-- Automatic job reclaim
 - Per-stage execution with DB persistence
 - Graceful shutdown
+- Separate reaper process for stale job handling
 
 Usage:
     python -m src.workers.blog_worker
@@ -29,7 +29,6 @@ load_dotenv(f".env.{env}")
 
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
-from src.core.job_reaper import job_reaper
 from src.core.startup import StartupCheckError, runtime_manager
 from src.core.task_queue import task_queue, TaskStatus
 from src.models.orm_models import BlogSessionStatus
@@ -94,9 +93,6 @@ async def run_worker(worker_id: str | None = None):
     
     jobs_processed = 0
     try:
-        # Start DB-authoritative job reaper (replaces Redis-only reclaim)
-        await job_reaper.start()
-
         from src.workers.stage_executor import StageExecutor
 
         executor = StageExecutor()
@@ -148,7 +144,6 @@ async def run_worker(worker_id: str | None = None):
         while job_semaphore._value < MAX_CONCURRENT_JOBS:
             await asyncio.sleep(0.5)
 
-        await job_reaper.stop()
         await runtime_manager.shutdown_worker(worker_id)
 
         logger.info(
