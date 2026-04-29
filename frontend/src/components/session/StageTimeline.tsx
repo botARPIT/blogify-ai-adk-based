@@ -13,7 +13,7 @@ const STAGES = [
   { key: 'research', label: 'Research' },
   { key: 'writer', label: 'Writing' },
   { key: 'editor', label: 'Editor Review' },
-  { key: 'awaiting_human_review', label: 'Final Review' },
+  { key: 'awaiting_final_review', label: 'Final Review' },
   { key: 'completed', label: 'Completed' },
 ];
 

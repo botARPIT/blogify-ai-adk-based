@@ -60,7 +60,7 @@ const FinalReviewPage = () => {
         sessionId={sessionId || String(version.session_id)}
         title="Final Review"
         subtitle={version.title || session?.topic || 'Latest generated draft'}
-        status={session?.status || 'awaiting_human_review'}
+        status={session?.status || 'awaiting_final_review'}
       />
 
       <div className="bento-grid" style={{ alignItems: 'start' }}>

@@ -19,14 +19,13 @@ const SessionProgressPage = () => {
     return <ErrorState title="Session Unavailable" message={error || 'No canonical session was found.'} />;
   }
 
-  const isFailureState = ['failed', 'cancelled', 'budget_exhausted'].includes(session.status);
+  const isFailureState = ['failed', 'cancelled'].includes(session.status);
   const statusMessage: Record<string, string> = {
     queued: 'The request is accepted and waiting for a worker slot.',
     processing: 'Agents are actively moving through the current drafting stage.',
     revision_requested: 'A revision loop was requested and the drafting process is resuming.',
     failed: 'This session hit an execution error and needs operator attention.',
     cancelled: 'This session was cancelled before completion.',
-    budget_exhausted: 'Budget guardrails paused the run before it could continue.',
   };
 
   return (

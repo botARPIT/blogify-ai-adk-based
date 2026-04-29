@@ -4,8 +4,8 @@ import { getSession, type SessionStatusResponse } from '../lib/api/blogs';
 import { getRouteForStatus } from '../lib/session-routing';
 
 const ACTIVE_STATUSES = new Set(['queued', 'processing', 'revision_requested']);
-const PAUSED_STATUSES = new Set(['awaiting_outline_review', 'awaiting_human_review']);
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'budget_exhausted']);
+const PAUSED_STATUSES = new Set(['awaiting_outline_review', 'awaiting_final_review']);
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
 
 export function useSessionStatus(sessionId: string | null | undefined, autoRedirect = false) {
   const [session, setSession] = useState<SessionStatusResponse | null>(null);

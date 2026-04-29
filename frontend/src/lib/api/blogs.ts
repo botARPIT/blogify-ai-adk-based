@@ -19,12 +19,11 @@ export interface SessionStatusResponse {
     | 'queued'
     | 'processing'
     | 'awaiting_outline_review'
-    | 'awaiting_human_review'
+    | 'awaiting_final_review'
     | 'revision_requested'
     | 'completed'
     | 'failed'
-    | 'cancelled'
-    | 'budget_exhausted';
+    | 'cancelled';
   current_stage: string | null;
   iteration_count: number;
   topic: string;

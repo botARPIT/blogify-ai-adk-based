@@ -29,6 +29,7 @@ load_dotenv(f".env.{env}")
 
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
+from src.core.compensation import compensate, classify_failure
 from src.core.startup import StartupCheckError, runtime_manager
 from src.core.task_queue import task_queue, TaskStatus
 from src.models.orm_models import BlogSessionStatus
@@ -449,6 +450,9 @@ async def handle_job_failure(
             status="failed",
         )
 
+    # Classify the failure reason for saga compensation and traceability.
+    failure_reason = _classify_worker_error(error)
+
     if attempts < max_attempts:
         # Retry — use lease-verified requeue if we have a lease
         if canonical_session_id is not None and lease_version is not None and worker_id is not None:
@@ -458,6 +462,7 @@ async def handle_job_failure(
                     accepted = await repo.fail_with_lease(
                         canonical_session_id, lease_version, worker_id,
                         requeue=True,
+                        failure_reason=failure_reason,
                     )
             if not accepted:
                 logger.warning(
@@ -489,9 +494,10 @@ async def handle_job_failure(
         print(f"💀 Max retries exceeded. Job failed permanently.")
 
         if canonical_session_id is not None:
-            await _release_and_fail_canonical_session(
+            await _compensate_and_fail_canonical_session(
                 canonical_session_id=canonical_session_id,
                 current_stage=stage,
+                failure_reason="max_retries_exceeded",
                 error=error,
             )
         
@@ -517,11 +523,34 @@ async def _update_canonical_session_status(
             )
 
 
-async def _release_and_fail_canonical_session(
+def _classify_worker_error(error_message: str) -> str:
+    """Map an error message to a saga failure_reason string.
+
+    Uses simple heuristics; the default is ``agent_error`` (system category)
+    which means the user is not charged.
+    """
+    lower = error_message.lower()
+    if "timeout" in lower or "timed out" in lower:
+        return "agent_timeout"
+    if "budget" in lower:
+        return "budget_exhausted"
+    if any(kw in lower for kw in ("connection", "dns", "502", "503", "504", "upstream")):
+        return "dependency_error"
+    return "agent_error"
+
+
+async def _compensate_and_fail_canonical_session(
     canonical_session_id: int,
     current_stage: str,
+    failure_reason: str,
     error: str,
 ) -> None:
+    """Fail a canonical session and run saga compensation.
+
+    Uses the ``compensate()`` function from ``src.core.compensation`` to
+    decide whether budget should be committed (operational failure) or
+    fully released (system failure).
+    """
     async with db_repository.async_session() as session:
         async with session.begin():
             session_repo = BlogSessionRepository(session)
@@ -533,30 +562,45 @@ async def _release_and_fail_canonical_session(
             if blog_session is None:
                 return
 
-            await session_repo.update_status(
+            # ── Saga-guarded failure ──
+            await session_repo.fail_session(
                 canonical_session_id,
-                status=BlogSessionStatus.FAILED,
-                current_stage=current_stage,
+                failure_reason=failure_reason,
+                error_message=error[:500],
             )
-            await budget_service.release(
+            # Also persist the current_stage for diagnostics.
+            blog_session.current_stage = current_stage
+
+            # ── Compensation (budget release) ──
+            await compensate(
+                budget_service=budget_service,
                 tenant_id=blog_session.tenant_id,
                 end_user_id=blog_session.end_user_id,
-                blog_session_id=canonical_session_id,
-                reserved_usd=blog_session.budget_reserved_usd,
-                reserved_tokens=blog_session.budget_reserved_tokens,
-                already_spent_usd=blog_session.budget_spent_usd,
-                already_spent_tokens=blog_session.budget_spent_tokens,
+                session_id=canonical_session_id,
+                failure_reason=failure_reason,
+                service_client_id=blog_session.service_client_id,
             )
+
+            # ── User notification ──
             notification_service = NotificationService(
                 auth_user_repo=AuthUserRepository(session),
                 notification_repo=NotificationRepository(session),
             )
             end_user = await session.get(EndUser, blog_session.end_user_id)
+            category = classify_failure(failure_reason)
             await notification_service.create_for_end_user(
                 end_user=end_user,
                 type="blog_failed",
                 title="Blog generation failed",
-                message=f"Session {canonical_session_id} failed during {current_stage}.",
+                message=(
+                    f"Session {canonical_session_id} failed during {current_stage} "
+                    f"({failure_reason}). "
+                    + (
+                        "Budget for consumed work has been charged."
+                        if category.value == "operational"
+                        else "No charges have been applied."
+                    )
+                ),
                 session_id=canonical_session_id,
                 action_url=f"/sessions/{canonical_session_id}/progress",
             )
@@ -564,6 +608,8 @@ async def _release_and_fail_canonical_session(
                 "canonical_session_failed",
                 canonical_session_id=canonical_session_id,
                 current_stage=current_stage,
+                failure_reason=failure_reason,
+                compensation_category=category.value,
                 error=error,
             )
 

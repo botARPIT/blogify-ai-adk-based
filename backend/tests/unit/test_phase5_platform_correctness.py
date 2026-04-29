@@ -122,7 +122,7 @@ class TestCanonicalSessionSemantics:
             canonical = importlib.import_module("src.api.routes.canonical")
             session = SimpleNamespace(
                 id=1,
-                status="awaiting_human_review",
+                status="awaiting_final_review",
                 current_stage="awaiting_review",
                 iteration_count=1,
                 topic="Topic",

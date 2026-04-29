@@ -84,7 +84,7 @@ const DashboardPage: React.FC = () => {
     switch (status) {
       case 'awaiting_outline_review':
         return 'Review Outline';
-      case 'awaiting_human_review':
+      case 'awaiting_final_review':
         return 'Review Draft';
       case 'completed':
         return 'Open Output';

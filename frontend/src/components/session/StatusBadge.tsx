@@ -8,17 +8,16 @@ const STATUS_LABELS: Record<string, string> = {
   queued: 'Queued',
   processing: 'Processing',
   awaiting_outline_review: 'Outline Review',
-  awaiting_human_review: 'Final Review',
+  awaiting_final_review: 'Final Review',
   revision_requested: 'Revision Requested',
   completed: 'Completed',
   failed: 'Failed',
   cancelled: 'Cancelled',
-  budget_exhausted: 'Budget Exhausted',
 };
 
 const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
   const isAttention = status.includes('review') || status === 'revision_requested';
-  const isFailure = status === 'failed' || status === 'budget_exhausted' || status === 'cancelled';
+  const isFailure = status === 'failed' || status === 'cancelled';
   const color = isFailure
     ? 'var(--error-color)'
     : isAttention
