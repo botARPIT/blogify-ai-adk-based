@@ -1,0 +1,15 @@
+# Agent IDEs and tools
+.opencode/
+.claude/
+.agents/
+.code-review-graph/
+.cursor/
+
+# IDE specific
+.cursorrules
+.codesnap/
+.windsurfrules
+
+# Project config (personal)
+.mcp.json
+.codex
