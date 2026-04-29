@@ -16,8 +16,22 @@ export interface LoginPayload {
   password: string;
 }
 
+export interface SignupPayload {
+  email: string;
+  password: string;
+  display_name?: string;
+}
+
 export async function login(payload: LoginPayload): Promise<AuthMeResponse> {
   return request<AuthMeResponse>('/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function signup(payload: SignupPayload): Promise<AuthMeResponse> {
+  return request<AuthMeResponse>('/api/v1/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

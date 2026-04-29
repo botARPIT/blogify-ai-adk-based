@@ -7,8 +7,8 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from src.api.auth import ensure_csrf_header, get_current_user
 from src.models.repository import db_repository
 from src.models.repositories.auth_user_repository import AuthUserRepository
-from src.models.schemas import AuthMeResponse, AuthUserView, LoginRequest
-from src.services.local_auth_service import LocalAuthService
+from src.models.schemas import AuthMeResponse, AuthRegisterResponse, AuthUserView, LoginRequest, RegisterRequest
+from src.services.local_auth_service import LocalAuthService, LocalAuthUser
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Auth"])
 
@@ -57,3 +57,36 @@ async def me(request: Request):
         if orm_user is None:
             return AuthMeResponse(authenticated=False, user=None)
         return AuthMeResponse(authenticated=True, user=_to_view(orm_user))
+
+
+@router.post("/register", response_model=AuthRegisterResponse)
+async def register(payload: RegisterRequest, response: Response):
+    """Register a new user account."""
+    auth_service = LocalAuthService()
+    
+    async with db_repository.async_session() as session:
+        async with session.begin():
+            auth_repo = AuthUserRepository(session)
+            
+            existing_user = await auth_repo.get_by_email(payload.email)
+            if existing_user is not None:
+                raise HTTPException(status_code=409, detail="Email already registered")
+            
+            password_hash = auth_service.hash_password(payload.password)
+            new_user = await auth_repo.create(
+                email=payload.email,
+                password_hash=password_hash,
+                display_name=payload.display_name or payload.email.split('@')[0],
+            )
+            
+            token = auth_service.issue_token(LocalAuthUser(
+                user_id=new_user.id,
+                email=new_user.email,
+                display_name=new_user.display_name,
+            ))
+            auth_service.set_auth_cookie(response, token)
+            
+            return AuthRegisterResponse(
+                authenticated=True,
+                user=_to_view(new_user),
+            )

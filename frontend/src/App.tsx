@@ -9,6 +9,7 @@ import OutputPage from './pages/OutputPage';
 import SessionDetailPage from './pages/SessionDetailPage';
 import BudgetPage from './pages/BudgetPage';
 import LoginPage from './pages/LoginPage';
+import SignupPage from './pages/SignupPage';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import NotificationBell from './components/notifications/NotificationBell';
@@ -74,6 +75,7 @@ function AppContent() {
       <main className="main-content">
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
           <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
           <Route path="/sessions/:sessionId/progress" element={<ProtectedRoute><SessionProgressPage /></ProtectedRoute>} />
           <Route path="/sessions/:sessionId/outline-review" element={<ProtectedRoute><OutlineReviewPage /></ProtectedRoute>} />

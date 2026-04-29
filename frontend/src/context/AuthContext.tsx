@@ -1,11 +1,12 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { getMe, login as apiLogin, logout as apiLogout, type AuthUser, type LoginPayload } from '../lib/api/auth';
+import { getMe, login as apiLogin, logout as apiLogout, signup as apiSignup, type AuthUser, type LoginPayload, type SignupPayload } from '../lib/api/auth';
 
 interface AuthContextValue {
   user: AuthUser | null;
   authenticated: boolean;
   loading: boolean;
   login: (payload: LoginPayload) => Promise<AuthUser | null>;
+  signup: (payload: SignupPayload) => Promise<AuthUser | null>;
   logout: () => Promise<void>;
   refreshMe: () => Promise<void>;
 }
@@ -35,6 +36,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return response.user;
   };
 
+  const signup = async (payload: SignupPayload) => {
+    const response = await apiSignup(payload);
+    setUser(response.user);
+    return response.user;
+  };
+
   const logout = async () => {
     await apiLogout();
     setUser(null);
@@ -47,6 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         authenticated: Boolean(user),
         loading,
         login,
+        signup,
         logout,
         refreshMe,
       }}
