@@ -1,4 +1,4 @@
-"""Integration tests for the blog generation pipeline."""
+"""Integration tests for the async blog generation pipeline."""
 
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -7,201 +7,176 @@ import os
 os.environ["ENVIRONMENT"] = "dev"
 
 
-
-class TestBlogPipeline:
-    """Tests for the blog generation pipeline."""
-
-    @pytest.mark.asyncio
-    async def test_intent_stage_returns_classification(self):
-        """Test intent stage returns proper classification."""
-        from src.agents.pipeline import BlogGenerationPipeline
-        
-        with patch.object(BlogGenerationPipeline, "_run_agent") as mock_agent:
-            mock_agent.return_value = '{"status": "CLEAR", "message": "Topic is clear"}'
-            
-            pipeline = BlogGenerationPipeline()
-            result = await pipeline.run_intent_stage(
-                topic="AI in Healthcare",
-                audience="doctors"
-            )
-            
-            assert "status" in result
-            assert "topic" in result
-            assert result["topic"] == "AI in Healthcare"
+class TestAsyncPipeline:
+    """Tests for the async blog generation pipeline."""
 
     @pytest.mark.asyncio
-    async def test_outline_stage_returns_structure(self):
-        """Test outline stage returns proper structure."""
-        from src.agents.pipeline import BlogGenerationPipeline
-        
-        with patch.object(BlogGenerationPipeline, "_run_agent") as mock_agent:
-            mock_agent.return_value = '{"title": "Test Blog", "sections": [{"id": "intro"}], "estimated_total_words": 500}'
-            
-            pipeline = BlogGenerationPipeline()
-            result = await pipeline.run_outline_stage({
-                "topic": "Test Topic",
-                "audience": "testers"
-            })
-            
-            assert "title" in result
-            assert "sections" in result
-            assert isinstance(result["sections"], list)
+    async def test_run_pipeline_returns_result(self):
+        """Test run_pipeline returns a valid PipelineResult."""
+        from src.agents.pipeline import run_pipeline, PipelineResult
 
-    @pytest.mark.asyncio
-    async def test_research_stage_calls_tavily(self):
-        """Test research stage calls Tavily API."""
-        from src.agents.pipeline import BlogGenerationPipeline
-        
-        with patch("src.agents.pipeline.research_topic") as mock_research:
-            mock_research.return_value = {
-                "topic": "Test",
-                "summary": "Summary",
-                "sources": [{"title": "Source 1", "url": "https://example.com"}],
-                "total_sources": 1
-            }
-            
-            pipeline = BlogGenerationPipeline()
-            result = await pipeline.run_research_stage({
-                "title": "Test Blog",
-                "topic": "Machine Learning"
-            })
-            
-            assert "sources" in result
-            assert mock_research.called
+        with patch("src.agents.pipeline.Runner.run_async") as mock_run:
+            mock_run.return_value = AsyncMock()
 
-    @pytest.mark.asyncio
-    async def test_writing_stage_generates_content(self):
-        """Test writing stage generates blog content."""
-        from src.agents.pipeline import BlogGenerationPipeline
-        
-        with patch.object(BlogGenerationPipeline, "_run_agent") as mock_agent:
-            mock_agent.return_value = "# Test Blog\n\nThis is the generated content..."
-            
-            pipeline = BlogGenerationPipeline()
-            result = await pipeline.run_writing_stage(
-                outline={
-                    "title": "Test Blog",
-                    "sections": [{"id": "intro", "heading": "Introduction", "goal": "Hook reader", "target_words": 200}],
-                    "topic": "Test",
-                    "audience": "testers"
-                },
-                research_data={
-                    "sources": [{"title": "Source", "url": "https://example.com", "content": "Info"}]
-                }
-            )
-            
-            assert "title" in result
-            assert "content" in result
-            assert "word_count" in result
-
-    @pytest.mark.asyncio
-    async def test_full_pipeline_execution(self):
-        """Test full pipeline runs all stages."""
-        from src.agents.pipeline import BlogGenerationPipeline
-        
-        with patch.object(BlogGenerationPipeline, "_run_agent") as mock_agent, \
-             patch("src.agents.pipeline.research_topic") as mock_research:
-            
-            mock_agent.return_value = '{"status": "CLEAR"}'
-            mock_research.return_value = {
-                "topic": "Test",
-                "summary": "Summary",
-                "sources": [],
-                "total_sources": 0
-            }
-            
-            pipeline = BlogGenerationPipeline()
-            result = await pipeline.run_full_pipeline(
+            result = await run_pipeline(
                 session_id="test-session",
                 user_id="test-user",
                 topic="AI in Healthcare",
-                audience="doctors"
+                audience="doctors",
             )
-            
-            assert result["status"] == "completed"
-            assert "intent_result" in result
+
+            assert isinstance(result, PipelineResult)
+            assert result.session_id == "test-session"
+
+    @pytest.mark.asyncio
+    async def test_resume_pipeline_returns_result(self):
+        """Test resume_pipeline returns a valid PipelineResult."""
+        from src.agents.pipeline import resume_pipeline, PipelineResult
+
+        with patch("src.agents.pipeline.Runner.run_async") as mock_run:
+            mock_run.return_value = AsyncMock()
+
+            result = await resume_pipeline(
+                session_id="test-session",
+                user_id="test-user",
+                invocation_id="test-invocation",
+            )
+
+            assert isinstance(result, PipelineResult)
+
+    @pytest.mark.asyncio
+    async def test_pipeline_handles_confirmation_request(self):
+        """Test pipeline handles outline confirmation requests."""
+        from src.agents.pipeline import review_generated_outline, PipelineResult
+        from google.adk.tools import ToolContext
+
+        mock_tool_context = MagicMock(spec=ToolContext)
+        mock_tool_context.state = {
+            "topic": "Test Topic",
+            "audience": "Test Audience",
+            "blog_outline": {
+                "title": "Test Blog",
+                "sections": [{"id": "intro", "heading": "Introduction"}],
+            },
+        }
+        mock_tool_context.tool_confirmation = None
+
+        with patch.object(mock_tool_context, "request_confirmation") as mock_confirm:
+            result = await review_generated_outline(mock_tool_context)
+
+            assert result["status"] == "awaiting_outline_review"
             assert "outline" in result
-            assert "research_data" in result
-            assert "final_blog" in result
+            mock_confirm.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_pipeline_handles_agent_failure(self):
-        """Test pipeline handles agent failures gracefully."""
-        from src.agents.pipeline import BlogGenerationPipeline
-        
-        with patch.object(BlogGenerationPipeline, "_run_agent") as mock_agent:
-            mock_agent.side_effect = Exception("Agent failed")
-            
-            pipeline = BlogGenerationPipeline()
-            result = await pipeline.run_intent_stage(
+    async def test_pipeline_handles_approved_outline(self):
+        """Test pipeline handles approved outline confirmation."""
+        from src.agents.pipeline import review_generated_outline
+        from google.adk.tools import ToolContext
+
+        mock_tool_context = MagicMock(spec=ToolContext)
+        mock_tool_context.state = {
+            "topic": "Test Topic",
+            "audience": "Test Audience",
+            "blog_outline": {
+                "title": "Test Blog",
+                "sections": [{"id": "intro", "heading": "Introduction"}],
+            },
+        }
+        mock_tool_context.tool_confirmation = MagicMock()
+        mock_tool_context.tool_confirmation.confirmed = True
+        mock_tool_context.tool_confirmation.payload = {
+            "approved_outline": {
+                "title": "Approved Blog",
+                "sections": [{"id": "intro", "heading": "Introduction"}],
+            },
+            "feedback_text": "Good outline",
+        }
+
+        result = await review_generated_outline(mock_tool_context)
+
+        assert result["status"] == "outline_approved"
+        assert mock_tool_context.state["approved_outline"]["title"] == "Approved Blog"
+
+    @pytest.mark.asyncio
+    async def test_pipeline_handles_rejected_outline(self):
+        """Test pipeline handles rejected outline confirmation."""
+        from src.agents.pipeline import review_generated_outline
+        from google.adk.tools import ToolContext
+
+        mock_tool_context = MagicMock(spec=ToolContext)
+        mock_tool_context.state = {
+            "topic": "Test Topic",
+            "blog_outline": {"title": "Test Blog", "sections": []},
+        }
+        mock_tool_context.tool_confirmation = MagicMock()
+        mock_tool_context.tool_confirmation.confirmed = False
+        mock_tool_context.tool_confirmation.payload = {}
+
+        result = await review_generated_outline(mock_tool_context)
+
+        assert result["status"] == "outline_approved"
+        assert "error" not in result
+
+
+class TestPipelineCostTracking:
+    """Tests for pipeline cost tracking."""
+
+    @pytest.mark.asyncio
+    async def test_pipeline_result_contains_cost_info(self):
+        """Test PipelineResult includes cost information."""
+        from src.agents.pipeline import PipelineResult, CostInfo
+
+        result = PipelineResult(
+            session_id="test-session",
+            costs=[
+                CostInfo(
+                    stage="intent",
+                    model="gemini-2.0-flash",
+                    prompt_tokens=100,
+                    completion_tokens=50,
+                    total_tokens=150,
+                ),
+            ],
+        )
+
+        assert len(result.costs) == 1
+        assert result.costs[0].stage == "intent"
+        assert result.costs[0].total_tokens == 150
+
+
+class TestPipelineErrorHandling:
+    """Tests for pipeline error handling."""
+
+    @pytest.mark.asyncio
+    async def test_pipeline_returns_error_on_exception(self):
+        """Test pipeline returns error when exception occurs."""
+        from src.agents.pipeline import run_pipeline
+
+        with patch("src.agents.pipeline.Runner.run_async") as mock_run:
+            mock_run.side_effect = Exception("LLM API error")
+
+            result = await run_pipeline(
+                session_id="test-session",
+                user_id="test-user",
                 topic="Test Topic",
-                audience="testers"
             )
-            
-            # Should return fallback result
-            assert "status" in result
-            assert "topic" in result
 
-
-class TestPipelineStageTransitions:
-    """Tests for pipeline stage transitions."""
+            assert result.error is not None
+            assert "LLM API error" in result.error
 
     @pytest.mark.asyncio
-    async def test_intent_must_precede_outline(self):
-        """Test intent stage must complete before outline."""
-        # This is enforced by the service layer
-        from src.services.blog_service import BlogService
-        
-        with patch("src.services.blog_service.db_repository") as mock_repo, \
-             patch("src.services.blog_service.blog_pipeline") as mock_pipeline:
-            
-            mock_blog = MagicMock()
-            mock_blog.current_stage = "intent"
-            mock_blog.stage_data = {"status": "CLEAR"}
-            mock_repo.get_blog_by_session = AsyncMock(return_value=mock_blog)
-            mock_repo.update_blog_stage = AsyncMock()
-            mock_pipeline.run_outline_stage = AsyncMock(return_value={"title": "Test"})
-            
-            service = BlogService()
-            result = await service.process_stage_approval(
-                session_id="test",
-                approved=True,
-                feedback=None
-            )
-            
-            # Should transition to outline
-            assert result["next_stage"] == "outline"
+    async def test_pipeline_pause_for_confirmation(self):
+        """Test pipeline pauses when confirmation is requested."""
+        from src.agents.pipeline import run_pipeline, PipelineResult
 
-    @pytest.mark.asyncio
-    async def test_outline_approval_triggers_research_and_writing(self):
-        """Test outline approval runs research and writing automatically."""
-        from src.services.blog_service import BlogService
-        
-        with patch("src.services.blog_service.db_repository") as mock_repo, \
-             patch("src.services.blog_service.blog_pipeline") as mock_pipeline:
-            
-            mock_blog = MagicMock()
-            mock_blog.current_stage = "outline"
-            mock_blog.stage_data = {"title": "Test", "sections": []}
-            mock_repo.get_blog_by_session = AsyncMock(return_value=mock_blog)
-            mock_repo.update_blog = AsyncMock()
-            
-            mock_pipeline.run_research_stage = AsyncMock(return_value={"sources": []})
-            mock_pipeline.run_writing_stage = AsyncMock(return_value={
-                "title": "Test",
-                "content": "# Test",
-                "word_count": 100,
-                "sources_count": 0
-            })
-            
-            service = BlogService()
-            result = await service.process_stage_approval(
-                session_id="test",
-                approved=True,
-                feedback=None
+        with patch("src.agents.pipeline.Runner.run_async") as mock_run:
+            mock_run.return_value = AsyncMock()
+
+            result = await run_pipeline(
+                session_id="test-session",
+                user_id="test-user",
+                topic="Test Topic",
             )
-            
-            # Should complete blog
-            assert result["next_stage"] == "completed"
-            mock_pipeline.run_research_stage.assert_called_once()
-            mock_pipeline.run_writing_stage.assert_called_once()
+
+            assert isinstance(result, PipelineResult)

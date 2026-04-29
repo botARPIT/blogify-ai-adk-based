@@ -1,18 +1,15 @@
-"""Blog generation pipeline with production-grade features.
+"""ADK-native blog pipeline with a resumable outline review gate."""
 
-This module orchestrates ADK agents for blog generation with:
-- Redis-backed session store (horizontal scaling)
-- Circuit breakers for external API resilience
-- Input sanitization for prompt injection protection
-- Distributed tracing
-- Timeout handling
-"""
+from __future__ import annotations
 
-import asyncio
+import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
-from google.adk.agents import Agent
+from google.adk.agents import Agent, LoopAgent, SequentialAgent
+from google.adk.apps.app import App, ResumabilityConfig
 from google.adk.runners import Runner
+from google.adk.tools import ToolContext
 from google.genai import types
 
 from src.agents.editor_agent import editor_agent
@@ -20,423 +17,446 @@ from src.agents.intent_agent import intent_agent
 from src.agents.outline_agent import outline_agent
 from src.agents.research_agent import research_agent
 from src.agents.writer_agent import writer_agent
+from src.config import OUTLINE_MODEL, create_retry_config
 from src.config.logging_config import get_logger
-from src.core.sanitization import sanitize_for_llm, sanitize_topic, sanitize_audience
+from src.core.sanitization import sanitize_audience, sanitize_topic
 from src.core.session_store import redis_session_service
-from src.monitoring.circuit_breaker import gemini_circuit_breaker, tavily_circuit_breaker
-from src.monitoring.tracing import trace_span, trace_function
-from src.tools.tavily_research import research_topic
+from src.models.schemas import OutlineSchema
+from src.monitoring.tracing import trace_span
 
 logger = get_logger(__name__)
 
-# Default timeout for LLM calls (seconds)
-LLM_TIMEOUT = 60
-RESEARCH_TIMEOUT = 30
+REQUEST_CONFIRMATION_FUNCTION_CALL_NAME = "adk_request_confirmation"
 
 
-class BlogGenerationPipeline:
-    """
-    Blog generation pipeline with human approval checkpoints.
-    
-    Flow:
-    1. Intent Clarification → Human Approval
-    2. Outline Generation → Human Approval  
-    3. Research (auto)
-    4. Writing (auto)
-    5. Final output
-    
-    Production features:
-    - Redis session store for horizontal scaling
-    - Circuit breakers for API resilience
-    - Input sanitization
-    - Tracing support
-    - Timeout handling
-    """
+@dataclass
+class CostInfo:
+    stage: str
+    model: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
-    def __init__(self) -> None:
-        self.agents = {
-            "intent": intent_agent,
-            "outline": outline_agent,
-            "research": research_agent,
-            "writer": writer_agent,
-            "editor": editor_agent,
+
+@dataclass
+class PipelineResult:
+    session_id: str
+    intent_result: dict[str, Any] | None = None
+    outline: dict[str, Any] | None = None
+    research: dict[str, Any] | None = None
+    draft: str = ""
+    editor_review: dict[str, Any] | None = None
+    final_content: str = ""
+    costs: list[CostInfo] = field(default_factory=list)
+    error: str | None = None
+    paused_for_confirmation: bool = False
+    invocation_id: str | None = None
+    confirmation_request_id: str | None = None
+    confirmation_payload: dict[str, Any] | None = None
+
+
+async def review_generated_outline(tool_context: ToolContext) -> dict[str, Any]:
+    """Pause the pipeline so a human can approve or edit the generated outline."""
+    current_outline = tool_context.state.get("blog_outline") or {}
+    validated_outline = OutlineSchema.model_validate(current_outline).model_dump()
+
+    if not tool_context.tool_confirmation:
+        payload = {
+            "topic": tool_context.state.get("topic"),
+            "audience": tool_context.state.get("audience"),
+            "outline": validated_outline,
+            "instructions": (
+                "Review the outline. You can edit the outline and add guidance "
+                "for what data, evidence, or emphasis should appear in the final blog."
+            ),
+            "response_schema": {
+                "approved_outline": "OutlineSchema",
+                "feedback_text": "Optional string",
+            },
         }
-        # Use Redis-backed session service instead of InMemorySessionService
-        self._session_service = redis_session_service
-
-    async def _run_agent_with_circuit_breaker(
-        self,
-        agent: Agent,
-        prompt: str,
-        timeout: int = LLM_TIMEOUT,
-    ) -> str:
-        """
-        Run an ADK agent with circuit breaker and timeout protection.
-        
-        Args:
-            agent: ADK agent to run
-            prompt: Prompt to send
-            timeout: Maximum execution time
-            
-        Returns:
-            Agent response text
-        """
-        async def _execute():
-            return await self._run_agent(agent, prompt)
-        
-        try:
-            # Wrap in circuit breaker
-            result = await gemini_circuit_breaker.call(_execute)
-            return result
-        except RuntimeError as e:
-            if "circuit breaker" in str(e).lower():
-                logger.error("circuit_breaker_open", agent=agent.name)
-                return ""
-            raise
-
-    async def _run_agent(self, agent: Agent, prompt: str) -> str:
-        """Run an ADK agent and return the response text."""
-        with trace_span("adk_agent_call", {"agent": agent.name}) as span:
-            try:
-                runner = Runner(
-                    agent=agent,
-                    app_name="blogify",
-                    session_service=self._session_service,
-                )
-                
-                session = await self._session_service.create_session(
-                    app_name="blogify",
-                    user_id="system",
-                )
-                
-                response_text = ""
-                
-                # Add timeout
-                async def run_with_timeout():
-                    nonlocal response_text
-                    async for event in runner.run_async(
-                        user_id="system",
-                        session_id=session.id,
-                        new_message=types.Content(
-                            role="user",
-                            parts=[types.Part(text=prompt)]
-                        ),
-                    ):
-                        if hasattr(event, 'content') and event.content:
-                            if hasattr(event.content, 'parts'):
-                                for part in event.content.parts:
-                                    if hasattr(part, 'text') and part.text:
-                                        response_text += part.text
-                            elif isinstance(event.content, str):
-                                response_text += event.content
-                
-                await asyncio.wait_for(run_with_timeout(), timeout=LLM_TIMEOUT)
-                
-                span.set_attribute("response_length", len(response_text))
-                return response_text.strip()
-                
-            except asyncio.TimeoutError:
-                logger.error("agent_timeout", agent=agent.name, timeout=LLM_TIMEOUT)
-                span.set_attribute("timeout", True)
-                return ""
-            except Exception as e:
-                logger.error("agent_run_failed", agent=agent.name, error=str(e))
-                span.record_exception(e)
-                return ""
-
-    @trace_function("intent_stage")
-    async def run_intent_stage(self, topic: str, audience: str) -> dict[str, Any]:
-        """Execute intent clarification agent with sanitization."""
-        logger.info("running_intent_stage", topic=topic[:50])
-        
-        # Sanitize inputs
-        is_valid, sanitized_topic, error = sanitize_topic(topic)
-        if not is_valid:
-            return {
-                "status": "INVALID_INPUT",
-                "message": error,
-                "topic": topic,
-                "audience": audience,
-            }
-        
-        sanitized_audience = sanitize_audience(audience)
-        
-        prompt = f"""Analyze this blog request and determine if it's clear enough for blog generation.
-
-Topic: {sanitized_topic}
-Target Audience: {sanitized_audience}
-
-Respond with a JSON object containing:
-- "status": "CLEAR" if ready, or "UNCLEAR_TOPIC" / "MULTI_TOPIC" / "MISSING_AUDIENCE" if not
-- "message": Brief explanation of your classification
-"""
-        
-        response = await self._run_agent_with_circuit_breaker(
-            self.agents["intent"],
-            prompt,
+        tool_context.request_confirmation(
+            hint="Review and approve the generated outline before final drafting continues.",
+            payload=payload,
         )
-        
-        if response:
-            import json
-            try:
-                start = response.find("{")
-                end = response.rfind("}") + 1
-                if start >= 0 and end > start:
-                    parsed = json.loads(response[start:end])
-                    return {
-                        "status": parsed.get("status", "CLEAR"),
-                        "message": parsed.get("message", "Intent analyzed"),
-                        "topic": topic,  # Return original
-                        "audience": audience,
-                    }
-            except json.JSONDecodeError:
-                pass
-        
+        tool_context.actions.skip_summarization = True
         return {
-            "status": "CLEAR",
-            "message": f"Topic '{topic}' for audience '{audience}' is suitable for blog generation.",
-            "topic": topic,
-            "audience": audience,
+            "status": "awaiting_outline_review",
+            "outline": validated_outline,
         }
 
-    @trace_function("outline_stage")
-    async def run_outline_stage(self, intent_result: dict) -> dict[str, Any]:
-        """Execute outline generation agent."""
-        logger.info("running_outline_stage")
-        
-        topic = intent_result.get("topic", "")
-        audience = intent_result.get("audience", "general readers")
-        
-        # Sanitize for LLM
-        topic = sanitize_for_llm(topic)
-        audience = sanitize_for_llm(audience)
-        
-        prompt = f"""Create a detailed blog outline for the following:
+    if not tool_context.tool_confirmation.confirmed:
+        return {"error": "Outline review was rejected by the user."}
 
-Topic: {topic}
-Target Audience: {audience}
+    confirmation_payload = tool_context.tool_confirmation.payload or {}
+    approved_outline = confirmation_payload.get("approved_outline") or validated_outline
+    approved_outline = OutlineSchema.model_validate(approved_outline).model_dump()
+    feedback_text = str(confirmation_payload.get("feedback_text") or "").strip()
 
-Generate a structured outline with:
-1. A compelling, SEO-friendly title (max 100 characters)
-2. 4-5 sections with:
-   - Unique section ID
-   - Engaging heading
-   - Clear goal for what the section should achieve
-   - Target word count (100-300 words per section)
+    tool_context.state["blog_outline"] = approved_outline
+    tool_context.state["approved_outline"] = approved_outline
+    tool_context.state["outline_feedback"] = feedback_text
 
-Respond with a JSON object containing:
-- "title": The blog title
-- "sections": Array of section objects
-- "estimated_total_words": Total estimated word count
-"""
-        
-        response = await self._run_agent_with_circuit_breaker(
-            self.agents["outline"],
-            prompt,
+    return {
+        "status": "outline_approved",
+        "approved_outline": approved_outline,
+        "feedback_text": feedback_text,
+    }
+
+
+outline_review_agent = Agent(
+    name="outline_review_agent",
+    model=writer_agent.model,
+    instruction=(
+        "You are only an outline approval checkpoint. "
+        "The generated outline is in {blog_outline}. "
+        "If outline_review_result is empty, you must call the review_generated_outline "
+        "tool exactly once so a human can approve or edit the outline. "
+        "After the tool responds with status='awaiting_outline_review', stop immediately. "
+        "After the tool responds with status='outline_approved', respond with a single short "
+        "handoff sentence confirming the outline is approved. "
+        "Do not perform research. Do not write content. Do not call any tool other than "
+        "review_generated_outline. Never call web_search, research_sections, "
+        "generate_blog_post_section, or any other tool."
+    ),
+    tools=[review_generated_outline],
+    output_key="outline_review_result",
+)
+
+
+refinement_loop = LoopAgent(
+    name="refinement_loop",
+    sub_agents=[writer_agent, editor_agent],
+    max_iterations=2,
+)
+
+blog_pipeline = SequentialAgent(
+    name="blog_pipeline",
+    sub_agents=[
+        intent_agent,
+        outline_agent,
+        outline_review_agent,
+        research_agent,
+        refinement_loop,
+    ],
+)
+
+APP_NAME = "blogify"
+APP = App(
+    name=APP_NAME,
+    root_agent=blog_pipeline,
+    resumability_config=ResumabilityConfig(is_resumable=True),
+)
+
+STAGE_BY_AUTHOR = {
+    "intent_classifier": "intent",
+    "outline_agent": "outline",
+    "research_agent": "research",
+    "writer_agent": "writer",
+    "editor_agent": "editor",
+}
+
+
+def _usage_from_event(event: Any) -> tuple[str | None, Any | None]:
+    author = getattr(event, "author", None)
+    meta = getattr(event, "usage_metadata", None)
+    if meta is None:
+        content = getattr(event, "content", None)
+        if content:
+            meta = getattr(content, "usage_metadata", None)
+    return author, meta
+
+
+def _extract_costs_from_events(events: list[Any]) -> list[CostInfo]:
+    costs: dict[str, CostInfo] = {}
+    for event in events:
+        author, meta = _usage_from_event(event)
+        if meta is None:
+            continue
+
+        stage = STAGE_BY_AUTHOR.get(author or "")
+        if stage is None:
+            continue
+
+        cost = costs.setdefault(stage, CostInfo(stage=stage))
+        cost.prompt_tokens += getattr(meta, "prompt_token_count", 0) or 0
+        cost.completion_tokens += getattr(meta, "candidates_token_count", 0) or 0
+        cost.total_tokens += getattr(meta, "total_token_count", 0) or 0
+        cost.model = getattr(meta, "model_id", "") or cost.model
+
+    if costs:
+        ordered = ["intent", "outline", "research", "writer", "editor"]
+        return [costs[stage] for stage in ordered if stage in costs]
+
+    fallback = CostInfo(stage="full_pipeline")
+    for event in events:
+        _, meta = _usage_from_event(event)
+        if meta:
+            fallback.prompt_tokens += getattr(meta, "prompt_token_count", 0) or 0
+            fallback.completion_tokens += getattr(meta, "candidates_token_count", 0) or 0
+            fallback.total_tokens += getattr(meta, "total_token_count", 0) or 0
+            fallback.model = getattr(meta, "model_id", "") or fallback.model
+    return [fallback] if fallback.total_tokens else []
+
+
+def _initial_state(topic: str, audience: str) -> dict[str, Any]:
+    return {
+        "topic": topic,
+        "audience": audience,
+        "intent_result": {},
+        "blog_outline": {},
+        "approved_outline": {},
+        "outline_feedback": "",
+        "outline_review_result": {},
+        "research_data": {},
+        "blog_draft": "",
+        "editor_review": {},
+    }
+
+
+def _populate_result_from_state(result: PipelineResult, state: dict[str, Any]) -> None:
+    state.setdefault("intent_result", {})
+    state.setdefault("blog_outline", {})
+    state.setdefault("research_data", {})
+    state.setdefault("blog_draft", "")
+    state.setdefault("editor_review", {})
+    result.intent_result = state.get("intent_result")
+    result.outline = state.get("blog_outline")
+    result.research = state.get("research_data")
+    result.draft = state.get("blog_draft", "")
+    result.editor_review = state.get("editor_review")
+
+
+async def _ensure_session(
+    *,
+    svc: Any,
+    session_id: str,
+    user_id: str,
+    safe_topic: str,
+    safe_audience: str,
+) -> Any:
+    session = await svc.get_session(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    if session is not None:
+        return session
+
+    return await svc.create_session(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+        state=_initial_state(safe_topic, safe_audience),
+    )
+
+
+def _build_runner(session_service: Any) -> Runner:
+    return Runner(
+        app=APP,
+        app_name=APP_NAME,
+        session_service=session_service,
+    )
+
+
+def _build_initial_message(topic: str, audience: str) -> types.Content:
+    return types.Content(
+        role="user",
+        parts=[types.Part(text=(
+            f"Generate a blog post about: {topic}\n"
+            f"Target audience: {audience}"
+        ))],
+    )
+
+
+def _build_confirmation_message(
+    *,
+    confirmation_request_id: str,
+    approved_outline: dict[str, Any],
+    feedback_text: str | None,
+) -> types.Content:
+    return types.Content(
+        role="user",
+        parts=[types.Part(function_response=types.FunctionResponse(
+            id=confirmation_request_id,
+            name=REQUEST_CONFIRMATION_FUNCTION_CALL_NAME,
+            response={
+                "confirmed": True,
+                "payload": {
+                    "approved_outline": approved_outline,
+                    "feedback_text": feedback_text or "",
+                },
+            },
+        ))],
+    )
+
+
+def _extract_pause_metadata(events: list[Any]) -> tuple[bool, str | None, str | None, dict[str, Any] | None]:
+    for event in reversed(events):
+        function_calls = getattr(event, "get_function_calls", lambda: [])()
+        for function_call in function_calls:
+            if function_call.name != REQUEST_CONFIRMATION_FUNCTION_CALL_NAME:
+                continue
+            payload = None
+            args = getattr(function_call, "args", {}) or {}
+            tool_confirmation = args.get("toolConfirmation") or {}
+            if isinstance(tool_confirmation, dict):
+                payload = tool_confirmation.get("payload")
+            return True, getattr(event, "invocation_id", None), function_call.id, payload
+    return False, None, None, None
+
+
+async def _run_runner(
+    *,
+    runner: Runner,
+    user_id: str,
+    session_id: str,
+    new_message: types.Content | None,
+    invocation_id: str | None = None,
+) -> list[Any]:
+    events: list[Any] = []
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session_id,
+        invocation_id=invocation_id,
+        new_message=new_message,
+    ):
+        events.append(event)
+        logger.debug(
+            "pipeline_event",
+            author=getattr(event, "author", "?"),
+            invocation_id=getattr(event, "invocation_id", None),
         )
-        
-        if response:
-            import json
-            try:
-                start = response.find("{")
-                end = response.rfind("}") + 1
-                if start >= 0 and end > start:
-                    parsed = json.loads(response[start:end])
-                    if "title" in parsed and "sections" in parsed:
-                        parsed["topic"] = intent_result.get("topic", "")
-                        parsed["audience"] = intent_result.get("audience", "")
-                        return parsed
-            except json.JSONDecodeError:
-                pass
-        
-        # Default outline structure
-        return {
-            "title": f"Complete Guide to {topic}",
-            "sections": [
-                {"id": "intro", "heading": "Introduction", "goal": f"Hook the reader and introduce {topic}", "target_words": 150},
-                {"id": "fundamentals", "heading": "Understanding the Fundamentals", "goal": "Explain core concepts and background", "target_words": 250},
-                {"id": "applications", "heading": "Real-World Applications", "goal": "Show practical use cases and examples", "target_words": 300},
-                {"id": "best_practices", "heading": "Best Practices and Tips", "goal": "Provide actionable advice", "target_words": 250},
-                {"id": "conclusion", "heading": "Conclusion", "goal": "Summarize key points and call to action", "target_words": 150},
-            ],
-            "estimated_total_words": 1100,
-            "topic": intent_result.get("topic", ""),
-            "audience": intent_result.get("audience", ""),
-        }
+    return events
 
-    @trace_function("research_stage")
-    async def run_research_stage(self, outline: dict) -> dict[str, Any]:
-        """Execute research using Tavily API with circuit breaker."""
-        logger.info("running_research_stage")
-        
-        title = outline.get("title", "")
-        topic = outline.get("topic", title)
-        
-        async def _do_research():
-            return await research_topic(topic, max_results=5)
-        
+
+async def _finalize_result(
+    *,
+    svc: Any,
+    result: PipelineResult,
+    user_id: str,
+    session_id: str,
+    events: list[Any],
+) -> PipelineResult:
+    latest_session = await svc.get_session(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    state = latest_session.state if latest_session and hasattr(latest_session, "state") else {}
+    _populate_result_from_state(result, state)
+
+    editor_review = result.editor_review
+    if isinstance(editor_review, dict) and editor_review.get("approved"):
+        result.final_content = editor_review.get("final_blog", result.draft)
+    else:
+        result.final_content = result.draft
+
+    result.costs.extend(_extract_costs_from_events(events))
+    (
+        result.paused_for_confirmation,
+        result.invocation_id,
+        result.confirmation_request_id,
+        result.confirmation_payload,
+    ) = _extract_pause_metadata(events)
+
+    logger.info(
+        "pipeline_completed",
+        session_id=session_id,
+        total_tokens=sum(cost.total_tokens for cost in result.costs),
+        paused_for_confirmation=result.paused_for_confirmation,
+        has_final_content=bool(result.final_content),
+    )
+    return result
+
+
+async def run_pipeline(
+    topic: str,
+    audience: str = "general readers",
+    user_id: str = "anonymous",
+    session_id: str | None = None,
+    session_service: Any | None = None,
+) -> PipelineResult:
+    session_id = session_id or str(uuid.uuid4())
+    svc = session_service or redis_session_service
+    safe_topic = sanitize_topic(topic)
+    safe_audience = sanitize_audience(audience)
+    result = PipelineResult(session_id=session_id)
+
+    with trace_span("pipeline_v2.start", attributes={"user_id": user_id, "session_id": session_id}):
         try:
-            # Wrap in circuit breaker with timeout
-            research_data = await asyncio.wait_for(
-                tavily_circuit_breaker.call(_do_research),
-                timeout=RESEARCH_TIMEOUT,
+            await _ensure_session(
+                svc=svc,
+                session_id=session_id,
+                user_id=user_id,
+                safe_topic=safe_topic,
+                safe_audience=safe_audience,
             )
-        except asyncio.TimeoutError:
-            logger.error("research_timeout", topic=topic[:50])
-            research_data = {"topic": topic, "summary": "", "sources": [], "total_sources": 0}
-        except RuntimeError as e:
-            if "circuit breaker" in str(e).lower():
-                logger.error("tavily_circuit_breaker_open")
-            research_data = {"topic": topic, "summary": "", "sources": [], "total_sources": 0}
-        except Exception as e:
-            logger.error("research_failed", error=str(e))
-            research_data = {"topic": topic, "summary": "", "sources": [], "total_sources": 0}
-        
-        logger.info("research_stage_complete", sources=research_data.get("total_sources", 0))
-        
-        return research_data
-
-    @trace_function("writing_stage")
-    async def run_writing_stage(
-        self, outline: dict, research_data: dict
-    ) -> dict[str, Any]:
-        """Execute writer agent to generate full blog content."""
-        logger.info("running_writing_stage")
-        
-        title = outline.get("title", "Untitled Blog")
-        sections = outline.get("sections", [])
-        sources = research_data.get("sources", [])
-        topic = outline.get("topic", title)
-        audience = outline.get("audience", "general readers")
-        
-        # Sanitize all content going to LLM
-        title = sanitize_for_llm(title)
-        topic = sanitize_for_llm(topic)
-        audience = sanitize_for_llm(audience)
-        
-        # Build source context
-        source_context = ""
-        if sources:
-            source_context = "\n\nResearch Sources:\n"
-            for i, src in enumerate(sources[:5], 1):
-                src_content = sanitize_for_llm(src.get('content', '')[:200])
-                source_context += f"{i}. {src.get('title', 'Source')}: {src_content}...\n"
-        
-        # Build section prompts
-        section_prompts = "\n".join([
-            f"- {sanitize_for_llm(s.get('heading', 'Section'))}: {sanitize_for_llm(s.get('goal', ''))} (~{s.get('target_words', 200)} words)"
-            for s in sections
-        ])
-        
-        prompt = f"""Write a complete, professional blog post.
-
-TITLE: {title}
-TOPIC: {topic}
-AUDIENCE: {audience}
-
-OUTLINE:
-{section_prompts}
-
-{source_context}
-
-INSTRUCTIONS:
-1. Write engaging, informative content for each section
-2. Use a professional but accessible tone suitable for {audience}
-3. Include specific examples, data, or insights where relevant
-4. Each section should flow naturally into the next
-5. Target approximately 800-1200 words total
-
-Write the complete blog post in markdown format, starting with the title as # heading.
-"""
-        
-        response = await self._run_agent_with_circuit_breaker(
-            self.agents["writer"],
-            prompt,
-        )
-        
-        if response and len(response) > 200:
-            word_count = len(response.split())
-            
-            # Add sources section
-            if sources:
-                response += "\n\n## References\n"
-                for i, src in enumerate(sources[:5], 1):
-                    response += f"{i}. [{src.get('title', 'Source')}]({src.get('url', '')})\n"
-            
-            return {
-                "title": outline.get("title", "Untitled"),  # Original unsanitized
-                "content": response,
-                "word_count": word_count,
-                "sources_count": len(sources),
-            }
-        
-        # Fallback content
-        content_parts = [f"# {outline.get('title', 'Untitled')}\n"]
-        
-        for section in sections:
-            heading = section.get("heading", "Section")
-            goal = section.get("goal", "")
-            content_parts.append(f"\n## {heading}\n")
-            content_parts.append(f"{goal}. This section explores key aspects of {topic} relevant to {audience}.\n")
-        
-        if sources:
-            content_parts.append("\n## References\n")
-            for i, src in enumerate(sources[:5], 1):
-                content_parts.append(f"{i}. [{src.get('title', 'Source')}]({src.get('url', '')})\n")
-        
-        content = "".join(content_parts)
-        
-        return {
-            "title": outline.get("title", "Untitled"),
-            "content": content,
-            "word_count": len(content.split()),
-            "sources_count": len(sources),
-        }
-
-    @trace_function("full_pipeline")
-    async def run_full_pipeline(
-        self,
-        session_id: str,
-        user_id: str,
-        topic: str,
-        audience: str | None,
-    ) -> dict[str, Any]:
-        """Run full pipeline from topic to final blog."""
-        logger.info("running_full_pipeline", session_id=session_id)
-        
-        audience = audience or "general readers"
-        
-        with trace_span("pipeline_execution", {"session_id": session_id}):
-            # Stage 1: Intent
-            intent_result = await self.run_intent_stage(topic, audience)
-            
-            # Check for invalid input
-            if intent_result.get("status") == "INVALID_INPUT":
-                return {
-                    "status": "failed",
-                    "error": intent_result.get("message", "Invalid input"),
-                    "intent_result": intent_result,
-                }
-            
-            # Stage 2: Outline
-            outline = await self.run_outline_stage(intent_result)
-            
-            # Stage 3: Research
-            research_data = await self.run_research_stage(outline)
-            
-            # Stage 4: Writing
-            final_blog = await self.run_writing_stage(outline, research_data)
-        
-        logger.info("pipeline_complete", session_id=session_id, word_count=final_blog.get("word_count", 0))
-        
-        return {
-            "status": "completed",
-            "intent_result": intent_result,
-            "outline": outline,
-            "research_data": research_data,
-            "final_blog": final_blog,
-        }
+            runner = _build_runner(svc)
+            events = await _run_runner(
+                runner=runner,
+                user_id=user_id,
+                session_id=session_id,
+                new_message=_build_initial_message(safe_topic, safe_audience),
+            )
+            return await _finalize_result(
+                svc=svc,
+                result=result,
+                user_id=user_id,
+                session_id=session_id,
+                events=events,
+            )
+        except Exception as exc:
+            result.error = str(exc)
+            logger.error("pipeline_failed", session_id=session_id, error=str(exc), exc_info=True)
+            return result
 
 
-# Global instance
-blog_pipeline = BlogGenerationPipeline()
+async def resume_pipeline(
+    *,
+    topic: str,
+    audience: str = "general readers",
+    user_id: str = "anonymous",
+    session_id: str,
+    invocation_id: str,
+    confirmation_request_id: str,
+    approved_outline: dict[str, Any],
+    feedback_text: str | None = None,
+    session_service: Any | None = None,
+) -> PipelineResult:
+    svc = session_service or redis_session_service
+    safe_topic = sanitize_topic(topic)
+    safe_audience = sanitize_audience(audience)
+    result = PipelineResult(session_id=session_id)
+
+    with trace_span("pipeline_v2.resume", attributes={"user_id": user_id, "session_id": session_id}):
+        try:
+            await _ensure_session(
+                svc=svc,
+                session_id=session_id,
+                user_id=user_id,
+                safe_topic=safe_topic,
+                safe_audience=safe_audience,
+            )
+            runner = _build_runner(svc)
+            events = await _run_runner(
+                runner=runner,
+                user_id=user_id,
+                session_id=session_id,
+                invocation_id=invocation_id,
+                new_message=_build_confirmation_message(
+                    confirmation_request_id=confirmation_request_id,
+                    approved_outline=OutlineSchema.model_validate(approved_outline).model_dump(),
+                    feedback_text=feedback_text,
+                ),
+            )
+            return await _finalize_result(
+                svc=svc,
+                result=result,
+                user_id=user_id,
+                session_id=session_id,
+                events=events,
+            )
+        except Exception as exc:
+            result.error = str(exc)
+            logger.error("pipeline_resume_failed", session_id=session_id, error=str(exc), exc_info=True)
+            return result

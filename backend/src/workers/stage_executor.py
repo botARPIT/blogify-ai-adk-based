@@ -2,7 +2,7 @@
 
 Replaces the per-stage executor with a single ``run_pipeline()`` call
 that uses ADK-native orchestration.  Cost tracking and blog record
-updates are handled here (pipeline_v2 is pure orchestration).
+updates are handled here (pipeline is pure orchestration).
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from src.agents.pipeline_v2 import (
+from src.agents.pipeline import (
     CostInfo,
     PipelineResult,
     run_pipeline,

@@ -8,6 +8,8 @@ To get an agent instance use the per-module singletons directly, e.g.:
 
     from src.agents.pipeline import blog_pipeline
     from src.agents.intent_agent import intent_agent
+
+The canonical (async) pipeline is in src.agents.pipeline.
 """
 
 __all__: list[str] = []
