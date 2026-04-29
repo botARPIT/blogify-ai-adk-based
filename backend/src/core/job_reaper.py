@@ -1,53 +1,33 @@
 """DB-authoritative job reaper for stale blog sessions.
 
-Ported from infra-learning reaper pattern. Runs as an async background loop
-that queries PostgreSQL for processing sessions with stale heartbeats and
-reclaims them by resetting status to QUEUED + bumping lease_version.
-
-The database is the single source of truth — Redis is only used to
-re-enqueue the job ID for worker pickup.
-
-Flow:
-    1. SELECT blog_sessions WHERE status='processing'
-       AND last_heartbeat_at < (now - STALE_THRESHOLD)
-    2. For each stale session: SELECT FOR UPDATE → reset to QUEUED,
-       bump lease_version, clear owned_by
-    3. Re-enqueue the canonical_session_id into Redis task queue
-    4. Sleep → repeat
-
-This prevents split-brain scenarios: if a reaped worker wakes up and
-tries to complete/fail its job, the lease_version check will reject it.
+PostgreSQL owns job leases and user-visible lifecycle state. Redis is only
+used to transport a requeued payload after the database has decided that a
+session is safe to reclaim.
 """
 
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
 from src.config.logging_config import get_logger
 from src.core.task_queue import task_queue
-from src.models.orm_models import BlogSession, BlogSessionStatus
+from src.models.orm_models import BlogSessionStatus
+from src.models.repositories.auth_user_repository import AuthUserRepository
 from src.models.repositories.blog_session_repository import BlogSessionRepository
+from src.models.repositories.budget_repository import BudgetRepository
+from src.models.repositories.notification_repository import NotificationRepository
 from src.models.repository import get_session_factory
+from src.services.notification_service import NotificationService
 
 logger = get_logger(__name__)
 
-# How long before a processing session is considered stale (seconds).
 STALE_THRESHOLD_SECONDS = 120
-
-# How often the reaper runs (seconds).
 REAPER_INTERVAL_SECONDS = 30
-
-# Maximum times a session can be reaped before being marked as permanently failed.
 MAX_REAP_COUNT = 3
 
 
 class JobReaper:
-    """Async background reaper for stale blog processing sessions.
-
-    Uses PostgreSQL as the authoritative state store. Redis is only
-    touched to re-enqueue reclaimed job IDs.
-    """
+    """Async background reaper for stale blog processing sessions."""
 
     def __init__(
         self,
@@ -97,12 +77,9 @@ class JobReaper:
             await asyncio.sleep(self.interval)
 
     async def _reap_cycle(self) -> int:
-        """Run one reap cycle: find stale sessions, reclaim them.
-
-        Returns the number of sessions reclaimed.
-        """
+        """Run one reap cycle and requeue exactly the sessions reclaimed."""
         session_factory = get_session_factory()
-        reaped = 0
+        reaped_payloads: list[dict] = []
 
         async with session_factory() as db:
             async with db.begin():
@@ -115,29 +92,66 @@ class JobReaper:
                     session_id = blog_session.id
                     old_owner = blog_session.owned_by
                     old_lease = blog_session.lease_version
+                    old_reap_count = blog_session.reap_count
 
-                    # Check if this session has been reaped too many times.
-                    # lease_version tracks total claims+reaps, so we use it
-                    # as a proxy for reap count.
-                    if old_lease >= self.max_reap_count:
+                    if old_reap_count >= self.max_reap_count:
                         logger.warning(
                             "reaper_max_reaps_exceeded",
                             session_id=session_id,
                             lease_version=old_lease,
+                            reap_count=old_reap_count,
                             owner=old_owner,
                         )
-                        # Fail permanently — don't re-enqueue.
+
                         await repo.update_status(
                             session_id,
                             status=BlogSessionStatus.FAILED,
                             current_stage=blog_session.current_stage,
+                            error_message=(
+                                f"Permanently failed after {old_reap_count} "
+                                f"reaps (max {self.max_reap_count})"
+                            ),
                         )
+
+                        budget_repo = BudgetRepository(db)
+                        await budget_repo.release_reservation(session_id)
+                        logger.info(
+                            "budget_released_on_permanent_failure",
+                            session_id=session_id,
+                        )
+
+                        notification_repo = NotificationRepository(db)
+                        notification_service = NotificationService(
+                            auth_user_repo=AuthUserRepository(db),
+                            notification_repo=notification_repo,
+                        )
+                        try:
+                            message = (
+                                f"Your blog '{blog_session.topic}' could not be completed "
+                                "after multiple attempts. Please try again."
+                            )
+                            await notification_service.create_for_end_user(
+                                end_user=blog_session.end_user,
+                                type="session_permanently_failed",
+                                title="Blog generation failed permanently",
+                                message=message,
+                                session_id=session_id,
+                            )
+                            logger.info(
+                                "user_notified_on_permanent_failure",
+                                session_id=session_id,
+                            )
+                        except Exception as notify_err:
+                            logger.error(
+                                "notification_failed_on_permanent_failure",
+                                session_id=session_id,
+                                error=str(notify_err),
+                            )
+
                         continue
 
                     new_lease = await repo.reap_session(session_id)
                     if new_lease is None:
-                        # Session was already completed/failed by the worker
-                        # between find_stale and reap — that's fine.
                         continue
 
                     logger.info(
@@ -147,53 +161,36 @@ class JobReaper:
                         old_lease=old_lease,
                         new_lease=new_lease,
                     )
-
-                    reaped += 1
-
-        # Re-enqueue outside the DB transaction to avoid holding locks
-        # during Redis I/O. We query again for freshly QUEUED sessions
-        # that have no owner (i.e., just reaped).
-        if reaped > 0:
-            async with session_factory() as db:
-                repo = BlogSessionRepository(db)
-                from sqlalchemy import select
-
-                result = await db.execute(
-                    select(BlogSession).where(
-                        BlogSession.status == BlogSessionStatus.QUEUED,
-                        BlogSession.owned_by.is_(None),
-                        BlogSession.claimed_at.is_(None),
+                    reaped_payloads.append(
+                        {
+                            "canonical_session_id": blog_session.id,
+                            "session_id": str(blog_session.id),
+                            "topic": blog_session.topic,
+                            "audience": blog_session.audience or "general readers",
+                            "user_id": str(blog_session.end_user_id),
+                            "job_phase": "outline_gate",
+                            "_reaped": True,
+                        }
                     )
+
+        for payload in reaped_payloads:
+            try:
+                await task_queue.enqueue(
+                    task_type="blog_generation",
+                    payload=payload,
                 )
-                queued_sessions = result.scalars().all()
+                logger.info(
+                    "reaped_session_requeued",
+                    session_id=payload["canonical_session_id"],
+                )
+            except Exception as e:
+                logger.error(
+                    "reaper_requeue_failed",
+                    session_id=payload["canonical_session_id"],
+                    error=str(e),
+                )
 
-                for session in queued_sessions:
-                    try:
-                        await task_queue.enqueue(
-                            task_type="blog_generation",
-                            payload={
-                                "canonical_session_id": session.id,
-                                "session_id": str(session.id),
-                                "topic": session.topic,
-                                "audience": session.audience or "general readers",
-                                "user_id": str(session.end_user_id),
-                                "job_phase": "outline_gate",
-                                "_reaped": True,
-                            },
-                        )
-                        logger.info(
-                            "reaped_session_requeued",
-                            session_id=session.id,
-                        )
-                    except Exception as e:
-                        logger.error(
-                            "reaper_requeue_failed",
-                            session_id=session.id,
-                            error=str(e),
-                        )
-
-        return reaped
+        return len(reaped_payloads)
 
 
-# Module-level singleton
 job_reaper = JobReaper()

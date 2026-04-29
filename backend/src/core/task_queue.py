@@ -1,9 +1,13 @@
-"""Enhanced task queue with job reclaim for crashed workers.
+"""Enhanced Redis task transport with job reclaim for crashed workers.
 
 Features:
 - Job visibility timeout (prevents lost jobs on crash)
 - Automatic job reclaim for stale processing jobs
 - Dead letter queue for failed jobs
+
+Redis task state is transport/coordination state only. PostgreSQL remains
+authoritative for blog session lifecycle, budget ledger entries, and worker
+lease ownership.
 """
 
 import asyncio
@@ -108,8 +112,8 @@ class TaskQueue:
             "priority": priority,
             "retries": 0,
             "max_retries": 3,
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         
         # Store task data
@@ -166,10 +170,10 @@ class TaskQueue:
         if progress is not None:
             task["progress"] = progress
         
-        task["updated_at"] = datetime.utcnow().isoformat()
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
         
         if status == TaskStatus.COMPLETED:
-            task["completed_at"] = datetime.utcnow().isoformat()
+            task["completed_at"] = datetime.now(timezone.utc).isoformat()
             # Remove from processing set
             await client.zrem(self.PROCESSING_SET, task_id)
         
@@ -209,11 +213,11 @@ class TaskQueue:
         
         task = json.loads(data)
         task["status"] = TaskStatus.PROCESSING.value
-        task["started_at"] = datetime.utcnow().isoformat()
-        task["updated_at"] = datetime.utcnow().isoformat()
+        task["started_at"] = datetime.now(timezone.utc).isoformat()
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
         
         # Add to processing set with visibility timeout score
-        visibility_deadline = datetime.utcnow().timestamp() + self.VISIBILITY_TIMEOUT
+        visibility_deadline = datetime.now(timezone.utc).timestamp() + self.VISIBILITY_TIMEOUT
         await client.zadd(self.PROCESSING_SET, {task_id: visibility_deadline})
         
         await client.set(task_key, json.dumps(task), ex=self.RESULT_TTL)
@@ -226,7 +230,7 @@ class TaskQueue:
         """Extend the visibility timeout for a processing task."""
         client = await self._get_client()
         
-        new_deadline = datetime.utcnow().timestamp() + seconds
+        new_deadline = datetime.now(timezone.utc).timestamp() + seconds
         await client.zadd(self.PROCESSING_SET, {task_id: new_deadline})
         
         logger.debug("visibility_extended", task_id=task_id, seconds=seconds)
@@ -244,7 +248,7 @@ class TaskQueue:
         task = json.loads(data)
         task["retries"] = task.get("retries", 0) + 1
         task["status"] = TaskStatus.PENDING.value
-        task["updated_at"] = datetime.utcnow().isoformat()
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
         task.pop("started_at", None)
         
         # Remove from processing set
@@ -257,6 +261,12 @@ class TaskQueue:
     
     async def reclaim_stale_jobs(self) -> int:
         """
+        DEPRECATED: This method is not currently used.
+        
+        The system uses DB-authoritative job reaping (JobReaper class) instead
+        of Redis-based reclaim. This code is kept for potential future use
+        or removal.
+        
         Reclaim jobs from crashed workers.
         
         Checks processing set for jobs past their visibility deadline
@@ -267,7 +277,7 @@ class TaskQueue:
         """
         client = await self._get_client()
         
-        now = datetime.utcnow().timestamp()
+        now = datetime.now(timezone.utc).timestamp()
         
         # Get all jobs past their deadline
         stale_jobs = await client.zrangebyscore(

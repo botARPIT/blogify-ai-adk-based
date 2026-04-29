@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.orm_models import BlogSession, BlogSessionStatus
@@ -114,15 +114,40 @@ class BlogSessionRepository:
         session_id: int,
         status: BlogSessionStatus,
         current_stage: Optional[str] = None,
-    ) -> None:
+        error_message: Optional[str] = None,
+        lease_version: Optional[int] = None,
+    ) -> bool:
+        """Update session status.
+        
+        If lease_version is provided, validates that the session hasn't been
+        reaped (lease changed) before applying the update. This prevents stale
+        workers from overwriting the reaper's state.
+        
+        Returns:
+            True if update was applied, False if lease mismatch (session was reaped).
+        """
         blog_session = await self.get_by_id(session_id)
-        if blog_session:
-            blog_session.status = status
-            if current_stage is not None:
-                blog_session.current_stage = current_stage
-            blog_session.updated_at = datetime.now(timezone.utc)
-            if status == BlogSessionStatus.COMPLETED:
-                blog_session.completed_at = datetime.now(timezone.utc)
+        if not blog_session:
+            return False
+        
+        if lease_version is not None and blog_session.lease_version != lease_version:
+            logger.warning(
+                "update_status_lease_mismatch",
+                session_id=session_id,
+                expected_lease=lease_version,
+                actual_lease=blog_session.lease_version,
+            )
+            return False
+        
+        blog_session.status = status
+        if current_stage is not None:
+            blog_session.current_stage = current_stage
+        if error_message is not None:
+            blog_session.error_message = error_message
+        blog_session.updated_at = datetime.now(timezone.utc)
+        if status == BlogSessionStatus.COMPLETED:
+            blog_session.completed_at = datetime.now(timezone.utc)
+        return True
 
     async def update_outline(
         self,
@@ -219,6 +244,7 @@ class BlogSessionRepository:
         """Update heartbeat timestamp for a leased session.
 
         Returns False if the lease is stale (reaper took it).
+        Uses FOR UPDATE to prevent race with concurrent reaper.
         """
         result = await self._session.execute(
             select(BlogSession)
@@ -228,6 +254,7 @@ class BlogSessionRepository:
                 BlogSession.owned_by == worker_id,
                 BlogSession.status == BlogSessionStatus.PROCESSING,
             )
+            .with_for_update()
         )
         blog_session = result.scalar_one_or_none()
 
@@ -253,7 +280,13 @@ class BlogSessionRepository:
                 BlogSession.id == session_id,
                 BlogSession.lease_version == lease_version,
                 BlogSession.owned_by == worker_id,
-                BlogSession.status == BlogSessionStatus.PROCESSING,
+                BlogSession.status.in_(
+                    [
+                        BlogSessionStatus.PROCESSING.value,
+                        BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
+                        BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+                    ]
+                ),
             )
             .with_for_update()
         )
@@ -263,12 +296,82 @@ class BlogSessionRepository:
             return False
 
         now = datetime.now(timezone.utc)
-        blog_session.status = BlogSessionStatus.COMPLETED
-        blog_session.completed_at = now
+        if blog_session.status in (
+            BlogSessionStatus.PROCESSING.value,
+            BlogSessionStatus.PROCESSING,
+        ):
+            blog_session.status = BlogSessionStatus.COMPLETED
+            blog_session.completed_at = now
         blog_session.owned_by = None
+        blog_session.claimed_at = None
         blog_session.last_heartbeat_at = None
         blog_session.updated_at = now
 
+        return True
+
+    async def release_lease_for_pause(
+        self,
+        session_id: int,
+        lease_version: int,
+        worker_id: str,
+    ) -> bool:
+        """Clear ownership for a valid paused review state without completing it."""
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(
+                BlogSession.id == session_id,
+                BlogSession.lease_version == lease_version,
+                BlogSession.owned_by == worker_id,
+                BlogSession.status.in_(
+                    [
+                        BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
+                        BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+                    ]
+                ),
+            )
+            .with_for_update()
+        )
+        blog_session = result.scalar_one_or_none()
+        if blog_session is None:
+            return False
+
+        now = datetime.now(timezone.utc)
+        blog_session.owned_by = None
+        blog_session.claimed_at = None
+        blog_session.last_heartbeat_at = None
+        blog_session.updated_at = now
+        return True
+
+    async def pause_with_lease(
+        self,
+        session_id: int,
+        lease_version: int,
+        worker_id: str,
+        status: BlogSessionStatus,
+        current_stage: str,
+    ) -> bool:
+        """Transition a leased processing session into a paused review state."""
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(
+                BlogSession.id == session_id,
+                BlogSession.lease_version == lease_version,
+                BlogSession.owned_by == worker_id,
+                BlogSession.status == BlogSessionStatus.PROCESSING,
+            )
+            .with_for_update()
+        )
+        blog_session = result.scalar_one_or_none()
+        if blog_session is None:
+            return False
+
+        now = datetime.now(timezone.utc)
+        blog_session.status = status
+        blog_session.current_stage = current_stage
+        blog_session.owned_by = None
+        blog_session.claimed_at = None
+        blog_session.last_heartbeat_at = None
+        blog_session.updated_at = now
         return True
 
     async def fail_with_lease(
@@ -319,7 +422,7 @@ class BlogSessionRepository:
     ) -> list[BlogSession]:
         """Find processing sessions whose heartbeat has gone stale.
 
-        Returns sessions where ``last_heartbeat_at < now - threshold``.
+        Returns stale owned sessions and orphaned processing sessions.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(
             seconds=threshold_seconds
@@ -327,8 +430,17 @@ class BlogSessionRepository:
         result = await self._session.execute(
             select(BlogSession).where(
                 BlogSession.status == BlogSessionStatus.PROCESSING,
-                BlogSession.last_heartbeat_at.isnot(None),
-                BlogSession.last_heartbeat_at < cutoff,
+                or_(
+                    and_(
+                        BlogSession.last_heartbeat_at.isnot(None),
+                        BlogSession.last_heartbeat_at < cutoff,
+                    ),
+                    and_(
+                        BlogSession.owned_by.is_(None),
+                        BlogSession.last_heartbeat_at.is_(None),
+                        BlogSession.updated_at < cutoff,
+                    ),
+                ),
             )
         )
         return list(result.scalars().all())
@@ -358,10 +470,10 @@ class BlogSessionRepository:
         now = datetime.now(timezone.utc)
         blog_session.status = BlogSessionStatus.QUEUED
         blog_session.lease_version += 1
+        blog_session.reap_count += 1
         blog_session.owned_by = None
         blog_session.claimed_at = None
         blog_session.last_heartbeat_at = None
         blog_session.updated_at = now
 
         return blog_session.lease_version
-
