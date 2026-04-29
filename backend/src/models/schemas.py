@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from src.models.orm_models import ClientMode
 
@@ -364,8 +364,24 @@ class AuthMeResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    email: EmailStr = Field(..., description="Valid email address")
+    password: str = Field(..., min_length=1, description="Password")
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr = Field(..., description="Valid email address")
+    password: str = Field(
+        ..., 
+        min_length=8, 
+        max_length=100,
+        description="Password must be 8-100 characters"
+    )
+    display_name: Optional[str] = Field(None, max_length=100, description="Optional display name")
+
+
+class AuthRegisterResponse(BaseModel):
+    authenticated: bool
+    user: AuthUserView
 
 
 class NotificationView(BaseModel):

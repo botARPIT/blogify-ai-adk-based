@@ -973,6 +973,52 @@ async def _create_generation_response(
     return response
 
 
+async def _create_service_generation_response(
+    *,
+    identity: ResolvedIdentity,
+    topic: str,
+    audience: Optional[str],
+    tone: Optional[str],
+    external_request_id: Optional[str] = None,
+    external_blog_id: Optional[str] = None,
+) -> GenerateBlogResponse:
+    async with db_repository.async_session() as session:
+        budget_service = ServiceClientBudgetService(
+            ServiceClientBudgetRepository(session)
+        )
+        service_budget_decision = await budget_service.preflight(
+            identity.service_client_id
+        )
+
+    service_client_budget_preflight_total.labels(
+        result="allowed" if service_budget_decision.allowed else "blocked"
+    ).inc()
+    if not service_budget_decision.allowed:
+        service_client_budget_exhausted_total.inc()
+        _raise_budget_exhausted(
+            BudgetDecision(
+                allowed=False,
+                reason=service_budget_decision.reason
+                or "Service-client budget exhausted",
+                error_code="SERVICE_CLIENT_BUDGET_EXCEEDED",
+                daily_remaining_usd=max(
+                    0.0,
+                    service_budget_decision.daily_limit_usd
+                    - service_budget_decision.daily_spent_usd,
+                ),
+            )
+        )
+
+    return await _create_generation_response(
+        identity=identity,
+        topic=topic,
+        audience=audience,
+        tone=tone,
+        external_request_id=external_request_id,
+        external_blog_id=external_blog_id,
+    )
+
+
 async def _run_idempotent_action(
     *,
     user_scope: str,
@@ -1310,7 +1356,7 @@ async def service_generate_blog(
         endpoint="/internal/ai/blogs",
         idempotency_key=idempotency_key or request.request_id,
         request_body=request.model_dump(exclude_none=True),
-        action=lambda: _create_generation_response(
+        action=lambda: _create_service_generation_response(
             identity=identity,
             topic=request.topic,
             audience=request.audience,

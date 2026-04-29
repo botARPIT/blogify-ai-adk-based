@@ -467,6 +467,7 @@ class BlogSession(Base):
 
     # Lease-based ownership (DB-authoritative reaper support)
     lease_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reap_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     owned_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
