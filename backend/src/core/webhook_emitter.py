@@ -23,7 +23,6 @@ class WebhookEmitter:
         blog.version.created
         blog.session.completed
         blog.session.failed
-        blog.session.budget_exhausted
     """
 
     def __init__(self, callback_url: Optional[str], timeout: float = 5.0) -> None:
@@ -93,7 +92,7 @@ class WebhookEmitter:
             session_id=session_id,
             tenant_id=tenant_id,
             end_user_id=end_user_id,
-            status="awaiting_human_review",
+            status="awaiting_final_review",
             current_stage="editor",
             current_version_number=version_number,
             budget_spent_usd=budget_spent_usd,

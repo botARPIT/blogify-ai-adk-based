@@ -464,8 +464,7 @@ class WebhookEventEnvelope(BaseModel):
     event_type: str = Field(
         description=(
             "blog.session.queued | blog.session.processing | blog.review.required | "
-            "blog.version.created | blog.session.completed | blog.session.failed | "
-            "blog.session.budget_exhausted"
+            "blog.version.created | blog.session.completed | blog.session.failed"
         )
     )
     session_id: int

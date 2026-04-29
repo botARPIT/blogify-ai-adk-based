@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from src.api.auth import ensure_csrf_header, require_authenticated_user
 from src.config.logging_config import get_logger
+from src.core.compensation import compensate, classify_failure
 from src.core.errors import format_error_response
 from src.core.idempotency import IdempotencyState, idempotency_store
 from src.guards.rate_limit_guard import rate_limit_guard
@@ -73,6 +74,23 @@ internal_router = APIRouter(prefix="/internal/ai", tags=["Internal Service"])
 APP_NAME = "blogify"
 REQUEST_CONFIRMATION_FUNCTION_CALL_NAME = "adk_request_confirmation"
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Cancel session response
+# ---------------------------------------------------------------------------
+
+
+class CancelSessionResponse(BaseModel):
+    """Returned after a successful session cancellation."""
+
+    session_id: int
+    status: str = "cancelled"
+    failure_reason: str = "user_cancelled"
+    budget_action: str = Field(
+        description="Whether consumed budget was committed or fully released.",
+    )
+    message: str = "Session cancelled successfully."
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +225,7 @@ async def _restore_revision_denied_state(blog_session_id: int) -> None:
             if blog_session is None:
                 return
             blog_session.iteration_count = max(0, blog_session.iteration_count - 1)
-            blog_session.status = BlogSessionStatus.AWAITING_HUMAN_REVIEW
+            blog_session.status = BlogSessionStatus.AWAITING_FINAL_REVIEW
             blog_session.current_stage = "awaiting_review"
 
 
@@ -225,7 +243,7 @@ def _build_session_state(
         audience=session.audience,
         requires_human_review=session.status in {
             BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
-            BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+            BlogSessionStatus.AWAITING_FINAL_REVIEW.value,
         },
         budget_spent_usd=session.budget_spent_usd,
         budget_spent_tokens=session.budget_spent_tokens,
@@ -251,7 +269,7 @@ def _build_blog_session_list_item(
         audience=session.audience,
         requires_human_review=session.status in {
             BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
-            BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+            BlogSessionStatus.AWAITING_FINAL_REVIEW.value,
         },
         budget_spent_usd=session.budget_spent_usd,
         budget_spent_tokens=session.budget_spent_tokens,
@@ -439,7 +457,7 @@ async def _get_session_status(session_id: int, external_user_id: str | None = No
             topic=blog_session.topic,
             requires_human_review=blog_session.status in {
                 BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
-                BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+                BlogSessionStatus.AWAITING_FINAL_REVIEW.value,
             },
             budget_spent_usd=blog_session.budget_spent_usd,
             budget_spent_tokens=blog_session.budget_spent_tokens,
@@ -753,7 +771,7 @@ async def _submit_human_review(
                     current_session = await session_repo.get_by_id(blog_session_id)
                     await session_repo.update_status(
                         blog_session_id,
-                        status=BlogSessionStatus.AWAITING_HUMAN_REVIEW,
+                        status=BlogSessionStatus.AWAITING_FINAL_REVIEW,
                         current_stage="awaiting_review",
                     )
                     if current_session is not None:
@@ -1112,6 +1130,93 @@ async def _run_idempotent_action(
 
 
 # ---------------------------------------------------------------------------
+# Session cancellation implementation (shared by standalone + service routes)
+# ---------------------------------------------------------------------------
+
+
+async def _cancel_session_impl(
+    *,
+    blog_session_id: int,
+    external_user_id: str | None,
+    failure_reason: str = "user_cancelled",
+) -> CancelSessionResponse:
+    """Core cancellation logic used by both standalone and service modes.
+
+    1. Ownership check (standalone only — skipped when ``external_user_id`` is None).
+    2. ``cancel_session()`` — saga-guarded, raises ``IllegalStateTransition`` on 409.
+    3. ``compensate()`` — budget commit/release depending on failure category.
+    4. User notification.
+
+    ``IllegalStateTransition`` propagates to the caller and is handled by the
+    global ``blogify_exception_handler`` (409 JSON response).
+    """
+    async with db_repository.async_session() as session:
+        async with session.begin():
+            session_repo = BlogSessionRepository(session)
+            blog_session = await session_repo.get_by_id(blog_session_id)
+
+            if blog_session is None:
+                raise HTTPException(status_code=404, detail="Blog session not found")
+
+            # ── Ownership guard (standalone only) ──
+            if external_user_id is not None:
+                await _assert_owned_session(blog_session, external_user_id, session)
+
+            # ── Saga-guarded cancellation ──
+            # Raises IllegalStateTransition (409) if not allowed.
+            await session_repo.cancel_session(
+                blog_session_id,
+                failure_reason=failure_reason,
+            )
+
+            # ── Compensation (budget) ──
+            budget_service = BudgetService(
+                budget_repo=BudgetRepository(session),
+                session_repo=session_repo,
+            )
+            await compensate(
+                budget_service=budget_service,
+                tenant_id=blog_session.tenant_id,
+                end_user_id=blog_session.end_user_id,
+                session_id=blog_session_id,
+                failure_reason=failure_reason,
+                service_client_id=blog_session.service_client_id,
+            )
+            category = classify_failure(failure_reason)
+
+            # ── Notification ──
+            notification_service = NotificationService(
+                auth_user_repo=AuthUserRepository(session),
+                notification_repo=NotificationRepository(session),
+            )
+            end_user = await session.get(EndUser, blog_session.end_user_id)
+            await notification_service.create_for_end_user(
+                end_user=end_user,
+                type="blog_cancelled",
+                title="Blog generation cancelled",
+                message=(
+                    f"Session {blog_session_id} was cancelled. "
+                    + (
+                        "Budget for consumed work has been charged."
+                        if category.value == "operational"
+                        else "No charges have been applied."
+                    )
+                ),
+                session_id=blog_session_id,
+                action_url=f"/sessions/{blog_session_id}/progress",
+            )
+
+    budget_action = (
+        "committed_consumed" if category.value == "operational" else "fully_released"
+    )
+    return CancelSessionResponse(
+        session_id=blog_session_id,
+        failure_reason=failure_reason,
+        budget_action=budget_action,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Standalone routes
 # ---------------------------------------------------------------------------
 
@@ -1261,7 +1366,7 @@ async def submit_human_review(
 ):
     """Phase 5: HITL review endpoint.
 
-    After the editor stage completes, the session enters 'awaiting_human_review'.
+    After the editor stage completes, the session enters 'awaiting_final_review'.
     The reviewer calls this endpoint to approve, request revision, or reject the blog.
 
     Args:
@@ -1316,6 +1421,44 @@ async def get_my_budget(request: Request):
         snapshot = await budget_service.get_snapshot(tenant_id, end_user_id)
         daily_cost_usd.labels(scope="user").set(snapshot.daily_spent_usd)
         return snapshot
+
+
+@canonical_router.post(
+    "/blogs/{session_id}/cancel",
+    response_model=CancelSessionResponse,
+    summary="Cancel a blog generation session",
+    responses={
+        409: {"description": "Session cannot be cancelled in its current state."},
+    },
+)
+async def cancel_session(
+    session_id: str,
+    http_request: Request,
+):
+    """Cancel a blog session (standalone mode).
+
+    The saga state machine enforces cancellation boundaries:
+    - Allowed for QUEUED, PROCESSING (up to writer stage),
+      AWAITING_OUTLINE_REVIEW, REVISION_REQUESTED.
+    - Blocked at AWAITING_FINAL_REVIEW and all terminal states.
+
+    Budget compensation:
+    - User-initiated cancellation is *operational*: consumed budget is
+      committed (charged), remainder released.
+    """
+    ensure_csrf_header(http_request)
+    current_user = require_authenticated_user(http_request)
+
+    try:
+        blog_session_id = int(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id must be an integer")
+
+    return await _cancel_session_impl(
+        blog_session_id=blog_session_id,
+        external_user_id=current_user.user_id,
+        failure_reason="user_cancelled",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1498,6 +1641,34 @@ async def service_submit_review(
             request=request,
         ),
         cacheable_error_statuses={402, 404, 409, 503},
+    )
+
+
+@internal_router.post(
+    "/blogs/{session_id}/cancel",
+    response_model=CancelSessionResponse,
+    summary="Cancel a blog generation session (service mode)",
+    responses={
+        409: {"description": "Session cannot be cancelled in its current state."},
+    },
+)
+async def service_cancel_session(
+    session_id: str,
+    http_request: Request,
+    x_internal_api_key: Annotated[Optional[str], Header()] = None,
+):
+    """Cancel a blog session (service mode)."""
+    await require_internal_service_client(http_request, x_internal_api_key)
+
+    try:
+        blog_session_id = int(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id must be an integer")
+
+    return await _cancel_session_impl(
+        blog_session_id=blog_session_id,
+        external_user_id=None,  # service mode — skip ownership check
+        failure_reason="user_cancelled",
     )
 
 

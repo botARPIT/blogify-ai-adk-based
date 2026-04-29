@@ -3,7 +3,7 @@
 Phase 5: HITL at editor stage.
 
 Workflow:
-    1. Pipeline produces editor output → session enters awaiting_human_review
+    1. Pipeline produces editor output → session enters awaiting_final_review
     2. User calls /review with action=approve|request_revision|reject
     3. If revision: enqueue revision_writer + revision_editor stages
     4. Repeat until approved, rejected, or revision limit reached
@@ -259,7 +259,7 @@ class RevisionService:
         )
         await self._session_repo.update_status(
             blog_session_id,
-            BlogSessionStatus.AWAITING_HUMAN_REVIEW,
+            BlogSessionStatus.AWAITING_FINAL_REVIEW,
             current_stage="awaiting_review",
         )
         await self._emit_notification(

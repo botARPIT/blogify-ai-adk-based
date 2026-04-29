@@ -488,8 +488,6 @@ class BudgetService:
         return blog_session.status in {
             BlogSessionStatus.FAILED.value,
             BlogSessionStatus.CANCELLED.value,
-            BlogSessionStatus.BUDGET_EXHAUSTED.value,
             BlogSessionStatus.FAILED,
             BlogSessionStatus.CANCELLED,
-            BlogSessionStatus.BUDGET_EXHAUSTED,
         }

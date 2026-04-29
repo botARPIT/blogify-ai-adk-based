@@ -90,3 +90,33 @@ class AgentRunRepository:
             .order_by(AgentRun.started_at)
         )
         return list(result.scalars().all())
+
+    async def get_completed_stages(self, blog_session_id: int) -> set[str]:
+        """Return the set of stage names that completed successfully.
+
+        Used by the worker to determine which stages can be skipped
+        when resuming a session after a crash or requeue.
+        """
+        result = await self._session.execute(
+            select(AgentRun.stage_name)
+            .where(
+                AgentRun.blog_session_id == blog_session_id,
+                AgentRun.status == AgentRunStatus.COMPLETED,
+            )
+        )
+        return {row[0] for row in result.all()}
+
+    async def is_stage_completed(
+        self, blog_session_id: int, stage_name: str
+    ) -> bool:
+        """Check whether a specific stage completed for a session."""
+        result = await self._session.execute(
+            select(AgentRun.id)
+            .where(
+                AgentRun.blog_session_id == blog_session_id,
+                AgentRun.stage_name == stage_name,
+                AgentRun.status == AgentRunStatus.COMPLETED,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None

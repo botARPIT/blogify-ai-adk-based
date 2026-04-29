@@ -414,12 +414,11 @@ class BlogSessionStatus(str, PyEnum):
     QUEUED = "queued"
     PROCESSING = "processing"
     AWAITING_OUTLINE_REVIEW = "awaiting_outline_review"
-    AWAITING_HUMAN_REVIEW = "awaiting_human_review"
+    AWAITING_FINAL_REVIEW = "awaiting_final_review"
     REVISION_REQUESTED = "revision_requested"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
-    BUDGET_EXHAUSTED = "budget_exhausted"
 
 
 class BlogSession(Base):
@@ -458,6 +457,12 @@ class BlogSession(Base):
     iteration_count: Mapped[int] = mapped_column(Integer, default=0)
     outline_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     outline_feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Saga — failure classification
+    failure_reason: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # ADK session persistence for resumability
+    adk_session_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     # Budget tracking
     budget_reserved_usd: Mapped[float] = mapped_column(Float, default=0.0)

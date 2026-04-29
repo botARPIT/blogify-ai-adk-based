@@ -1,4 +1,9 @@
-"""BlogSessionRepository — manages BlogSession lifecycle."""
+"""BlogSessionRepository — manages BlogSession lifecycle.
+
+All status mutations are guarded by the SagaStateMachine to prevent illegal
+state transitions.  Callers that bypass these methods and mutate ``status``
+directly will *not* have transition validation — don't do that.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,14 @@ from typing import Optional
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config.logging_config import get_logger
+from src.core.saga_state_machine import (
+    CANCELLABLE_STAGES,
+    SagaStateMachine,
+)
 from src.models.orm_models import BlogSession, BlogSessionStatus
+
+logger = get_logger(__name__)
 
 
 class BlogSessionRepository:
@@ -16,6 +28,10 @@ class BlogSessionRepository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    # ------------------------------------------------------------------
+    # Create
+    # ------------------------------------------------------------------
 
     async def create(
         self,
@@ -46,6 +62,10 @@ class BlogSessionRepository:
         self._session.add(blog_session)
         await self._session.flush()
         return blog_session
+
+    # ------------------------------------------------------------------
+    # Read
+    # ------------------------------------------------------------------
 
     async def get_by_id(self, session_id: int) -> Optional[BlogSession]:
         result = await self._session.execute(
@@ -98,7 +118,7 @@ class BlogSessionRepository:
             BlogSessionStatus.QUEUED.value,
             BlogSessionStatus.PROCESSING.value,
             BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
-            BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+            BlogSessionStatus.AWAITING_FINAL_REVIEW.value,
             BlogSessionStatus.REVISION_REQUESTED.value,
         ]
         result = await self._session.execute(
@@ -109,27 +129,35 @@ class BlogSessionRepository:
         )
         return int(result.scalar_one() or 0)
 
+    # ------------------------------------------------------------------
+    # Status mutations (saga-guarded)
+    # ------------------------------------------------------------------
+
     async def update_status(
         self,
         session_id: int,
         status: BlogSessionStatus,
         current_stage: Optional[str] = None,
         error_message: Optional[str] = None,
+        failure_reason: Optional[str] = None,
         lease_version: Optional[int] = None,
     ) -> bool:
-        """Update session status.
-        
+        """Update session status with saga transition validation.
+
         If lease_version is provided, validates that the session hasn't been
         reaped (lease changed) before applying the update. This prevents stale
         workers from overwriting the reaper's state.
-        
+
         Returns:
-            True if update was applied, False if lease mismatch (session was reaped).
+            True if update was applied, False if lease mismatch or not found.
+
+        Raises:
+            IllegalStateTransition: If the transition violates the saga map.
         """
         blog_session = await self.get_by_id(session_id)
         if not blog_session:
             return False
-        
+
         if lease_version is not None and blog_session.lease_version != lease_version:
             logger.warning(
                 "update_status_lease_mismatch",
@@ -138,12 +166,17 @@ class BlogSessionRepository:
                 actual_lease=blog_session.lease_version,
             )
             return False
-        
+
+        # ── Saga guard ──
+        SagaStateMachine.validate(blog_session.status, status, session_id)
+
         blog_session.status = status
         if current_stage is not None:
             blog_session.current_stage = current_stage
         if error_message is not None:
             blog_session.error_message = error_message
+        if failure_reason is not None:
+            blog_session.failure_reason = failure_reason
         blog_session.updated_at = datetime.now(timezone.utc)
         if status == BlogSessionStatus.COMPLETED:
             blog_session.completed_at = datetime.now(timezone.utc)
@@ -183,6 +216,119 @@ class BlogSessionRepository:
         return 0
 
     # ------------------------------------------------------------------
+    # Cancellation (saga-guarded)
+    # ------------------------------------------------------------------
+
+    async def cancel_session(
+        self,
+        session_id: int,
+        failure_reason: str = "user_cancelled",
+    ) -> bool:
+        """Cancel a session if the saga state machine permits it.
+
+        Cancellation policy:
+        - QUEUED, AWAITING_OUTLINE_REVIEW, REVISION_REQUESTED → always allowed.
+        - PROCESSING → only if current_stage is in {intent, outline, research}.
+        - AWAITING_FINAL_REVIEW → blocked (must approve/revise or let it fail).
+        - COMPLETED, FAILED, CANCELLED → already terminal.
+
+        Returns:
+            True if the session was cancelled, False if not found.
+
+        Raises:
+            IllegalStateTransition: If cancellation is not permitted.
+        """
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(BlogSession.id == session_id)
+            .with_for_update()
+        )
+        blog_session = result.scalar_one_or_none()
+
+        if blog_session is None:
+            return False
+
+        # Check the high-level saga cancellability rule (status + stage).
+        if not SagaStateMachine.is_cancellable(
+            blog_session.status, blog_session.current_stage
+        ):
+            # Delegate to validate() to produce a clean error with context.
+            SagaStateMachine.validate(
+                blog_session.status,
+                BlogSessionStatus.CANCELLED,
+                session_id,
+            )
+
+        # If is_cancellable passed, the transition is legal — but we still
+        # call validate() to go through the canonical path.
+        SagaStateMachine.validate(
+            blog_session.status,
+            BlogSessionStatus.CANCELLED,
+            session_id,
+        )
+
+        now = datetime.now(timezone.utc)
+        blog_session.status = BlogSessionStatus.CANCELLED
+        blog_session.failure_reason = failure_reason
+        blog_session.owned_by = None
+        blog_session.claimed_at = None
+        blog_session.last_heartbeat_at = None
+        blog_session.updated_at = now
+
+        return True
+
+    # ------------------------------------------------------------------
+    # Failure (saga-guarded, with reason)
+    # ------------------------------------------------------------------
+
+    async def fail_session(
+        self,
+        session_id: int,
+        failure_reason: str,
+        error_message: Optional[str] = None,
+    ) -> bool:
+        """Transition a session to FAILED with a classified reason.
+
+        This is the primary method for recording session failures — it stores
+        the ``failure_reason`` alongside the status change so that compensation
+        and downstream consumers can distinguish operational from system faults.
+
+        Returns:
+            True if the session was failed, False if not found.
+
+        Raises:
+            IllegalStateTransition: If the current status cannot transition to FAILED.
+        """
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(BlogSession.id == session_id)
+            .with_for_update()
+        )
+        blog_session = result.scalar_one_or_none()
+
+        if blog_session is None:
+            return False
+
+        # ── Saga guard ──
+        SagaStateMachine.validate(
+            blog_session.status,
+            BlogSessionStatus.FAILED,
+            session_id,
+        )
+
+        now = datetime.now(timezone.utc)
+        blog_session.status = BlogSessionStatus.FAILED
+        blog_session.failure_reason = failure_reason
+        if error_message is not None:
+            blog_session.error_message = error_message
+        blog_session.owned_by = None
+        blog_session.claimed_at = None
+        blog_session.last_heartbeat_at = None
+        blog_session.updated_at = now
+
+        return True
+
+    # ------------------------------------------------------------------
     # Lease-based ownership (DB-authoritative reaper support)
     # ------------------------------------------------------------------
 
@@ -194,6 +340,7 @@ class BlogSessionRepository:
         """Atomically claim a session for processing.
 
         Uses SELECT FOR UPDATE to prevent race conditions.
+        Validates QUEUED → PROCESSING transition via the saga state machine.
 
         Returns:
             The new lease_version on success, or None if the session
@@ -224,6 +371,15 @@ class BlogSessionRepository:
             and blog_session.status == BlogSessionStatus.PROCESSING
         ):
             return None
+
+        # ── Saga guard (QUEUED → PROCESSING) ──
+        # Skip validation if already PROCESSING (re-claim after reap).
+        if blog_session.status != BlogSessionStatus.PROCESSING:
+            SagaStateMachine.validate(
+                blog_session.status,
+                BlogSessionStatus.PROCESSING,
+                session_id,
+            )
 
         now = datetime.now(timezone.utc)
         blog_session.status = BlogSessionStatus.PROCESSING
@@ -272,6 +428,7 @@ class BlogSessionRepository:
     ) -> bool:
         """Mark session completed — only if the lease is still valid.
 
+        Validates the transition via the saga state machine.
         Returns False if a stale worker tries to complete an already-reaped job.
         """
         result = await self._session.execute(
@@ -284,7 +441,7 @@ class BlogSessionRepository:
                     [
                         BlogSessionStatus.PROCESSING.value,
                         BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
-                        BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+                        BlogSessionStatus.AWAITING_FINAL_REVIEW.value,
                     ]
                 ),
             )
@@ -295,13 +452,16 @@ class BlogSessionRepository:
         if blog_session is None:
             return False
 
+        # ── Saga guard ──
+        SagaStateMachine.validate(
+            blog_session.status,
+            BlogSessionStatus.COMPLETED,
+            session_id,
+        )
+
         now = datetime.now(timezone.utc)
-        if blog_session.status in (
-            BlogSessionStatus.PROCESSING.value,
-            BlogSessionStatus.PROCESSING,
-        ):
-            blog_session.status = BlogSessionStatus.COMPLETED
-            blog_session.completed_at = now
+        blog_session.status = BlogSessionStatus.COMPLETED
+        blog_session.completed_at = now
         blog_session.owned_by = None
         blog_session.claimed_at = None
         blog_session.last_heartbeat_at = None
@@ -325,7 +485,7 @@ class BlogSessionRepository:
                 BlogSession.status.in_(
                     [
                         BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
-                        BlogSessionStatus.AWAITING_HUMAN_REVIEW.value,
+                        BlogSessionStatus.AWAITING_FINAL_REVIEW.value,
                     ]
                 ),
             )
@@ -350,7 +510,10 @@ class BlogSessionRepository:
         status: BlogSessionStatus,
         current_stage: str,
     ) -> bool:
-        """Transition a leased processing session into a paused review state."""
+        """Transition a leased processing session into a paused review state.
+
+        Validates PROCESSING → pause-status transition via the saga state machine.
+        """
         result = await self._session.execute(
             select(BlogSession)
             .where(
@@ -364,6 +527,13 @@ class BlogSessionRepository:
         blog_session = result.scalar_one_or_none()
         if blog_session is None:
             return False
+
+        # ── Saga guard ──
+        SagaStateMachine.validate(
+            BlogSessionStatus.PROCESSING,
+            status,
+            session_id,
+        )
 
         now = datetime.now(timezone.utc)
         blog_session.status = status
@@ -380,11 +550,15 @@ class BlogSessionRepository:
         lease_version: int,
         worker_id: str,
         requeue: bool = False,
+        failure_reason: Optional[str] = None,
+        error_message: Optional[str] = None,
     ) -> bool:
         """Mark session failed — only if the lease is still valid.
 
         If ``requeue`` is True, reset to QUEUED for retry instead of FAILED.
         Returns False if a stale worker tries to mutate an already-reaped job.
+
+        Validates transitions via the saga state machine.
         """
         result = await self._session.execute(
             select(BlogSession)
@@ -401,6 +575,15 @@ class BlogSessionRepository:
         if blog_session is None:
             return False
 
+        target_status = BlogSessionStatus.QUEUED if requeue else BlogSessionStatus.FAILED
+
+        # ── Saga guard ──
+        SagaStateMachine.validate(
+            blog_session.status,
+            target_status,
+            session_id,
+        )
+
         now = datetime.now(timezone.utc)
         if requeue:
             blog_session.status = BlogSessionStatus.QUEUED
@@ -410,11 +593,18 @@ class BlogSessionRepository:
             blog_session.last_heartbeat_at = None
         else:
             blog_session.status = BlogSessionStatus.FAILED
+            blog_session.failure_reason = failure_reason
+            if error_message is not None:
+                blog_session.error_message = error_message
             blog_session.owned_by = None
             blog_session.last_heartbeat_at = None
         blog_session.updated_at = now
 
         return True
+
+    # ------------------------------------------------------------------
+    # Stale session reaping
+    # ------------------------------------------------------------------
 
     async def find_stale_processing(
         self,
@@ -449,6 +639,7 @@ class BlogSessionRepository:
         """Reap a stale session: reset to QUEUED, bump lease, clear ownership.
 
         Uses SELECT FOR UPDATE for atomicity.
+        Validates PROCESSING → QUEUED transition via the saga state machine.
 
         Returns:
             The new lease_version, or None if the session is no longer reapable.
@@ -466,6 +657,13 @@ class BlogSessionRepository:
         # Only reap sessions that are still processing.
         if blog_session.status != BlogSessionStatus.PROCESSING:
             return None
+
+        # ── Saga guard ──
+        SagaStateMachine.validate(
+            blog_session.status,
+            BlogSessionStatus.QUEUED,
+            session_id,
+        )
 
         now = datetime.now(timezone.utc)
         blog_session.status = BlogSessionStatus.QUEUED
