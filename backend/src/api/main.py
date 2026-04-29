@@ -65,6 +65,9 @@ async def graceful_shutdown():
     
     logger.info("graceful_shutdown_complete")
 
+    loop = asyncio.get_event_loop()
+    loop.stop()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
