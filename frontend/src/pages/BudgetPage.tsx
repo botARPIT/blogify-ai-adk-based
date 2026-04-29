@@ -1,32 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { getBudget, type BudgetSnapshot } from '../lib/api/blogs';
+import React from 'react';
 import LoadingState from '../components/state/LoadingState';
 import ErrorState from '../components/state/ErrorState';
+import { useBudgetPolling } from '../hooks/useBudgetPolling';
 
 const BudgetPage: React.FC = () => {
-  const [budget, setBudget] = useState<BudgetSnapshot | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let isActive = true;
-    getBudget()
-      .then((data) => {
-        if (!isActive) return;
-        setBudget(data);
-      })
-      .catch((err) => {
-        if (!isActive) return;
-        setError(err instanceof Error ? err.message : 'Failed to fetch budget');
-      })
-      .finally(() => {
-        if (isActive) setLoading(false);
-      });
-
-    return () => {
-      isActive = false;
-    };
-  }, []);
+  const { budget, loading, error } = useBudgetPolling();
 
   if (loading) {
     return <LoadingState title="Loading budget..." message="Fetching current tenant and end-user budget state." />;
@@ -49,6 +27,13 @@ const BudgetPage: React.FC = () => {
       </div>
 
       <div className="stat-grid">
+        {error && (
+          <div className="bento-card panel-card">
+            <span className="eyebrow-label">Refresh Status</span>
+            <p className="text-secondary">{error}</p>
+          </div>
+        )}
+
         <div className="bento-card panel-card">
           <span className="eyebrow-label">Daily Spend</span>
           <h3 className="stat-number text-accent">${budget.daily_spent_usd.toFixed(2)}</h3>

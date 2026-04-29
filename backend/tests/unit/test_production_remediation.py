@@ -131,7 +131,7 @@ class TestLocalAuthHardening:
 
 class TestBudgetAccounting:
     @pytest.mark.asyncio
-    async def test_daily_spent_query_subtracts_release_entries(self):
+    async def test_daily_spent_query_clamps_outstanding_reservations(self):
         session = _CaptureSession()
         repo = BudgetRepository(session)
 
@@ -147,7 +147,8 @@ class TestBudgetAccounting:
 
         assert "case" in compiled
         assert "release" in compiled
-        assert "-budget_ledger_entries.quantity" in compiled
+        assert "greatest" in compiled
+        assert "outstanding" in compiled
 
 
 class TestInternalRouteValidation:

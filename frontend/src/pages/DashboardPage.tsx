@@ -3,14 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   generateBlog,
-  getBudget,
   getSession,
-  type BudgetSnapshot,
   type GenerateBlogRequest,
 } from '../lib/api/blogs';
 import { getRouteForStatus } from '../lib/session-routing';
 import StatusBadge from '../components/session/StatusBadge';
 import LoadingState from '../components/state/LoadingState';
+import { useBudgetPolling } from '../hooks/useBudgetPolling';
 
 interface RecentSession {
   sessionId: string;
@@ -28,9 +27,8 @@ const DashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [recentSessions, setRecentSessions] = useState<RecentSession[]>([]);
-  const [budget, setBudget] = useState<BudgetSnapshot | null>(null);
-  const [budgetError, setBudgetError] = useState('');
   const [hydrated, setHydrated] = useState(false);
+  const { budget, error: budgetError } = useBudgetPolling();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -45,19 +43,6 @@ const DashboardPage: React.FC = () => {
       setHydrated(true);
     }
   }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-
-    getBudget()
-      .then((snapshot) => {
-        setBudget(snapshot);
-        setBudgetError('');
-      })
-      .catch((err) => {
-        setBudgetError(err instanceof Error ? err.message : 'Failed to load budget');
-      });
-  }, [hydrated]);
 
   useEffect(() => {
     if (!hydrated || recentSessions.length === 0) return;

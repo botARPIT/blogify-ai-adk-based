@@ -160,6 +160,13 @@ class TestServiceClientBudgetEnforcement:
                 ),
                 patch.object(canonical.db_repository, "async_session", return_value=_AsyncSessionContext()),
                 patch.object(canonical.ServiceClientBudgetService, "preflight", new=AsyncMock(return_value=decision)),
+                patch.object(
+                    canonical.idempotency_store,
+                    "check_and_set",
+                    new=AsyncMock(return_value=SimpleNamespace(state=canonical.IdempotencyState.NEW)),
+                ),
+                patch.object(canonical.idempotency_store, "set_response", new=AsyncMock()),
+                patch.object(canonical.idempotency_store, "clear", new=AsyncMock()),
             ):
                 with pytest.raises(HTTPException) as exc:
                     await canonical.service_generate_blog(
@@ -169,7 +176,8 @@ class TestServiceClientBudgetEnforcement:
                     )
 
         assert exc.value.status_code == 402
-        assert exc.value.detail["reset_at"] == "2026-03-27T00:00:00+00:00"
+        assert exc.value.detail["error_code"] == "SERVICE_CLIENT_BUDGET_EXCEEDED"
+        assert exc.value.detail["error"] == "budget_exhausted"
 
     @pytest.mark.asyncio
     async def test_service_client_budget_service_blocks_when_limit_exhausted(self):

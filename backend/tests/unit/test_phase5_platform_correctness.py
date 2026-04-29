@@ -79,12 +79,17 @@ class TestBudgetSnapshotCorrectness:
 
         budget_repo = AsyncMock()
         budget_repo.get_effective_policy.return_value = SimpleNamespace(
+            id=99,
+            scope="default",
             daily_cost_limit_usd=5.0,
             daily_token_limit=10000,
+            daily_blog_limit=5,
             max_concurrent_sessions=2,
             max_revision_iterations_per_session=3,
+            soft_stop_enabled=False,
         )
-        budget_repo.get_daily_spent.side_effect = [1.5, 2500]
+        budget_repo.get_daily_committed.side_effect = [1.5, 2500, 1]
+        budget_repo.get_daily_reserved_exposure.side_effect = [0.4, 1000, 2]
         session_repo = AsyncMock()
         session_repo.count_active_for_end_user.return_value = 3
 
@@ -95,6 +100,10 @@ class TestBudgetSnapshotCorrectness:
 
         assert snapshot.active_sessions == 3
         assert snapshot.remaining_revision_iterations == 3
+        assert snapshot.daily_spent_usd == 1.5
+        assert snapshot.daily_reserved_exposure_usd == 0.4
+        assert snapshot.daily_total_exposure_usd == 1.9
+        assert snapshot.daily_blog_count_reserved == 2
         session_repo.count_active_for_end_user.assert_awaited_once_with(11)
 
 
@@ -209,19 +218,9 @@ class TestRouteCoverage:
         request.state.authenticated = True
 
         with patch.dict(sys.modules, _install_google_adk_stubs()):
+            canonical = importlib.import_module("src.api.routes.canonical")
             with (
-                patch(
-                    "src.services.adapter_auth_service.AdapterAuthService.resolve_standalone_mode",
-                    new=AsyncMock(
-                        return_value=SimpleNamespace(
-                            tenant_id=5,
-                            end_user_id=11,
-                            service_client_id=1,
-                            mode="standalone",
-                            external_user_id="7",
-                        )
-                    ),
-                ),
+                patch.object(canonical, "_resolve_standalone_budget", new=AsyncMock(return_value=(5, 11))),
                 patch.object(main.db_repository, "async_session", return_value=_AsyncSessionContext()),
                 patch.object(main.BudgetService, "get_snapshot", new=AsyncMock(return_value=snapshot)),
             ):

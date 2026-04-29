@@ -15,6 +15,20 @@ const OutputPage: React.FC = () => {
   const { content, loading, error } = useBlogContent(sessionId);
   const { session } = useSessionStatus(sessionId, false);
 
+  const handleCopyMarkdown = async () => {
+    if (!content) return;
+    try {
+      await navigator.clipboard.writeText(content.content_markdown);
+      toast.success('Markdown copied', {
+        description: 'The final blog content is now on your clipboard.',
+      });
+    } catch (err) {
+      toast.error('Copy failed', {
+        description: err instanceof Error ? err.message : 'Unable to copy markdown.',
+      });
+    }
+  };
+
   if (!sessionId) {
     return <ErrorState title="No Session Selected" message="Start a generation from the dashboard to view output." />;
   }
@@ -100,16 +114,3 @@ const OutputPage: React.FC = () => {
 };
 
 export default OutputPage;
-  const handleCopyMarkdown = async () => {
-    if (!content) return;
-    try {
-      await navigator.clipboard.writeText(content.content_markdown);
-      toast.success('Markdown copied', {
-        description: 'The final blog content is now on your clipboard.',
-      });
-    } catch (err) {
-      toast.error('Copy failed', {
-        description: err instanceof Error ? err.message : 'Unable to copy markdown.',
-      });
-    }
-  };
