@@ -172,6 +172,7 @@ class ServiceClient(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     rotated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    webhook_secret: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
     tenants: Mapped[list["Tenant"]] = relationship("Tenant", back_populates="service_client")
     budget_policy: Mapped[Optional["ServiceClientBudgetPolicy"]] = relationship(
@@ -373,6 +374,25 @@ class LedgerResourceType(str, PyEnum):
     REVISION_COUNT = "revision_count"
 
 
+class BudgetReservation(Base):
+    """Budget reservation for tracking pending resource allocation."""
+
+    __tablename__ = "budget_reservations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("tenants.id"), nullable=False)
+    end_user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("end_users.id"), nullable=False
+    )
+    blog_session_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("blog_sessions.id"), nullable=True
+    )
+    resource_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    quantity: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class BudgetLedgerEntry(Base):
     """Canonical usage journal — immutable append-only record."""
 
@@ -402,6 +422,15 @@ class BudgetLedgerEntry(Base):
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     unit_cost_usd: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSONB, nullable=True)
+    reservation_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("budget_reservations.id"), nullable=True
+    )
+    window_type: Mapped[str] = mapped_column(
+        Enum("daily", "weekly", "monthly", name="budget_window_type_enum"),
+        nullable=False,
+        default="daily",
+    )
+    window_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -458,6 +487,19 @@ class BlogSession(Base):
     outline_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     outline_feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Per-user blog counter
+    per_user_blog_number: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Webhook callback
+    callback_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    callback_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Research review (48h deadline)
+    approved_research: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    research_review_deadline: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     # Saga — failure classification
     failure_reason: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
@@ -469,15 +511,6 @@ class BlogSession(Base):
     budget_reserved_tokens: Mapped[int] = mapped_column(Integer, default=0)
     budget_spent_usd: Mapped[float] = mapped_column(Float, default=0.0)
     budget_spent_tokens: Mapped[int] = mapped_column(Integer, default=0)
-
-    # Lease-based ownership (DB-authoritative reaper support)
-    lease_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    reap_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    owned_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
@@ -492,6 +525,36 @@ class BlogSession(Base):
     )
     agent_runs: Mapped[list["AgentRun"]] = relationship(
         "AgentRun", back_populates="session"
+    )
+    lease: Mapped[Optional["SessionLease"]] = relationship(
+        "SessionLease", back_populates="blog_session", uselist=False
+    )
+
+
+class SessionLease(Base):
+    """Lease-based ownership tracking for distributed workers."""
+
+    __tablename__ = "session_leases"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    blog_session_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("blog_sessions.id", ondelete="CASCADE"),
+        unique=True, index=True
+    )
+    lease_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    reap_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    owned_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    blog_session: Mapped["BlogSession"] = relationship(
+        "BlogSession", back_populates="lease"
     )
 
 

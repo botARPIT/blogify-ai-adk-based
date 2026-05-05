@@ -53,16 +53,26 @@ class JobReaper:
             interval=self.interval,
         )
 
-    async def stop(self) -> None:
-        """Gracefully stop the reaper."""
+    async def stop(self, force: bool = False) -> None:
+        """Gracefully stop the reaper.
+        
+        Args:
+            force: If True, force stop without waiting for task completion.
+        """
         self._running = False
         if self._task is not None:
             self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
+            if force:
+                if not self._task.done():
+                    self._task.cancel()
+                self._task = None
+                logger.info("reaper_force_stopped")
+            else:
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+                self._task = None
         logger.info("reaper_stopped")
 
     async def _loop(self) -> None:
@@ -90,9 +100,9 @@ class JobReaper:
 
                 for blog_session in stale_sessions:
                     session_id = blog_session.id
-                    old_owner = blog_session.owned_by
-                    old_lease = blog_session.lease_version
-                    old_reap_count = blog_session.reap_count
+                    old_owner = blog_session.lease.owned_by if blog_session.lease else None
+                    old_lease = blog_session.lease.lease_version if blog_session.lease else None
+                    old_reap_count = blog_session.lease.reap_count if blog_session.lease else 0
 
                     if old_reap_count >= self.max_reap_count:
                         logger.warning(

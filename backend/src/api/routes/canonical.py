@@ -21,7 +21,7 @@ from src.core.compensation import compensate, classify_failure
 from src.core.errors import format_error_response
 from src.core.idempotency import IdempotencyState, idempotency_store
 from src.guards.rate_limit_guard import rate_limit_guard
-from src.core.task_queue import QueueFullError, enqueue_blog_generation
+from src.core.task_queue import QueueFullError, enqueue_blog_generation, task_queue
 from src.core.session_store import redis_session_service
 from src.models.orm_models import BlogSessionStatus, EndUser, ServiceClient
 from src.models.repository import db_repository
@@ -33,7 +33,8 @@ from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.human_review_repository import HumanReviewRepository
 from src.models.repositories.identity_repository import IdentityRepository
 from src.models.repositories.notification_repository import NotificationRepository
-from src.models.schemas import BudgetDecision, BudgetExhaustedDetail, ResolvedIdentity
+from src.models.schemas import BudgetDecision, BudgetExhaustedDetail, ResolvedIdentity, GenerateBlogResponse
+from src.services.blog_generation_service import BlogGenerationService
 from src.models.schemas import (
     AgentRunSummary,
     BlogContentView,
@@ -49,6 +50,8 @@ from src.models.schemas import (
     OutlineReviewRequest,
     OutlineReviewView,
     OutlineSchema,
+    QueueStatusResponse,
+    RegenerateRequest,
     SessionDetailView,
 )
 from src.models.repositories.service_client_budget_repository import (
@@ -1239,7 +1242,7 @@ async def generate_blog(
         endpoint="/api/v1/blogs/generate",
         idempotency_key=idempotency_key,
         request_body=request.model_dump(exclude={"user_id"}, exclude_none=True),
-        action=lambda: _create_generation_response(
+        action=lambda: BlogGenerationService(db_session_factory=db_repository.async_session).create_generation(
             identity=identity,
             topic=request.topic,
             audience=request.audience,
@@ -1499,13 +1502,14 @@ async def service_generate_blog(
         endpoint="/internal/ai/blogs",
         idempotency_key=idempotency_key or request.request_id,
         request_body=request.model_dump(exclude_none=True),
-        action=lambda: _create_service_generation_response(
+        action=lambda: BlogGenerationService(db_session_factory=db_repository.async_session).create_generation(
             identity=identity,
             topic=request.topic,
             audience=request.audience,
             tone=request.tone,
             external_request_id=request.request_id,
             external_blog_id=request.external_blog_id,
+            is_service_client=True,
         ),
         cacheable_error_statuses={402, 409, 503},
     )
@@ -1702,3 +1706,212 @@ async def service_get_budget(
         )
         daily_cost_usd.labels(scope="user").set(snapshot.daily_spent_usd)
         return snapshot
+
+
+STAGE_TO_JOB_PHASE = {
+    "intent": "outline_gate",
+    "outline": "research_phase",
+    "outline_approved": "research_phase",
+    "research": "writer_phase",
+    "writer": "editor_phase",
+    "editor": "final_review",
+    "revision_requested": "writer_phase",
+    None: "outline_gate",
+}
+
+
+@canonical_router.get(
+    "/blogs/{session_id}/queue-status",
+    response_model=QueueStatusResponse,
+    summary="Get queue status for a blog session",
+)
+async def get_queue_status(
+    session_id: str,
+    http_request: Request,
+):
+    """Check if job is in queue and if worker has claimed it."""
+    try:
+        blog_session_id = int(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id must be an integer")
+
+    current_user = require_authenticated_user(http_request)
+
+    async with db_repository.async_session() as session:
+        session_repo = BlogSessionRepository(session)
+        blog_session = await session_repo.get_by_id(blog_session_id)
+
+        if blog_session is None:
+            raise HTTPException(status_code=404, detail="Blog session not found")
+        await _assert_owned_session(blog_session, current_user.user_id, session)
+
+        queue_data, _ = await task_queue.get_cached_queue_status(blog_session_id)
+        is_in_queue = queue_data.get("is_in_queue", False) if queue_data else False
+        queue_position = queue_data.get("queue_position") if queue_data and is_in_queue else None
+
+        regenerate_available = False
+        regenerate_message = None
+
+        terminal_statuses = {
+            BlogSessionStatus.COMPLETED.value,
+            BlogSessionStatus.FAILED.value,
+            BlogSessionStatus.CANCELLED.value,
+        }
+
+        if blog_session.status in terminal_statuses:
+            regenerate_available = False
+            regenerate_message = None
+        elif blog_session.lease is not None and blog_session.lease.owned_by is not None:
+            regenerate_available = False
+            regenerate_message = "Worker is processing this blog"
+        elif is_in_queue:
+            regenerate_available = False
+            regenerate_message = "Blog will generate shortly"
+        elif blog_session.status == BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value:
+            regenerate_available = False
+            regenerate_message = "Waiting for outline review"
+        elif blog_session.status == BlogSessionStatus.AWAITING_FINAL_REVIEW.value:
+            regenerate_available = False
+            regenerate_message = "Waiting for final review"
+        elif blog_session.status == BlogSessionStatus.QUEUED.value:
+            regenerate_available = True
+            regenerate_message = "Click to start generation"
+        elif blog_session.status == BlogSessionStatus.REVISION_REQUESTED.value:
+            regenerate_available = True
+            regenerate_message = "Click to resume generation"
+        elif blog_session.status == BlogSessionStatus.PROCESSING.value and (blog_session.lease is None or blog_session.lease.owned_by is None):
+            regenerate_available = True
+            regenerate_message = "Session stalled - regenerating"
+        else:
+            regenerate_available = True
+            regenerate_message = None
+
+        return QueueStatusResponse(
+            session_id=str(blog_session.id),
+            status=blog_session.status,
+            current_stage=blog_session.current_stage,
+            owned_by=blog_session.lease.owned_by if blog_session.lease else None,
+            claimed_at=blog_session.lease.claimed_at if blog_session.lease else None,
+            is_in_queue=is_in_queue,
+            queue_position=queue_position,
+            regenerate_available=regenerate_available,
+            regenerate_message=regenerate_message,
+            lease_version=blog_session.lease.lease_version if blog_session.lease else None,
+        )
+
+
+@canonical_router.post(
+    "/blogs/{session_id}/regenerate",
+    response_model=QueueStatusResponse,
+    summary="Regenerate a blog session that is not in queue",
+)
+async def regenerate_blog(
+    session_id: str,
+    request: RegenerateRequest,
+    http_request: Request,
+):
+    """Regenerate (re-enqueue) a blog session that is not in queue."""
+    ensure_csrf_header(http_request)
+    current_user = require_authenticated_user(http_request)
+
+    # Rate limiting: 2 requests per minute per user
+    allowed, message = await rate_limit_guard.check_user_regenerate_limit(current_user.user_id)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded. {message}",
+            headers={"Retry-After": "60"}
+        )
+
+    try:
+        blog_session_id = int(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id must be an integer")
+
+    identity = await _resolve_standalone_identity(current_user.user_id, email=current_user.email)
+
+    async with db_repository.async_session() as session:
+        async with session.begin():
+            session_repo = BlogSessionRepository(session)
+            blog_session = await session_repo.get_by_id_for_update(blog_session_id)
+
+            if blog_session is None:
+                raise HTTPException(status_code=404, detail="Blog session not found")
+            await _assert_owned_session(blog_session, current_user.user_id, session)
+
+            terminal_statuses = {
+                BlogSessionStatus.COMPLETED.value,
+                BlogSessionStatus.FAILED.value,
+                BlogSessionStatus.CANCELLED.value,
+            }
+
+            if blog_session.status in terminal_statuses:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot regenerate a completed, failed, or cancelled session"
+                )
+
+            if blog_session.status in {
+                BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
+                BlogSessionStatus.AWAITING_FINAL_REVIEW.value,
+            }:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Session is waiting for human review"
+                )
+
+            if blog_session.lease is not None and blog_session.lease.owned_by is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Session is already claimed by a worker"
+                )
+
+            current_lease = blog_session.lease.lease_version if blog_session.lease else None
+            if request.lease_version != current_lease:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Lease version mismatch - session was modified"
+                )
+
+            is_in_queue, _ = await task_queue.is_job_in_queue(blog_session_id)
+            if is_in_queue:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Job is already in queue"
+                )
+
+            job_phase = STAGE_TO_JOB_PHASE.get(blog_session.current_stage, "outline_gate")
+
+            try:
+                await enqueue_blog_generation(
+                    user_id=identity.external_user_id,
+                    topic=blog_session.topic,
+                    audience=blog_session.audience,
+                    session_id=str(blog_session_id),
+                    blog_id=None,
+                    canonical_session_id=blog_session_id,
+                    tenant_id=identity.tenant_id,
+                    end_user_id=identity.end_user_id,
+                    job_phase=job_phase,
+                )
+            except QueueFullError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Queue is full: {exc}"
+                )
+
+            await task_queue.invalidate_queue_status_cache(blog_session_id)
+            await session.refresh(blog_session)
+
+            return QueueStatusResponse(
+                session_id=str(blog_session.id),
+                status=blog_session.status,
+                current_stage=blog_session.current_stage,
+                owned_by=blog_session.lease.owned_by if blog_session.lease else None,
+                claimed_at=blog_session.lease.claimed_at if blog_session.lease else None,
+                is_in_queue=True,
+                queue_position=None,
+                regenerate_available=False,
+                regenerate_message="Blog will generate shortly",
+                lease_version=blog_session.lease.lease_version if blog_session.lease else None,
+            )
