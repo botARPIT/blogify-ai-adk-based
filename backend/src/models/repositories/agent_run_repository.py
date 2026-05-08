@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
+from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,65 +18,8 @@ class AgentRunRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def start(
-        self,
-        blog_session_id: int,
-        stage_name: str,
-        agent_name: str,
-        model_name: str,
-        blog_version_id: Optional[int] = None,
-        parent_agent_run_id: Optional[int] = None,
-        input_summary: Optional[dict] = None,
-    ) -> AgentRun:
-        run = AgentRun(
-            blog_session_id=blog_session_id,
-            blog_version_id=blog_version_id,
-            parent_agent_run_id=parent_agent_run_id,
-            stage_name=stage_name,
-            agent_name=agent_name,
-            model_name=model_name,
-            status=AgentRunStatus.STARTED,
-            input_summary=input_summary,
-        )
-        self._session.add(run)
-        await self._session.flush()
-        return run
-
-    async def complete(
-        self,
-        run_id: int,
-        prompt_tokens: int,
-        completion_tokens: int,
-        cost_usd: float,
-        latency_ms: int,
-        output_summary: Optional[dict] = None,
-        prompt_artifact_uri: Optional[str] = None,
-        response_artifact_uri: Optional[str] = None,
-    ) -> None:
-        run = await self.get_by_id(run_id)
-        if run:
-            run.status = AgentRunStatus.COMPLETED
-            run.prompt_tokens = prompt_tokens
-            run.completion_tokens = completion_tokens
-            run.total_tokens = prompt_tokens + completion_tokens
-            run.cost_usd = cost_usd
-            run.latency_ms = latency_ms
-            run.output_summary = output_summary
-            run.prompt_artifact_uri = prompt_artifact_uri
-            run.response_artifact_uri = response_artifact_uri
-            run.completed_at = datetime.now(timezone.utc)
-
-    async def fail(
-        self,
-        run_id: int,
-        error_message: str,
-        status: AgentRunStatus = AgentRunStatus.FAILED,
-    ) -> None:
-        run = await self.get_by_id(run_id)
-        if run:
-            run.status = status
-            run.error_message = error_message
-            run.completed_at = datetime.now(timezone.utc)
+    def session(self) -> AsyncSession:
+        return self._session
 
     async def get_by_id(self, run_id: int) -> Optional[AgentRun]:
         result = await self._session.execute(
@@ -101,7 +45,7 @@ class AgentRunRepository:
             select(AgentRun.stage_name)
             .where(
                 AgentRun.blog_session_id == blog_session_id,
-                AgentRun.status == AgentRunStatus.COMPLETED,
+                AgentRun.status == AgentRunStatus.COMPLETED.value,
             )
         )
         return {row[0] for row in result.all()}
@@ -115,7 +59,7 @@ class AgentRunRepository:
             .where(
                 AgentRun.blog_session_id == blog_session_id,
                 AgentRun.stage_name == stage_name,
-                AgentRun.status == AgentRunStatus.COMPLETED,
+                AgentRun.status == AgentRunStatus.COMPLETED.value,
             )
             .limit(1)
         )
@@ -134,6 +78,7 @@ class AgentRunRepository:
 
     async def create(
         self,
+        user_id: int,
         blog_session_id: int,
         stage_name: str,
         agent_name: str,
@@ -143,8 +88,11 @@ class AgentRunRepository:
         completion_tokens: int = 0,
         total_tokens: int = 0,
         cost_usd: float = 0.0,
+        latency_ms: Optional[int] = None,
+        output_snapshot: Optional[dict] = None,
     ) -> AgentRun:
         run = AgentRun(
+            user_id=user_id,
             blog_session_id=blog_session_id,
             stage_name=stage_name,
             agent_name=agent_name,
@@ -153,7 +101,9 @@ class AgentRunRepository:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
-            cost_usd=cost_usd,
+            cost_usd=Decimal(str(cost_usd)),
+            latency_ms=latency_ms,
+            output_snapshot=output_snapshot,
         )
         self._session.add(run)
         await self._session.flush()
@@ -167,13 +117,56 @@ class AgentRunRepository:
         total_tokens: int,
         cost_usd: float,
         status: str,
+        latency_ms: Optional[int] = None,
+        output_snapshot: Optional[dict] = None,
     ) -> None:
         run = await self.get_by_id(run_id)
         if run:
             run.prompt_tokens = prompt_tokens
             run.completion_tokens = completion_tokens
             run.total_tokens = total_tokens
-            run.cost_usd = cost_usd
+            run.cost_usd = Decimal(str(cost_usd))
             run.status = status
+            run.latency_ms = latency_ms
+            run.output_snapshot = output_snapshot
             run.completed_at = datetime.now(timezone.utc)
             await self._session.flush()
+
+    async def get_duration_ms(self, run_id: int) -> Optional[int]:
+        """Get the duration of an agent run in milliseconds."""
+        run = await self.get_by_id(run_id)
+        if run and run.completed_at and run.started_at:
+            return int((run.completed_at - run.started_at).total_seconds() * 1000)
+        return None
+
+    async def get_output_snapshot(self, run_id: int) -> Optional[dict]:
+        """Get the output snapshot for an agent run."""
+        run = await self.get_by_id(run_id)
+        return run.output_snapshot if run else None
+
+    async def get_session_timeline(
+        self, blog_session_id: int
+    ) -> list[dict]:
+        """Get timeline of all agent runs for a session with timing info."""
+        runs = await self.get_for_session(blog_session_id)
+        timeline = []
+        for run in runs:
+            duration_ms = None
+            if run.completed_at and run.started_at:
+                duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+            timeline.append({
+                "run_id": run.id,
+                "stage_name": run.stage_name,
+                "agent_name": run.agent_name,
+                "model_name": run.model_name,
+                "status": run.status,
+                "prompt_tokens": run.prompt_tokens,
+                "completion_tokens": run.completion_tokens,
+                "total_tokens": run.total_tokens,
+                "cost_usd": float(run.cost_usd),
+                "latency_ms": run.latency_ms or duration_ms,
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                "error_message": run.error_message,
+            })
+        return timeline
