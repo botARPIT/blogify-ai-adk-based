@@ -58,20 +58,20 @@ const SessionDetailPage: React.FC = () => {
 
       <div className="stat-grid">
         <div className="bento-card panel-card">
-          <span className="eyebrow-label">Audience</span>
-          <div className="stat-number">{detail.session.audience || 'General'}</div>
+          <span className="eyebrow-label">Total Cost</span>
+          <div className="stat-number stat-number-small">${detail.total_cost_usd.toFixed(4)}</div>
+        </div>
+        <div className="bento-card panel-card">
+          <span className="eyebrow-label">Total Tokens</span>
+          <div className="stat-number stat-number-small">{detail.total_tokens.toLocaleString()}</div>
+        </div>
+        <div className="bento-card panel-card">
+          <span className="eyebrow-label">Words Generated</span>
+          <div className="stat-number stat-number-small">{detail.total_words.toLocaleString()}</div>
         </div>
         <div className="bento-card panel-card">
           <span className="eyebrow-label">Current Stage</span>
           <div className="stat-number stat-number-small">{detail.session.current_stage || 'queued'}</div>
-        </div>
-        <div className="bento-card panel-card">
-          <span className="eyebrow-label">Iterations</span>
-          <div className="stat-number">{detail.session.iteration_count}</div>
-        </div>
-        <div className="bento-card panel-card">
-          <span className="eyebrow-label">Spent Tokens</span>
-          <div className="stat-number stat-number-small">{detail.session.budget_spent_tokens}</div>
         </div>
       </div>
 
@@ -81,9 +81,9 @@ const SessionDetailPage: React.FC = () => {
           {detail.outline ? (
             <div className="outline-snapshot">
               <div className="outline-title">
-                {detail.outline.outline.title}
+                {detail.outline.title}
               </div>
-              {detail.outline.outline.sections.map((section) => (
+              {detail.outline.sections.map((section) => (
                 <div key={section.id} className="outline-section">
                   <div className="eyebrow-label">{section.heading}</div>
                   <p className="text-secondary">{section.goal}</p>
