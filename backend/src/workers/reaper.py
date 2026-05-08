@@ -1,94 +1,76 @@
-"""Standalone reaper process for stale blog sessions.
+"""Reaper — recovers stale jobs and re-enqueues them for retry.
 
-This runs as a separate process from the worker to ensure:
-- Reaper is not affected by worker load
-- Independent scaling and monitoring
-- Separate lifecycle management
-
-Usage:
-    python -m src.workers.reaper
+Runs as an asyncio task inside blog_worker.py alongside the main loop.
 """
-
-from __future__ import annotations
-
 import asyncio
-import os
-import signal
-import sys
+from datetime import datetime, timezone, timedelta
 
-from dotenv import load_dotenv
+from src.config.logging_config import get_logger
+from src.core.database import AsyncSessionFactory
+from src.core.task_queue import BlogJob, TaskQueue
+from src.models.orm_models import BlogSessionStatus
+from src.models.repositories.blog_session_repository import BlogSessionRepository
 
-env = os.getenv("ENVIRONMENT", "dev")
-load_dotenv(f".env.{env}")
-
-from src.config.env_config import config
-from src.config.logging_config import get_logger, setup_logging
-from src.core.job_reaper import job_reaper
-
-setup_logging(
-    config.log_level,
-    log_format=config.log_format,
-    mask_secrets=config.mask_secrets_in_logs,
-)
 logger = get_logger(__name__)
 
-shutdown_requested = False
+MAX_REAP_COUNT = 3
+REAP_INTERVAL_SECONDS = 60
+STALE_THRESHOLD_MINUTES = 10
 
 
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully."""
-    global shutdown_requested
-    
-    signal_name = signal.Signals(signum).name
-    logger.info("reaper_shutdown_signal_received", signal=signal_name)
-    print(f"\n⚠️  Reaper shutdown signal received ({signal_name})...")
-    shutdown_requested = True
+class Reaper:
+    def __init__(self, task_queue: TaskQueue) -> None:
+        self._queue = task_queue
 
+    async def run_forever(self) -> None:
+        while True:
+            try:
+                await self._reap_db_sessions()
+                await self._reap_queue()
+            except Exception as e:
+                logger.error("reaper_cycle_failed", error=str(e))
+            await asyncio.sleep(REAP_INTERVAL_SECONDS)
 
-async def run_reaper():
-    """Main reaper loop."""
-    global shutdown_requested
-    
-    try:
-        await job_reaper.start()
-        print(f"🌾 Reaper started (interval: {job_reaper.interval}s, stale threshold: {job_reaper.stale_threshold}s)")
-        
-        while not shutdown_requested:
-            await job_reaper._loop()
-            
-    except Exception as e:
-        logger.error("reaper_fatal_error", error=str(e))
-        print(f"💥 Reaper fatal error: {e}")
-        return 1
-    
-    finally:
-        await job_reaper.stop()
-        logger.info("reaper_shutdown_complete")
-        print("👋 Reaper shutdown complete")
-    
-    return 0
+    async def _reap_db_sessions(self) -> None:
+        async with AsyncSessionFactory() as session:
+            session_repo = BlogSessionRepository(session)
+            stale_sessions = await session_repo.get_stale_processing_sessions(
+                STALE_THRESHOLD_MINUTES
+            )
 
+            for session in stale_sessions:
+                new_reap_count = await session_repo.increment_reap_count(session.id)
 
-def main():
-    """Entry point for reaper process."""
-    print("=" * 60)
-    print("  BLOGIFY JOB REAPER")
-    print("=" * 60)
-    
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    try:
-        exit_code = asyncio.run(run_reaper())
-        if isinstance(exit_code, int):
-            sys.exit(exit_code)
-    except KeyboardInterrupt:
-        logger.info("reaper_interrupted")
-    except Exception as e:
-        logger.error("reaper_fatal_error", error=str(e))
-        print(f"💥 Fatal error: {e}")
-        sys.exit(1)
+                if new_reap_count > MAX_REAP_COUNT:
+                    await session_repo.mark_failed(
+                        session.id, "max reap count exceeded"
+                    )
+                    logger.warning(
+                        "session_marked_failed",
+                        session_id=session.id,
+                        reap_count=new_reap_count,
+                    )
+                else:
+                    await session_repo.update_status(
+                        session.id, BlogSessionStatus.QUEUED
+                    )
+                    job = BlogJob(
+                        session_id=session.id,
+                        user_id=session.user_id,
+                        adk_session_id=session.adk_session_id,
+                        topic=session.topic,
+                        audience=session.audience,
+                        tone=session.tone,
+                        phase="start",
+                    )
+                    await self._queue.enqueue(job)
+                    logger.info(
+                        "session_requeued",
+                        session_id=session.id,
+                        reap_count=new_reap_count,
+                    )
 
-
-if __name__ == "__main__":
-    main()
+    async def _reap_queue(self) -> None:
+        reclaimed = await self._queue.reclaim_stale()
+        if reclaimed > 0:
+            logger.info("queue_reclaimed", count=reclaimed)
