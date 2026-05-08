@@ -1,62 +1,68 @@
-"""Input guardrail plugin for validating user requests."""
+"""Schema-based input validation for blog generation requests."""
 
-from typing import Any
-
-from src.config.logging_config import get_logger
-
-logger = get_logger(__name__)
+from typing import Optional
 
 
-class InputGuardrail:
-    """Input validation guardrail using callback pattern."""
+class InputGuard:
+    """Validates blog generation input using schema rules (not keyword matching)."""
 
-    def __init__(self) -> None:
-        self.max_topic_length = 500
-        self.max_audience_length = 200
-        self.blocked_patterns = ["hack", "exploit", "malicious", "attack"]
+    TOPIC_MIN_LENGTH = 3
+    TOPIC_MAX_LENGTH = 500
+    AUDIENCE_MAX_LENGTH = 255
+    TONE_MAX_LENGTH = 100
 
-    def validate_input(self, topic: str, audience: str | None = None) -> tuple[bool, str]:
+    def validate(
+        self,
+        topic: str,
+        audience: Optional[str] = None,
+        tone: Optional[str] = None,
+    ) -> tuple[bool, str]:
         """
-        Validate user input before processing.
-        
-        Args:
-            topic: Blog topic from user
-            audience: Target audience (optional)
+        Validate blog generation input using schema rules.
         
         Returns:
-            (is_valid, error_message)
+            tuple[bool, str]: (is_valid, error_message)
         """
-        # Check topic length
-        if len(topic) > self.max_topic_length:
-            return False, f"Topic too long (max {self.max_topic_length} chars)"
-        
-        # Check audience length
-        if audience and len(audience) > self.max_audience_length:
-            return False, f"Audience too long (max {self.max_audience_length} chars)"
-        
-        # Check for empty topic
-        if not topic or not topic.strip():
-            return False, "Topic cannot be empty"
-        
-        # Check for blocked patterns (simple content safety)
-        topic_lower = topic.lower()
-        for pattern in self.blocked_patterns:
-            if pattern in topic_lower:
-                logger.warning(f"blocked_pattern_detected", pattern=pattern)
-                return False, f"Topic contains inappropriate content"
-        
+        if not topic or not isinstance(topic, str):
+            return False, "Topic is required and must be a string"
+
+        topic_cleaned = topic.strip()
+        if len(topic_cleaned) < self.TOPIC_MIN_LENGTH:
+            return False, f"Topic must be at least {self.TOPIC_MIN_LENGTH} characters long"
+
+        if len(topic_cleaned) > self.TOPIC_MAX_LENGTH:
+            return False, f"Topic must not exceed {self.TOPIC_MAX_LENGTH} characters"
+
+        if not topic_cleaned.replace(" ", "").replace("-", "").replace("_", "").isalnum():
+            return False, "Topic contains invalid characters"
+
+        if audience is not None:
+            if not isinstance(audience, str):
+                return False, "Audience must be a string"
+            if len(audience.strip()) > self.AUDIENCE_MAX_LENGTH:
+                return False, f"Audience must not exceed {self.AUDIENCE_MAX_LENGTH} characters"
+
+        if tone is not None:
+            if not isinstance(tone, str):
+                return False, "Tone must be a string"
+            if len(tone.strip()) > self.TONE_MAX_LENGTH:
+                return False, f"Tone must not exceed {self.TONE_MAX_LENGTH} characters"
+
         return True, ""
 
-    def before_model_callback(self, callback_context: Any, llm_request: Any) -> None:
-        """
-        Callback executed before model call (ADK pattern).
-        
-        Can be used to inject safety checks into the prompt.
-        """
-        # For now, this is a placeholder for the ADK callback pattern
-        # In production, this would modify llm_request.system_instruction
-        pass
 
-
-# Global instance
-input_guard = InputGuardrail()
+def validate_generate_input(
+    topic: str,
+    audience: Optional[str] = None,
+    tone: Optional[str] = None,
+) -> None:
+    """
+    Validates and raises HTTPException if invalid.
+    
+    Raises:
+        ValueError: If validation fails
+    """
+    guard = InputGuard()
+    is_valid, error_message = guard.validate(topic, audience, tone)
+    if not is_valid:
+        raise ValueError(error_message)
