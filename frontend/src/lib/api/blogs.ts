@@ -116,15 +116,9 @@ export interface BlogContentView {
 }
 
 export interface BudgetSnapshot {
-  end_user_id: number;
-  tenant_id: number;
-  daily_spent_usd: number;
-  daily_spent_tokens: number;
-  daily_limit_usd: number;
-  daily_limit_tokens: number;
-  active_sessions: number;
-  max_concurrent_sessions: number;
-  remaining_revision_iterations: number;
+  balance_usd: number;
+  balance_tokens: number;
+  daily_blog_limit_left: number;
 }
 
 export interface AgentRunSummary {
@@ -157,19 +151,25 @@ export interface SessionDetailView {
     session_id: number;
     status: string;
     current_stage: string | null;
-    iteration_count: number;
     topic: string;
     audience: string | null;
-    requires_human_review: boolean;
-    budget_spent_usd: number;
-    budget_spent_tokens: number;
-    remaining_revision_iterations: number;
-    current_version_number: number | null;
     created_at: string;
     updated_at: string;
     completed_at: string | null;
+    // Budget & usage (from blog_sessions table)
+    budget_spent_usd: number;
+    budget_spent_tokens: number;
+    // Derived / defaulted fields
+    iteration_count: number;
+    requires_human_review: boolean;
+    remaining_revision_iterations: number;
+    current_version_number: number | null;
   };
-  outline: OutlineReviewView | null;
+  // Aggregated totals
+  total_cost_usd: number;
+  total_tokens: number;
+  total_words: number;
+  outline: OutlineSchema | null;
   latest_version: BlogVersionView | null;
   review_events: HumanReviewEventView[];
   agent_runs: AgentRunSummary[];
@@ -208,15 +208,18 @@ export async function getLatestVersion(sessionId: string): Promise<BlogVersionVi
 
 export async function submitFinalReview(
   sessionId: string,
-  versionId: number,
-  payload: HumanReviewRequest,
-): Promise<HumanReviewDecision> {
-  return request<HumanReviewDecision>(
-    `/api/v1/blogs/${sessionId}/review?version_id=${versionId}`,
+  payload: { action: 'approve' | 'request_revision' | 'reject'; feedback_text?: string },
+): Promise<{ session_id: number; status: string }> {
+  const approved = payload.action === 'approve';
+  return request<{ session_id: number; status: string }>(
+    `/api/v1/blogs/${sessionId}/final-review`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        approved,
+        feedback_text: payload.feedback_text,
+      }),
     },
   );
 }
@@ -230,5 +233,33 @@ export async function getSessionDetail(sessionId: string): Promise<SessionDetail
 }
 
 export async function getBudget(): Promise<BudgetSnapshot> {
-  return request<BudgetSnapshot>('/api/v1/budgets/me');
+  return request<BudgetSnapshot>('/api/v1/blogs/budget');
+}
+
+export interface BlogSessionItem {
+  session_id: number;
+  topic: string;
+  audience: string;
+  tone: string;
+  status: string;
+  current_stage: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export async function getBlogSessions(): Promise<BlogSessionItem[]> {
+  return request<BlogSessionItem[]>('/api/v1/blogs/');
+}
+
+export interface SessionStatusPollingResponse {
+  session_id: number;
+  status: string;
+  current_stage: string | null;
+  current_agent: string | null;
+  topic: string | null;
+  created_at: string;
+}
+
+export async function getSessionStatus(sessionId: number): Promise<SessionStatusPollingResponse> {
+  return request<SessionStatusPollingResponse>(`/api/v1/blogs/${sessionId}/status`);
 }
