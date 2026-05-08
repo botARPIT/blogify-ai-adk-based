@@ -15,6 +15,7 @@ from src.core.database import AsyncSessionFactory
 from src.core.redis_pool import get_redis_client
 from src.core.task_queue import TaskQueue
 from src.models.repositories.blog_session_repository import BlogSessionRepository
+from src.models.repositories.session_lease_repository import SessionLeaseRepository
 from src.workers.executor import PipelineExecutor
 from src.workers.reaper import Reaper
 
@@ -52,7 +53,8 @@ class BlogWorker:
         async with self._semaphore:
             async with AsyncSessionFactory() as session:
                 session_repo = BlogSessionRepository(session)
-                acquired = await session_repo.acquire_lease(
+                lease_repo = SessionLeaseRepository(session)
+                acquired = await lease_repo.acquire_lease(
                     job.session_id, WORKER_ID, LEASE_SECONDS
                 )
                 if not acquired:
@@ -60,7 +62,7 @@ class BlogWorker:
                     return
 
                 heartbeat_task = asyncio.create_task(
-                    self._job_heartbeat(job.session_id, session_repo)
+                    self._job_heartbeat(job.session_id, lease_repo)
                 )
                 try:
                     executor = PipelineExecutor(session)
@@ -72,13 +74,13 @@ class BlogWorker:
                     logger.error("job_failed", session_id=job.session_id, error=str(e))
                 finally:
                     heartbeat_task.cancel()
-                    await session_repo.release_lease(job.session_id, WORKER_ID)
+                    await lease_repo.release_lease(job.session_id, WORKER_ID)
 
-    async def _job_heartbeat(self, session_id: int, session_repo: BlogSessionRepository) -> None:
+    async def _job_heartbeat(self, session_id: int, lease_repo: SessionLeaseRepository) -> None:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             try:
-                await session_repo.heartbeat_lease(session_id, WORKER_ID, extend_seconds=60)
+                await lease_repo.heartbeat_lease(session_id, WORKER_ID, extend_seconds=60)
             except Exception:
                 pass
 

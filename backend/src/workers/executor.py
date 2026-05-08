@@ -1,6 +1,8 @@
 """PipelineExecutor — bridges worker to ADK pipeline."""
 
+from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +18,7 @@ from src.models.orm_models import AgentRun, AgentRunStatus, BlogSessionStatus
 from src.models.repositories.agent_run_repository import AgentRunRepository
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.budget_repository import BudgetRepository
+from src.models.repositories.research_sources_repository import ResearchSourcesRepository
 from src.services.budget_service import BudgetService
 
 
@@ -26,6 +29,7 @@ class PipelineExecutor:
         self._run_repo = AgentRunRepository(session)
         self._budget_repo = BudgetRepository(session)
         self._budget_service = BudgetService(self._budget_repo, self._session_repo)
+        self._sources_repo = ResearchSourcesRepository(session)
 
     async def execute(self, job: BlogJob) -> None:
         try:
@@ -101,7 +105,7 @@ class PipelineExecutor:
         )
 
     async def _handle_success(self, job: BlogJob, result: PipelineResult) -> None:
-        await self._commit_costs(job, result.costs)
+        await self._commit_costs(job, result.costs, result.research)
 
         if result.final_content:
             await self._session_repo.save_final_content(
@@ -125,8 +129,18 @@ class PipelineExecutor:
         )
 
     async def _commit_costs(
-        self, job: BlogJob, costs: list[CostInfo]
+        self, job: BlogJob, costs: list[CostInfo], research_data: Optional[dict] = None
     ) -> None:
+        sources_list = []
+        if research_data and "sources" in research_data:
+            sources_list = research_data["sources"]
+            if sources_list:
+                await self._sources_repo.create_many(
+                    user_id=job.user_id,
+                    blog_session_id=job.session_id,
+                    sources=sources_list,
+                )
+
         for cost in costs:
             if cost.total_tokens <= 0:
                 continue
@@ -137,7 +151,12 @@ class PipelineExecutor:
             if existing and existing.status == AgentRunStatus.COMPLETED.value:
                 continue
 
+            output_snapshot: Optional[dict] = {"stage": cost.stage, "costs": cost.__dict__.copy()}
+
             if existing:
+                latency_ms = None
+                if existing.started_at:
+                    latency_ms = int((datetime.now(timezone.utc) - existing.started_at).total_seconds() * 1000)
                 await self._run_repo.update(
                     existing.id,
                     prompt_tokens=cost.prompt_tokens,
@@ -145,10 +164,13 @@ class PipelineExecutor:
                     total_tokens=cost.total_tokens,
                     cost_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
                     status=AgentRunStatus.COMPLETED.value,
+                    latency_ms=latency_ms,
+                    output_snapshot=output_snapshot,
                 )
                 agent_run_id = existing.id
             else:
                 agent_run = await self._run_repo.create(
+                    user_id=job.user_id,
                     blog_session_id=job.session_id,
                     stage_name=cost.stage,
                     agent_name=cost.stage,
@@ -158,6 +180,7 @@ class PipelineExecutor:
                     completion_tokens=cost.completion_tokens,
                     total_tokens=cost.total_tokens,
                     cost_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
+                    output_snapshot=output_snapshot,
                 )
                 agent_run_id = agent_run.id
 
