@@ -36,6 +36,11 @@ class CostInfo:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    research_sources: list[dict] = None
+
+    def __post_init__(self):
+        if self.research_sources is None:
+            self.research_sources = []
 
 
 @dataclass
