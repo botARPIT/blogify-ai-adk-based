@@ -45,6 +45,10 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set('X-Requested-With', 'XMLHttpRequest');
   }
 
+  if (isMutating && !headers.has('Idempotency-Key')) {
+    headers.set('Idempotency-Key', crypto.randomUUID());
+  }
+
   const res = await fetch(path, {
     credentials: 'include',
     ...init,
