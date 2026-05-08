@@ -147,6 +147,12 @@ APP = App(
     resumability_config=ResumabilityConfig(is_resumable=True),
 )
 
+PHASE_AGENTS = {
+    "research_phase": [research_agent, refinement_loop],
+    "writer_phase": [refinement_loop],
+    "editor_phase": [editor_agent],
+}
+
 STAGE_BY_AUTHOR = {
     "intent_classifier": "intent",
     "outline_agent": "outline",
@@ -258,6 +264,27 @@ def _build_runner(session_service: Any) -> Runner:
     )
 
 
+def _build_phase_runner(session_service: Any, phase: str) -> Runner:
+    agents = PHASE_AGENTS.get(phase)
+    if not agents:
+        raise ValueError(f"Unsupported pipeline phase: {phase}")
+
+    phase_pipeline = SequentialAgent(
+        name=f"blog_{phase}",
+        sub_agents=agents,
+    )
+    phase_app = App(
+        name=APP_NAME,
+        root_agent=phase_pipeline,
+        resumability_config=ResumabilityConfig(is_resumable=True),
+    )
+    return Runner(
+        app=phase_app,
+        app_name=APP_NAME,
+        session_service=session_service,
+    )
+
+
 def _build_initial_message(topic: str, audience: str) -> types.Content:
     return types.Content(
         role="user",
@@ -286,6 +313,17 @@ def _build_confirmation_message(
                     "feedback_text": feedback_text or "",
                 },
             },
+        ))],
+    )
+
+
+def _build_phase_message(phase: str, topic: str, audience: str) -> types.Content:
+    return types.Content(
+        role="user",
+        parts=[types.Part(text=(
+            f"Resume blog generation from {phase}.\n"
+            f"Topic: {topic}\n"
+            f"Target audience: {audience}"
         ))],
     )
 
@@ -409,6 +447,97 @@ async def run_pipeline(
             result.error = str(exc)
             logger.error("pipeline_failed", session_id=session_id, error=str(exc), exc_info=True)
             return result
+
+
+async def run_pipeline_from_phase(
+    *,
+    phase: str,
+    topic: str,
+    audience: str = "general readers",
+    user_id: str = "anonymous",
+    session_id: str,
+    session_service: Any | None = None,
+) -> PipelineResult:
+    svc = session_service or redis_session_service
+    safe_topic = sanitize_topic(topic)
+    safe_audience = sanitize_audience(audience)
+    result = PipelineResult(session_id=session_id)
+
+    with trace_span(
+        "pipeline_v2.resume_phase",
+        attributes={"user_id": user_id, "session_id": session_id, "phase": phase},
+    ):
+        try:
+            await _ensure_session(
+                svc=svc,
+                session_id=session_id,
+                user_id=user_id,
+                safe_topic=safe_topic,
+                safe_audience=safe_audience,
+            )
+            runner = _build_phase_runner(svc, phase)
+            events = await _run_runner(
+                runner=runner,
+                user_id=user_id,
+                session_id=session_id,
+                new_message=_build_phase_message(phase, safe_topic, safe_audience),
+            )
+            return await _finalize_result(
+                svc=svc,
+                result=result,
+                user_id=user_id,
+                session_id=session_id,
+                events=events,
+            )
+        except Exception as exc:
+            result.error = str(exc)
+            logger.error(
+                "pipeline_phase_resume_failed",
+                session_id=session_id,
+                phase=phase,
+                error=str(exc),
+                exc_info=True,
+            )
+            return result
+
+
+async def load_pipeline_result_from_state(
+    *,
+    topic: str,
+    audience: str = "general readers",
+    user_id: str = "anonymous",
+    session_id: str,
+    session_service: Any | None = None,
+) -> PipelineResult:
+    svc = session_service or redis_session_service
+    safe_topic = sanitize_topic(topic)
+    safe_audience = sanitize_audience(audience)
+    result = PipelineResult(session_id=session_id)
+
+    try:
+        await _ensure_session(
+            svc=svc,
+            session_id=session_id,
+            user_id=user_id,
+            safe_topic=safe_topic,
+            safe_audience=safe_audience,
+        )
+        return await _finalize_result(
+            svc=svc,
+            result=result,
+            user_id=user_id,
+            session_id=session_id,
+            events=[],
+        )
+    except Exception as exc:
+        result.error = str(exc)
+        logger.error(
+            "pipeline_state_load_failed",
+            session_id=session_id,
+            error=str(exc),
+            exc_info=True,
+        )
+        return result
 
 
 async def resume_pipeline(

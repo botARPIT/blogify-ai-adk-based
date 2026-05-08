@@ -19,7 +19,8 @@ const SessionProgressPage = () => {
     return <ErrorState title="Session Unavailable" message={error || 'No canonical session was found.'} />;
   }
 
-  const isFailureState = ['failed', 'cancelled'].includes(session.status);
+  const currentSession = session!;
+  const isFailureState = ['failed', 'cancelled'].includes(currentSession.status);
   const statusMessage: Record<string, string> = {
     queued: 'The request is accepted and waiting for a worker slot.',
     processing: 'Agents are actively moving through the current drafting stage.',
@@ -31,40 +32,34 @@ const SessionProgressPage = () => {
   return (
     <div className="animate-in">
       <SessionHeader
-        sessionId={sessionId || session.session_id}
+        sessionId={sessionId || String(currentSession.session_id)}
         title="Session Progress"
-        subtitle={session.topic}
-        status={session.status}
+        subtitle={currentSession.current_stage || 'Processing'}
+        status={currentSession.status}
       />
 
       <div className="bento-grid">
-        <StageTimeline status={session.status} currentStage={session.current_stage} />
+        <StageTimeline status={currentSession.status} currentStage={currentSession.current_stage} />
 
         <div className="bento-card">
           <h2 className="section-title">Live Session State</h2>
           <div style={{ display: 'grid', gap: 'var(--spacing-sm)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span className="brutalist-label" style={{ margin: 0 }}>Status</span>
-              <StatusBadge status={session.status} />
+              <StatusBadge status={currentSession.status} />
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span className="brutalist-label" style={{ margin: 0 }}>Current Stage</span>
-              <span>{session.current_stage || 'queued'}</span>
+              <span>{currentSession.current_stage || 'queued'}</span>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span className="brutalist-label" style={{ margin: 0 }}>Iteration</span>
-              <span>{session.iteration_count}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span className="brutalist-label" style={{ margin: 0 }}>Tokens</span>
-              <span>{session.budget_spent_tokens}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span className="brutalist-label" style={{ margin: 0 }}>Budget Used</span>
-              <span>${session.budget_spent_usd.toFixed(2)}</span>
-            </div>
+            {currentSession.current_agent && (
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span className="brutalist-label" style={{ margin: 0 }}>Current Agent</span>
+                <span style={{ color: 'var(--accent-color)', fontWeight: 'bold' }}>{currentSession.current_agent}</span>
+              </div>
+            )}
             <p className="text-secondary" style={{ marginTop: 'var(--spacing-sm)' }}>
-              {statusMessage[session.status] || 'The session is moving through the canonical workflow.'}
+              {statusMessage[currentSession.status] || 'The session is moving through the canonical workflow.'}
             </p>
           </div>
         </div>

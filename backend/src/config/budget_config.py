@@ -1,6 +1,7 @@
 """Budget configuration for agents and users."""
 
 import os
+from decimal import Decimal
 from typing import Final
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -60,6 +61,11 @@ MODEL_PRICING: Final[dict[str, float]] = {
     "gemini-2.5-flash": 0.00002,
     "gemini-2.5-pro": 0.00004,
 }
+
+
+ESTIMATED_TOKENS_PER_BLOG = 50_000
+INITIAL_BUDGET_USD = Decimal("5.00")
+INITIAL_BUDGET_TOKENS = 500_000
 
 
 def get_model_cost(model: str, tokens: int) -> float:

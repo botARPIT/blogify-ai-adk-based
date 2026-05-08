@@ -38,12 +38,13 @@ const FinalReviewPage = () => {
     setSubmitting(true);
     setSubmitError('');
     try {
-      const decision = await submitFinalReview(sessionId, version.version_id, {
+      const result = await submitFinalReview(sessionId, {
         action,
         feedback_text: feedback,
       });
-      toast.success('Review submitted', { description: decision.message });
-      navigate(getRouteForStatus(sessionId, decision.new_status), { replace: true });
+      const statusLabel = action === 'approve' ? 'Blog approved!' : 'Revision requested';
+      toast.success(statusLabel, { description: 'The session has been updated.' });
+      navigate(getRouteForStatus(sessionId, result.status), { replace: true });
     } catch (err) {
       console.error('Failed to submit final review: ', err);
       const message = err instanceof Error ? err.message : 'Failed to submit final review';

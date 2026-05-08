@@ -25,21 +25,13 @@ export interface NotificationListResponse {
 export async function getNotifications(
   options: { limit?: number; unreadOnly?: boolean } = {},
 ): Promise<NotificationListResponse> {
-  const params = new URLSearchParams();
-  if (options.limit) params.set('limit', String(options.limit));
-  if (options.unreadOnly) params.set('unread_only', 'true');
-  const query = params.toString();
-  return request<NotificationListResponse>(`/api/v1/notifications${query ? `?${query}` : ''}`);
+  return Promise.resolve({ items: [] });
 }
 
 export async function markNotificationRead(notificationId: number): Promise<{ ok: boolean; updated: number }> {
-  return request(`/api/v1/notifications/${notificationId}/read`, {
-    method: 'POST',
-  });
+  return Promise.resolve({ ok: true, updated: 0 });
 }
 
 export async function markAllNotificationsRead(): Promise<{ ok: boolean; updated: number }> {
-  return request('/api/v1/notifications/read-all', {
-    method: 'POST',
-  });
+  return Promise.resolve({ ok: true, updated: 0 });
 }

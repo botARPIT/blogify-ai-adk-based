@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import {
   generateBlog,
   getSession,
+  getBlogSessions,
   type GenerateBlogRequest,
 } from '../lib/api/blogs';
 import { getRouteForStatus } from '../lib/session-routing';
@@ -11,13 +12,15 @@ import StatusBadge from '../components/session/StatusBadge';
 import LoadingState from '../components/state/LoadingState';
 import { useBudgetPolling } from '../hooks/useBudgetPolling';
 
-interface RecentSession {
-  sessionId: string;
+interface SessionItem {
+  session_id: number;
   topic: string;
   audience: string;
   tone: string;
   status: string;
-  timestamp: number;
+  current_stage: string | null;
+  created_at: string;
+  completed_at: string | null;
 }
 
 const DashboardPage: React.FC = () => {
@@ -26,62 +29,33 @@ const DashboardPage: React.FC = () => {
   const [tone, setTone] = useState('Practical');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [recentSessions, setRecentSessions] = useState<RecentSession[]>([]);
-  const [hydrated, setHydrated] = useState(false);
+  const [recentSessions, setRecentSessions] = useState<SessionItem[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const { budget, error: budgetError } = useBudgetPolling();
   const navigate = useNavigate();
 
-  useEffect(() => {
+  const fetchSessions = async (showLoading = true) => {
+    if (showLoading) setRefreshing(true);
     try {
-      const stored = localStorage.getItem('blogify:recentSessions');
-      if (stored) {
-        setRecentSessions(JSON.parse(stored));
-      }
-    } catch (e) {
-      console.error('Failed to parse recent sessions', e);
+      const sessions = await getBlogSessions();
+      setRecentSessions(sessions);
+    } catch (err) {
+      console.error('Failed to fetch sessions', err);
+      toast.error('Failed to load sessions');
     } finally {
-      setHydrated(true);
+      setSessionsLoading(false);
+      if (showLoading) setRefreshing(false);
     }
+  };
+
+  useEffect(() => {
+    fetchSessions();
   }, []);
 
-  useEffect(() => {
-    if (!hydrated || recentSessions.length === 0) return;
-
-    let isActive = true;
-    const refreshRecentStatuses = async () => {
-      const nextSessions = await Promise.all(
-        recentSessions.map(async (session) => {
-          try {
-            const latest = await getSession(session.sessionId);
-            return { ...session, status: latest.status };
-          } catch {
-            return session;
-          }
-        }),
-      );
-      if (!isActive) return;
-      setRecentSessions(nextSessions);
-      localStorage.setItem('blogify:recentSessions', JSON.stringify(nextSessions));
-    };
-
-    refreshRecentStatuses().catch(() => undefined);
-    return () => {
-      isActive = false;
-    };
-  }, [hydrated, recentSessions.length]);
-
-  const saveRecentSession = (nextSession: RecentSession) => {
-    const updated = [nextSession, ...recentSessions.filter((session) => session.sessionId !== nextSession.sessionId)].slice(0, 10);
-    localStorage.setItem('blogify:recentSessions', JSON.stringify(updated));
-    setRecentSessions(updated);
-  };
-
-  const navigateToSession = (session: RecentSession) => {
-    navigate(getRouteForStatus(session.sessionId, session.status));
-  };
-
   const getActionLabel = (status: string) => {
-    switch (status) {
+    const normalizedStatus = status?.toLowerCase();
+    switch (normalizedStatus) {
       case 'awaiting_outline_review':
         return 'Review Outline';
       case 'awaiting_final_review':
@@ -112,16 +86,18 @@ const DashboardPage: React.FC = () => {
 
       const data = await generateBlog(payload);
 
-      const sessionState: RecentSession = {
-        sessionId: data.session_id,
+      const newSession: SessionItem = {
+        session_id: data.session_id,
         topic,
         audience: audience || 'general readers',
         tone,
         status: data.status,
-        timestamp: Date.now(),
+        current_stage: null,
+        created_at: new Date().toISOString(),
+        completed_at: null,
       };
 
-      saveRecentSession(sessionState);
+      setRecentSessions([newSession, ...recentSessions]);
       toast.success('Blog generation queued', {
         description: 'The canonical workflow is now processing your request.',
       });
@@ -135,8 +111,8 @@ const DashboardPage: React.FC = () => {
     }
   };
 
-  if (!hydrated) {
-    return <LoadingState title="Booting dashboard..." message="Recovering your recent canonical sessions." />;
+  if (sessionsLoading) {
+    return <LoadingState title="Booting dashboard..." message="Loading your blog sessions." />;
   }
 
   return (
@@ -175,7 +151,6 @@ const DashboardPage: React.FC = () => {
                 value={audience}
                 onChange={(e) => setAudience(e.target.value)}
                 placeholder="e.g. Technical SEOs"
-                style={{ fontSize: 'clamp(1rem, 3vw, 1.5rem)' }}
               />
             </div>
 
@@ -187,7 +162,6 @@ const DashboardPage: React.FC = () => {
                 value={tone}
                 onChange={(e) => setTone(e.target.value)}
                 placeholder="e.g. practical, executive, technical"
-                style={{ fontSize: 'clamp(1rem, 3vw, 1.5rem)' }}
               />
             </div>
             
@@ -213,7 +187,7 @@ const DashboardPage: React.FC = () => {
           ) : (
             <ul className="session-list">
               {recentSessions.map((session) => (
-                <li key={session.sessionId} className="session-list-item">
+                <li key={session.session_id} className="session-list-item">
                   <div className="session-list-row">
                     <div className="session-list-copy">
                       <h4 className="session-list-title">{session.topic}</h4>
@@ -221,14 +195,13 @@ const DashboardPage: React.FC = () => {
                         Audience: {session.audience}
                       </div>
                       <div className="text-secondary session-list-meta">Tone: {session.tone}</div>
-                      <div className="text-secondary session-list-meta">Session {session.sessionId}</div>
+                      <div className="text-secondary session-list-meta">Session {session.session_id}</div>
                     </div>
                     <div className="session-list-actions">
                       <StatusBadge status={session.status} />
                       <button
                         className="brutalist-button secondary"
-                        onClick={() => navigateToSession(session)}
-                        style={{ padding: '0.5rem 1rem', fontSize: '0.875rem' }}
+                        onClick={() => navigate(getRouteForStatus(String(session.session_id), session.status))}
                       >
                         {getActionLabel(session.status)}
                       </button>
@@ -250,16 +223,16 @@ const DashboardPage: React.FC = () => {
           ) : budget ? (
             <div className="stat-stack">
               <div className="meta-row">
-                <span className="eyebrow-label" style={{ margin: 0 }}>Daily Spend</span>
-                <span className="meta-value">${budget.daily_spent_usd.toFixed(2)}</span>
+                <span className="eyebrow-label" style={{ margin: 0 }}>Progress</span>
+                <span className="meta-value">{100 - (budget.daily_blog_limit_left || 0)} / 100</span>
               </div>
               <div className="meta-row">
-                <span className="eyebrow-label" style={{ margin: 0 }}>Daily Tokens</span>
-                <span className="meta-value">{budget.daily_spent_tokens}</span>
+                <span className="eyebrow-label" style={{ margin: 0 }}>Remaining Credits</span>
+                <span className="meta-value">{(budget.balance_tokens || 0).toLocaleString()}</span>
               </div>
               <div className="meta-row">
-                <span className="eyebrow-label" style={{ margin: 0 }}>Active Sessions</span>
-                <span className="meta-value">{budget.active_sessions}</span>
+                <span className="eyebrow-label" style={{ margin: 0 }}>Balance USD</span>
+                <span className="meta-value">${(budget.balance_usd || 0).toFixed(2)}</span>
               </div>
               <button className="brutalist-button secondary" type="button" onClick={() => navigate('/budget')}>
                 Open Budget View
