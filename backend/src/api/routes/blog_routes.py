@@ -12,6 +12,7 @@ from src.core.task_queue import task_queue
 from src.guards.input_guard import InputGuard
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.budget_repository import BudgetRepository
+from src.models.repositories.research_sources_repository import ResearchSourcesRepository
 from src.models.schemas import (
     AgentRunMetrics,
     BlogContentView,
@@ -251,6 +252,7 @@ async def get_session_detail(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    sources_repo = ResearchSourcesRepository(session)
     
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
@@ -266,6 +268,7 @@ async def get_session_detail(
     
     total_tokens = sum(ar.total_tokens for ar in agent_runs)
     total_words = len(blog_session.final_content.split()) if blog_session.final_content else 0
+    sources_count = await sources_repo.count_for_session(session_id)
     
     latest_version = None
     if blog_session.final_content:
@@ -275,7 +278,7 @@ async def get_session_detail(
             title=blog_session.topic,
             content_markdown=blog_session.final_content,
             word_count=total_words,
-            sources_count=0,
+            sources_count=sources_count,
             editor_status="completed",
             created_by="system",
             created_at=blog_session.updated_at,
@@ -448,6 +451,7 @@ async def get_content(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    sources_repo = ResearchSourcesRepository(session)
     
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
@@ -461,6 +465,7 @@ async def get_content(
     
     content = blog_session.final_content
     word_count = len(content.split()) if content else 0
+    sources_count = await sources_repo.count_for_session(session_id)
     
     return BlogContentView(
         session_id=blog_session.id,
@@ -468,7 +473,7 @@ async def get_content(
         title=blog_session.topic,
         content_markdown=content,
         word_count=word_count,
-        sources_count=0,
+        sources_count=sources_count,
         topic=blog_session.topic,
         audience=blog_session.audience,
         status=blog_session.status,
@@ -483,6 +488,7 @@ async def get_latest_version(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    sources_repo = ResearchSourcesRepository(session)
     
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
@@ -494,6 +500,8 @@ async def get_latest_version(
             detail="No blog version found",
         )
     
+    sources_count = await sources_repo.count_for_session(session_id)
+    
     return BlogVersionView(
         version_id=1,
         session_id=blog_session.id,
@@ -502,7 +510,7 @@ async def get_latest_version(
         title=blog_session.topic,
         content_markdown=blog_session.final_content,
         word_count=len(blog_session.final_content.split()),
-        sources_count=0,
+        sources_count=sources_count,
         editor_status="completed",
         created_by="system",
         created_at=blog_session.updated_at,
