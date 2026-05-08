@@ -120,3 +120,60 @@ class AgentRunRepository:
             .limit(1)
         )
         return result.scalar_one_or_none() is not None
+
+    async def get_by_session_and_stage(
+        self, blog_session_id: int, stage_name: str
+    ) -> Optional[AgentRun]:
+        result = await self._session.execute(
+            select(AgentRun).where(
+                AgentRun.blog_session_id == blog_session_id,
+                AgentRun.stage_name == stage_name,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def create(
+        self,
+        blog_session_id: int,
+        stage_name: str,
+        agent_name: str,
+        model_name: str,
+        status: str = "STARTED",
+        prompt_tokens: int = 0,
+        completion_tokens: int = 0,
+        total_tokens: int = 0,
+        cost_usd: float = 0.0,
+    ) -> AgentRun:
+        run = AgentRun(
+            blog_session_id=blog_session_id,
+            stage_name=stage_name,
+            agent_name=agent_name,
+            model_name=model_name,
+            status=status,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cost_usd=cost_usd,
+        )
+        self._session.add(run)
+        await self._session.flush()
+        return run
+
+    async def update(
+        self,
+        run_id: int,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        cost_usd: float,
+        status: str,
+    ) -> None:
+        run = await self.get_by_id(run_id)
+        if run:
+            run.prompt_tokens = prompt_tokens
+            run.completion_tokens = completion_tokens
+            run.total_tokens = total_tokens
+            run.cost_usd = cost_usd
+            run.status = status
+            run.completed_at = datetime.now(timezone.utc)
+            await self._session.flush()

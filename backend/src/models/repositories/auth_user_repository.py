@@ -15,6 +15,10 @@ class AuthUserRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    @property
+    def session(self) -> AsyncSession:
+        return self._session
+
     async def get_by_email(self, email: str) -> Optional[AuthUser]:
         result = await self._session.execute(
             select(AuthUser).where(func.lower(AuthUser.email) == email.strip().lower())

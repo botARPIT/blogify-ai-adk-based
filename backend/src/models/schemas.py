@@ -1,21 +1,12 @@
-"""Pydantic schemas for agent I/O and canonical API contracts.
-
-Includes:
-- Legacy agent schemas (IntentSchema, OutlineSchema, etc.) — unchanged
-- Phase 1 new domain types for the canonical request/response contract
-"""
-
-from __future__ import annotations
+"""Pydantic schemas for V1 API contract and agent I/O."""
 
 from datetime import datetime
-from typing import Any, Optional
-
+from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
-from src.models.orm_models import ClientMode
 
 # ---------------------------------------------------------------------------
-# Agent I/O schemas (legacy — unchanged)
+# Agent I/O schemas (used by ADK agents - NOT part of API contract)
 # ---------------------------------------------------------------------------
 
 
@@ -82,400 +73,230 @@ class FinalBlogSchema(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Phase 1 — New canonical domain types
+# V1 API contract schemas
 # ---------------------------------------------------------------------------
 
 
-class ResolvedIdentity(BaseModel):
-    """Resolved caller identity from API key + request body."""
-
-    service_client_id: int
-    tenant_id: int
-    end_user_id: int
-    mode: str  # standalone | blogify_service
-    external_user_id: str
-    external_tenant_id: Optional[str] = None
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8)
+    display_name: Optional[str] = None
 
 
-class BudgetDecision(BaseModel):
-    """Result of a budget preflight check or reserve operation."""
-
-    allowed: bool
-    reason: Optional[str] = None
-    error_code: Optional[str] = None
-    effective_policy_id: Optional[int] = None
-    estimated_usd: float = 0.0
-    estimated_tokens: int = 0
-    reserved_usd: float = 0.0
-    reserved_tokens: int = 0
-    daily_remaining_usd: float = 0.0
-    daily_remaining_tokens: int = 0
-    session_remaining_usd: float = 0.0
-    session_remaining_tokens: int = 0
-    daily_remaining_blog_count: int = 0
-    remaining_active_session_slots: int = 0
-    soft_stop_enabled: bool = False
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
 
 
-class BudgetExhaustedDetail(BaseModel):
-    """Structured 402 error body returned when any budget limit is exceeded.
-
-    Returned by all internal service endpoints as the JSON error body so that
-    downstream callers can react programmatically rather than parsing a string.
-    """
-
-    error: str = "budget_exhausted"
-    error_code: str  # BUDGET_EXCEEDED | SERVICE_CLIENT_BUDGET_EXCEEDED
-    reason: str
-    daily_remaining_usd: float = 0.0
-    daily_remaining_tokens: int = 0
-    daily_remaining_blog_count: int = 0
-    remaining_active_session_slots: int = 0
-    estimated_reset_at: Optional[datetime] = Field(
-        default=None,
-        description="UTC timestamp when the daily budget window resets (midnight UTC)",
-    )
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: int
+    email: str
 
 
-class BudgetSnapshot(BaseModel):
-    """Point-in-time budget snapshot for an end user."""
-
-    end_user_id: int
-    tenant_id: int
-    policy_id: Optional[int] = None
-    policy_scope: Optional[str] = None
-    daily_spent_usd: float
-    daily_spent_tokens: int
-    daily_committed_spend_usd: float = 0.0
-    daily_committed_tokens: int = 0
-    daily_reserved_exposure_usd: float = 0.0
-    daily_reserved_exposure_tokens: int = 0
-    daily_total_exposure_usd: float = 0.0
-    daily_total_exposure_tokens: int = 0
-    daily_limit_usd: float
-    daily_limit_tokens: int
-    daily_blog_limit: int = 0
-    daily_blog_count_committed: int = 0
-    daily_blog_count_reserved: int = 0
-    active_sessions: int
-    max_concurrent_sessions: int
-    remaining_revision_iterations: int
-    soft_stop_enabled: bool = False
+class UserResponse(BaseModel):
+    id: int
+    email: str
+    display_name: Optional[str]
+    is_active: bool
+    created_at: datetime
+    last_login_at: Optional[datetime]
 
 
-class ServiceClientBudgetView(BaseModel):
-    """Current service-client daily budget state."""
-
-    daily_budget_limit_usd: float
-    budget_window: str
-    currently_exhausted: bool
-    reset_at: Optional[datetime]
-    daily_spent_usd: float
+class GenerateRequest(BaseModel):
+    topic: str = Field(min_length=3, max_length=500)
+    audience: str = Field(default="general readers", max_length=255)
+    tone: str = Field(default="professional", max_length=100)
+    idempotency_key: Optional[str] = Field(default=None, max_length=255)
 
 
-class ServiceClientBudgetDecision(BaseModel):
-    """Preflight decision for service-client daily budget enforcement."""
-
-    allowed: bool
-    reason: Optional[str] = None
-    daily_spent_usd: float = 0.0
-    daily_limit_usd: float = 0.0
-    reset_at: Optional[datetime] = None
-
-
-class BlogSessionState(BaseModel):
-    """External representation of a blog session."""
-
+class GenerateResponse(BaseModel):
     session_id: int
     status: str
-    current_stage: Optional[str]
-    iteration_count: int
+    adk_session_id: str
+    created_at: datetime
+
+
+class OutlineReviewRequest(BaseModel):
+    approved_outline: dict
+    feedback_text: Optional[str] = None
+
+
+class OutlineFrontendRequest(BaseModel):
+    action: str
+    edited_outline: Optional[dict] = None
+    feedback_text: Optional[str] = None
+    reviewer_user_id: Optional[int] = None
+
+
+class OutlineFrontendDecision(BaseModel):
+    session_id: int
+    action: str
+    new_status: str
+    current_stage: Optional[str] = None
+
+
+class OutlineSectionSchema(BaseModel):
+    id: str
+    heading: str
+    goal: str
+    target_words: int
+
+
+class OutlineSchema(BaseModel):
+    title: str
+    sections: list[OutlineSectionSchema]
+    estimated_total_words: int
+
+
+class OutlineReviewView(BaseModel):
+    session_id: int
+    status: str
+    current_stage: Optional[str] = None
     topic: str
-    audience: Optional[str]
-    requires_human_review: bool
-    budget_spent_usd: float
-    budget_spent_tokens: int
-    remaining_revision_iterations: int
-    current_version_number: Optional[int]
+    audience: Optional[str] = None
+    feedback_text: Optional[str] = None
+    outline: dict
+
+
+class FinalReviewRequest(BaseModel):
+    approved: bool
+    feedback_text: Optional[str] = None
+
+
+class AgentRunResponse(BaseModel):
+    stage: str
+    tokens: int
+    cost_usd: float
+    status: str
+
+
+class AgentRunMetrics(BaseModel):
+    run_id: int
+    stage_name: str
+    agent_name: str
+    model_name: str
+    status: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    cost_usd: float
+    latency_ms: Optional[int] = None
+    started_at: datetime
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+
+class SessionInfo(BaseModel):
+    session_id: int
+    status: str
+    current_stage: Optional[str] = None
+    topic: str
+    audience: Optional[str] = None
     created_at: datetime
     updated_at: datetime
-    completed_at: Optional[datetime]
+    completed_at: Optional[datetime] = None
+    # Computed/derived fields for the detail view
+    budget_spent_usd: float = 0.0
+    budget_spent_tokens: int = 0
+    iteration_count: int = 0
+    requires_human_review: bool = False
+    remaining_revision_iterations: int = 0
+    current_version_number: Optional[int] = None
+
+
+class BlogVersionMetrics(BaseModel):
+    version_id: int = 1
+    version_number: int = 1
+    title: Optional[str] = None
+    content_markdown: Optional[str] = None
+    word_count: int = 0
+    sources_count: int = 0
+    editor_status: str = "completed"
+    created_by: str = "system"
+    created_at: datetime
+
+
+class BlogSessionMetrics(BaseModel):
+    session: SessionInfo
+    total_cost_usd: float
+    total_tokens: int
+    total_words: int
+    outline: Optional[dict] = None
+    latest_version: Optional[BlogVersionMetrics] = None
+    agent_runs: list[AgentRunMetrics] = []
+    review_events: list = []
+
+
+class BlogSessionDetail(BaseModel):
+    session_id: int
+    topic: str
+    audience: str
+    tone: str
+    status: str
+    current_stage: Optional[str]
+    outline_data: Optional[dict] = None
+    final_content: Optional[str] = None
+    budget_reserved_usd: float
+    budget_spent_usd: float
+    agent_runs: list[AgentRunResponse] = []
+    created_at: datetime
+    updated_at: datetime
 
 
 class BlogSessionListItem(BaseModel):
-    """Detail-rich summary of a user's blog session."""
-
     session_id: int
+    topic: str
+    audience: str
+    tone: str
     status: str
     current_stage: Optional[str]
-    iteration_count: int
-    topic: str
-    audience: Optional[str]
-    requires_human_review: bool
-    budget_spent_usd: float
-    budget_spent_tokens: int
-    remaining_revision_iterations: int
-    current_version_number: Optional[int]
-    latest_title: Optional[str]
-    latest_word_count: int
-    latest_sources_count: int
     created_at: datetime
-    updated_at: datetime
     completed_at: Optional[datetime]
 
 
-class BlogSessionListResponse(BaseModel):
-    items: list[BlogSessionListItem]
-    total: int
-    limit: int
-    offset: int
+class BudgetResponse(BaseModel):
+    balance_usd: float
+    balance_tokens: int
+    daily_blog_limit_left: int
 
 
-class BlogVersionView(BaseModel):
-    """External representation of a blog version."""
-
-    version_id: int
+class SessionStatusResponse(BaseModel):
     session_id: int
-    version_number: int
-    source_type: str
-    title: Optional[str]
-    content_markdown: Optional[str]
-    word_count: int
-    sources_count: int
-    editor_status: str
-    created_by: str
+    status: str
+    current_stage: Optional[str] = None
+    current_agent: Optional[str] = None
+    topic: Optional[str] = None
     created_at: datetime
 
 
 class BlogContentView(BaseModel):
-    """Canonical representation of a readable blog version."""
-
     session_id: int
-    version_id: int
-    title: Optional[str]
+    version_id: int = 1
+    title: Optional[str] = None
     content_markdown: str
     word_count: int
-    sources_count: int
+    sources_count: int = 0
     topic: str
-    audience: Optional[str]
+    audience: Optional[str] = None
     status: str
 
 
-class HumanReviewRequest(BaseModel):
-    """Request body for the /review endpoint."""
-
-    action: str = Field(
-        description="approve | request_revision | reject",
-        pattern="^(approve|request_revision|reject)$",
-    )
-    feedback_text: Optional[str] = Field(
-        default=None,
-        description="Required when action=request_revision",
-    )
-    reviewer_user_id: Optional[str] = Field(default=None, description="ID of the user submitting the review")
-
-
-class HumanReviewDecision(BaseModel):
-    """Response after a human review action."""
-
-    session_id: int
+class BlogVersionView(BaseModel):
     version_id: int
-    action: str
-    new_status: str
-    iteration_count: int
-    requires_human_review: bool
-    message: str
-
-
-class OutlineReviewRequest(BaseModel):
-    """Request body for the outline HITL endpoint."""
-
-    action: str = Field(
-        description="approve | revise",
-        pattern="^(approve|revise)$",
-    )
-    edited_outline: Optional[OutlineSchema] = None
-    feedback_text: Optional[str] = Field(
-        default=None,
-        description="Optional guidance to incorporate before final generation",
-    )
-    reviewer_user_id: Optional[str] = Field(default=None, description="ID of the user submitting the outline review")
-
-
-class OutlineReviewDecision(BaseModel):
-    """Response after an outline review action."""
-
     session_id: int
-    action: str
-    new_status: str
-    current_stage: Optional[str]
-    requires_human_review: bool
-    outline: OutlineSchema
-    message: str
-
-
-class OutlineReviewView(BaseModel):
-    """Current outline review state for a session."""
-
-    session_id: int
-    status: str
-    current_stage: Optional[str]
-    topic: str
-    audience: Optional[str]
-    feedback_text: Optional[str]
-    outline: OutlineSchema
-
-
-class RevisionRequest(BaseModel):
-    """Internal payload for a revision loop."""
-
-    session_id: int
-    version_id: int
-    editor_feedback: str
-    human_feedback: str
-    iteration_number: int
-
-
-class AgentRunSummary(BaseModel):
-    """Lightweight summary of an agent run for API responses."""
-
-    run_id: int
-    stage_name: str
-    agent_name: str
-    status: str
-    prompt_tokens: int
-    completion_tokens: int
-    cost_usd: float
-    latency_ms: Optional[int]
-    started_at: datetime
-    completed_at: Optional[datetime]
-    error_message: Optional[str]
-
-
-class AuthUserView(BaseModel):
-    id: int
-    email: str
-    display_name: Optional[str]
+    version_number: int = 1
+    source_type: str = "final"
+    title: Optional[str] = None
+    content_markdown: Optional[str] = None
+    word_count: int = 0
+    sources_count: int = 0
+    editor_status: str = "completed"
+    created_by: str = "system"
+    created_at: datetime
 
 
 class AuthMeResponse(BaseModel):
     authenticated: bool
-    user: Optional[AuthUserView]
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr = Field(..., description="Valid email address")
-    password: str = Field(..., min_length=1, description="Password")
-
-
-class RegisterRequest(BaseModel):
-    email: EmailStr = Field(..., description="Valid email address")
-    password: str = Field(
-        ..., 
-        min_length=8, 
-        max_length=100,
-        description="Password must be 8-100 characters"
-    )
-    display_name: Optional[str] = Field(None, max_length=100, description="Optional display name")
-
-
-class AuthRegisterResponse(BaseModel):
-    authenticated: bool
-    user: AuthUserView
-
-
-class NotificationView(BaseModel):
-    id: int
-    type: str
-    title: str
-    message: str
-    session_id: Optional[int]
-    status: str
-    created_at: datetime
-    action_url: Optional[str]
-
-
-class NotificationListResponse(BaseModel):
-    items: list[NotificationView]
-
-
-class MarkNotificationReadResponse(BaseModel):
-    ok: bool
-    updated: int
-
-
-class ServiceClientView(BaseModel):
-    client_key: str
-    name: str
-    mode: str
-    status: str
-    created_at: datetime
-    rotated_at: Optional[datetime]
-
-
-class ServiceClientListResponse(BaseModel):
-    items: list[ServiceClientView]
-
-
-class CreateServiceClientRequest(BaseModel):
-    client_key: str = Field(min_length=3, max_length=128)
-    name: str = Field(min_length=3, max_length=255)
-    mode: ClientMode
-
-
-class CreateServiceClientResponse(ServiceClientView):
-    api_key: str
-
-
-class RotateServiceClientResponse(ServiceClientView):
-    api_key: str
-
-
-class UpdateServiceClientBudgetRequest(BaseModel):
-    daily_budget_limit_usd: float = Field(ge=0.0)
-
-
-class HumanReviewEventView(BaseModel):
-    """External representation of a human review event."""
-
-    event_id: int
-    session_id: int
-    version_id: int
-    reviewer_user_id: str
-    action: str
-    feedback_text: Optional[str]
-    review_context: Optional[dict[str, Any]]
-    created_at: datetime
-
-
-class SessionDetailView(BaseModel):
-    """Aggregate session detail view for UI inspection pages."""
-
-    session: BlogSessionState
-    outline: Optional[OutlineReviewView]
-    latest_version: Optional[BlogVersionView]
-    review_events: list[HumanReviewEventView]
-    agent_runs: list[AgentRunSummary]
-
-
-class WebhookEventEnvelope(BaseModel):
-    """Typed wrapper for Blogify callback events."""
-
-    event_type: str = Field(
-        description=(
-            "blog.session.queued | blog.session.processing | blog.review.required | "
-            "blog.version.created | blog.session.completed | blog.session.failed"
-        )
-    )
-    session_id: int
-    tenant_id: int
-    end_user_id: int
-    status: str
-    current_stage: Optional[str]
-    current_version_number: Optional[int]
-    budget_spent_usd: float
-    budget_spent_tokens: int
-    remaining_revision_iterations: int
-    requires_human_review: bool
-    payload: Optional[dict[str, Any]] = None
-    occurred_at: datetime = Field(default_factory=datetime.utcnow)
+    user: Optional["UserResponse"] = None
