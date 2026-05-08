@@ -1,6 +1,9 @@
 // Maps backend statuses to frontend routes
 export function getRouteForStatus(sessionId: string, status: string): string {
-  switch (status) {
+  // Normalize status to lowercase for case-insensitive matching
+  const normalizedStatus = status?.toLowerCase();
+
+  switch (normalizedStatus) {
     case 'queued':
     case 'processing':
     case 'revision_requested':

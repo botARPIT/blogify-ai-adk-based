@@ -16,8 +16,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
-  const isAttention = status.includes('review') || status === 'revision_requested';
-  const isFailure = status === 'failed' || status === 'cancelled';
+  const normalizedStatus = status?.toLowerCase() || '';
+  const isAttention = normalizedStatus.includes('review') || normalizedStatus === 'revision_requested';
+  const isFailure = normalizedStatus === 'failed' || normalizedStatus === 'cancelled';
   const color = isFailure
     ? 'var(--error-color)'
     : isAttention
@@ -43,7 +44,7 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
           display: 'inline-block',
         }}
       />
-      {STATUS_LABELS[status] || status}
+      {STATUS_LABELS[normalizedStatus] || status}
     </span>
   );
 };
