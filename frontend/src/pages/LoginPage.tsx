@@ -5,8 +5,8 @@ import { useAuth } from '../context/AuthContext';
 
 const LoginPage: React.FC = () => {
   const { login, authenticated } = useAuth();
-  const [email, setEmail] = useState('dev@blogify.local');
-  const [password, setPassword] = useState('devpassword123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
@@ -39,11 +39,7 @@ const LoginPage: React.FC = () => {
   return (
     <div className="animate-in state-shell">
       <div className="state-card auth-card">
-        <span className="eyebrow-label">Local Auth</span>
-        <h1 className="page-title">Sign in to your Blogify workspace.</h1>
-        <p className="page-subtitle">
-          Use the seeded local credentials in development or the account you created for this environment.
-        </p>
+        <h1 className="page-title">Sign in to Blogify</h1>
         <form className="auth-form" onSubmit={handleSubmit}>
           <div>
             <label className="eyebrow-label">Email</label>

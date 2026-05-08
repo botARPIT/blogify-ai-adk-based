@@ -21,27 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # 1. Add user_id to agent_runs - first make existing rows have a user
-    # Get user_id from blog_session for existing rows
-    op.execute("""
-        UPDATE agent_runs 
-        SET user_id = bs.user_id 
-        FROM blog_sessions bs 
-        WHERE agent_runs.blog_session_id = bs.id
-        AND agent_runs.user_id IS NULL
-    """)
-    
-    op.add_column('agent_runs', sa.Column('user_id', sa.Integer(), nullable=False, server_default='1'))
-    op.alter_column('agent_runs', 'user_id', server_default=None)
-    op.create_index('ix_agent_runs_user_id', 'agent_runs', ['user_id'])
-    op.create_foreign_key(
-        'fk_agent_runs_user_id', 
-        'agent_runs', 'auth_users', 
-        ['user_id'], ['id'], 
-        ondelete='CASCADE'
-    )
-
-    # 2. Create research_sources table
+    # 1. Create research_sources table
     op.create_table(
         'research_sources',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -97,4 +77,3 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table('session_leases')
     op.drop_table('research_sources')
-    op.drop_column('agent_runs', 'user_id')

@@ -78,7 +78,6 @@ class AgentRunRepository:
 
     async def create(
         self,
-        user_id: int,
         blog_session_id: int,
         stage_name: str,
         agent_name: str,
@@ -92,7 +91,6 @@ class AgentRunRepository:
         output_snapshot: Optional[dict] = None,
     ) -> AgentRun:
         run = AgentRun(
-            user_id=user_id,
             blog_session_id=blog_session_id,
             stage_name=stage_name,
             agent_name=agent_name,

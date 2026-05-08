@@ -170,7 +170,6 @@ class PipelineExecutor:
                 agent_run_id = existing.id
             else:
                 agent_run = await self._run_repo.create(
-                    user_id=job.user_id,
                     blog_session_id=job.session_id,
                     stage_name=cost.stage,
                     agent_name=cost.stage,

@@ -40,7 +40,6 @@ const SignupPage: React.FC = () => {
   return (
     <div className="animate-in state-shell">
       <div className="state-card auth-card">
-        <span className="eyebrow-label">Local Auth</span>
         <h1 className="page-title">Create your Blogify account.</h1>
         <p className="page-subtitle">
           Sign up to start creating AI-powered blog posts.

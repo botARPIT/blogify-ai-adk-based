@@ -112,7 +112,6 @@ class AgentRun(Base):
     __tablename__ = "agent_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False)
     blog_session_id: Mapped[int] = mapped_column(Integer, ForeignKey("blog_sessions.id"), nullable=False)
     stage_name: Mapped[str] = mapped_column(String(100), nullable=False)
     agent_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -135,7 +134,6 @@ class AgentRun(Base):
     __table_args__ = (
         UniqueConstraint("blog_session_id", "stage_name", name="uq_agent_runs_session_stage"),
         Index("ix_agent_runs_session", "blog_session_id"),
-        Index("ix_agent_runs_user_id", "user_id"),
     )
 
 
