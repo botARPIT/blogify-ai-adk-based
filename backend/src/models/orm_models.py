@@ -91,11 +91,7 @@ class BlogSession(Base):
     budget_reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
     budget_spent_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
 
-    lease_owner: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    lease_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reap_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
@@ -109,7 +105,6 @@ class BlogSession(Base):
         UniqueConstraint("user_id", "idempotency_key", name="uq_blog_sessions_idempotency"),
         Index("ix_blog_sessions_user_id", "user_id"),
         Index("ix_blog_sessions_status", "status"),
-        Index("ix_blog_sessions_lease_expires", "lease_expires_at", postgresql_where=status == "PROCESSING"),
     )
 
 
@@ -117,6 +112,7 @@ class AgentRun(Base):
     __tablename__ = "agent_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False)
     blog_session_id: Mapped[int] = mapped_column(Integer, ForeignKey("blog_sessions.id"), nullable=False)
     stage_name: Mapped[str] = mapped_column(String(100), nullable=False)
     agent_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -139,6 +135,7 @@ class AgentRun(Base):
     __table_args__ = (
         UniqueConstraint("blog_session_id", "stage_name", name="uq_agent_runs_session_stage"),
         Index("ix_agent_runs_session", "blog_session_id"),
+        Index("ix_agent_runs_user_id", "user_id"),
     )
 
 
@@ -161,4 +158,60 @@ class BudgetLedger(Base):
     __table_args__ = (
         Index("ix_budget_ledger_user_id", "user_id"),
         Index("ix_budget_ledger_session", "blog_session_id"),
+    )
+
+
+class ResearchSource(Base):
+    """Stores research sources from Tavily for each blog session."""
+
+    __tablename__ = "research_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False)
+    blog_session_id: Mapped[int] = mapped_column(Integer, ForeignKey("blog_sessions.id"), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    score: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0.0)
+    topic: Mapped[str] = mapped_column(String(500), nullable=True)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        Index("ix_research_sources_session", "blog_session_id"),
+        Index("ix_research_sources_user", "user_id"),
+    )
+
+
+class LeaseEventType:
+    """Lease event types for audit trail."""
+    ACQUIRED = "ACQUIRED"
+    RELEASED = "RELEASED"
+    EXPIRED = "EXPIRED"
+    HEARTBEAT_FAILED = "HEARTBEAT_FAILED"
+    REAPED = "REAPED"
+
+
+class SessionLease(Base):
+    """Lease ownership for sessions - append-only audit trail.
+    
+    Each row represents a lease acquisition. Multiple rows per session
+    create a complete audit trail of handoffs between workers.
+    """
+    __tablename__ = "session_leases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    blog_session_id: Mapped[int] = mapped_column(Integer, ForeignKey("blog_sessions.id"), nullable=False)
+    lease_owner: Mapped[str] = mapped_column(String(255), nullable=False)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    release_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    __table_args__ = (
+        Index("ix_session_leases_session", "blog_session_id"),
+        Index("ix_session_leases_owner", "lease_owner"),
+        Index("ix_session_leases_started", "started_at"),
+        Index("ix_session_leases_ended", "ended_at"),
     )
