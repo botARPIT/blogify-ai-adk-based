@@ -8,6 +8,7 @@ from src.core.database import get_db_session
 from src.models.orm_models import AuthUser
 from src.models.repositories.auth_user_repository import AuthUserRepository
 from src.models.repositories.budget_repository import BudgetRepository
+from src.models.repositories.budget_account_repository import BudgetAccountRepository
 from src.models.schemas import AuthMeResponse, LoginRequest, RegisterRequest, TokenResponse, UserResponse
 from src.services.auth_service import AuthService
 from src.services.local_auth_service import LocalAuthService
@@ -20,7 +21,8 @@ local_auth = LocalAuthService()
 async def register(body: RegisterRequest, response: Response, session: AsyncSession = Depends(get_db_session)):
     user_repo = AuthUserRepository(session)
     budget_repo = BudgetRepository(session)
-    auth_service = AuthService(user_repo, budget_repo)
+    account_repo = BudgetAccountRepository(session)
+    auth_service = AuthService(user_repo, budget_repo, account_repo)
 
     try:
         user = await auth_service.register(
@@ -49,7 +51,8 @@ async def register(body: RegisterRequest, response: Response, session: AsyncSess
 async def login(body: LoginRequest, response: Response, session: AsyncSession = Depends(get_db_session)):
     user_repo = AuthUserRepository(session)
     budget_repo = BudgetRepository(session)
-    auth_service = AuthService(user_repo, budget_repo)
+    account_repo = BudgetAccountRepository(session)
+    auth_service = AuthService(user_repo, budget_repo, account_repo)
 
     try:
         token = await auth_service.login(body.email, body.password)

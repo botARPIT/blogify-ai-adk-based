@@ -18,6 +18,8 @@ from src.models.orm_models import AgentRun, AgentRunStatus, BlogSessionStatus
 from src.models.repositories.agent_run_repository import AgentRunRepository
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.budget_repository import BudgetRepository
+from src.models.repositories.budget_account_repository import BudgetAccountRepository
+from src.models.repositories.session_reservation_repository import SessionReservationRepository
 from src.models.repositories.research_sources_repository import ResearchSourcesRepository
 from src.services.budget_service import BudgetService
 
@@ -28,7 +30,12 @@ class PipelineExecutor:
         self._session_repo = BlogSessionRepository(session)
         self._run_repo = AgentRunRepository(session)
         self._budget_repo = BudgetRepository(session)
-        self._budget_service = BudgetService(self._budget_repo, self._session_repo)
+        self._account_repo = BudgetAccountRepository(session)
+        self._reservation_repo = SessionReservationRepository(session)
+        self._budget_service = BudgetService(
+            self._budget_repo, self._session_repo,
+            self._account_repo, self._reservation_repo,
+        )
         self._sources_repo = ResearchSourcesRepository(session)
 
     async def execute(self, job: BlogJob) -> None:

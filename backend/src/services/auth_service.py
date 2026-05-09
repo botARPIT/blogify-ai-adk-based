@@ -12,6 +12,7 @@ from src.config.budget_config import INITIAL_BUDGET_TOKENS, INITIAL_BUDGET_USD
 from src.models.orm_models import AuthUser, BudgetEntryType
 from src.models.repositories.auth_user_repository import AuthUserRepository
 from src.models.repositories.budget_repository import BudgetRepository
+from src.models.repositories.budget_account_repository import BudgetAccountRepository
 from src.services.local_auth_service import LocalAuthService
 
 
@@ -24,9 +25,11 @@ class AuthService:
         self,
         user_repo: AuthUserRepository,
         budget_repo: BudgetRepository,
+        account_repo: BudgetAccountRepository,
     ) -> None:
         self._user_repo = user_repo
         self._budget_repo = budget_repo
+        self._account_repo = account_repo
 
     async def register(
         self,
@@ -48,6 +51,12 @@ class AuthService:
         self._user_repo.session.add(user)
         await self._user_repo.session.flush()
 
+        # Atomic: credit budget_accounts (source-of-truth)
+        await self._account_repo.apply_grant(
+            user_id=user.id,
+            amount_usd=self.INITIAL_BUDGET_USD,
+        )
+        # Audit: append to ledger
         await self._budget_repo.write_entry(
             user_id=user.id,
             blog_session_id=None,

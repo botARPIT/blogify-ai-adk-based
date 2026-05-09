@@ -12,6 +12,8 @@ from src.core.task_queue import task_queue
 from src.guards.input_guard import InputGuard
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.budget_repository import BudgetRepository
+from src.models.repositories.budget_account_repository import BudgetAccountRepository
+from src.models.repositories.session_reservation_repository import SessionReservationRepository
 from src.models.repositories.research_sources_repository import ResearchSourcesRepository
 from src.models.schemas import (
     AgentRunMetrics,
@@ -34,6 +36,7 @@ from src.models.schemas import (
 )
 from src.services.blog_service import BlogService
 from src.services.budget_service import BudgetService
+from src.services.exceptions import SessionTerminalError, InsufficientBudgetError
 
 router = APIRouter(prefix="/blogs", tags=["blogs"])
 
@@ -63,7 +66,9 @@ async def generate_blog(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     budget_repo = BudgetRepository(session)
-    budget_service = BudgetService(budget_repo, session_repo)
+    account_repo = BudgetAccountRepository(session)
+    reservation_repo = SessionReservationRepository(session)
+    budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
     blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
 
@@ -81,12 +86,17 @@ async def generate_blog(
             adk_session_id=result.adk_session_id,
             created_at=result.created_at,
         )
+    except SessionTerminalError:
+        raise HTTPException(
+            status_code=409,
+            detail={"error_code": "SESSION_TERMINAL", "message": "This request ID has already completed. Generate a new Idempotency-Key to retry."},
+        )
+    except InsufficientBudgetError as e:
+        raise HTTPException(status_code=402, detail=str(e))
     except ValueError as e:
         error_msg = str(e)
         if "already has an active" in error_msg:
             raise HTTPException(status_code=409, detail=error_msg)
-        if "Insufficient budget" in error_msg:
-            raise HTTPException(status_code=402, detail=error_msg)
         raise HTTPException(status_code=400, detail=error_msg)
 
 
@@ -98,7 +108,9 @@ async def list_blogs(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     budget_repo = BudgetRepository(session)
-    budget_service = BudgetService(budget_repo, session_repo)
+    account_repo = BudgetAccountRepository(session)
+    reservation_repo = SessionReservationRepository(session)
+    budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
     blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
 
@@ -155,7 +167,9 @@ async def submit_outline_review_frontend(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     budget_repo = BudgetRepository(session)
-    budget_service = BudgetService(budget_repo, session_repo)
+    account_repo = BudgetAccountRepository(session)
+    reservation_repo = SessionReservationRepository(session)
+    budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
     blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
 
@@ -191,7 +205,9 @@ async def get_budget(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     budget_repo = BudgetRepository(session)
-    budget_service = BudgetService(budget_repo, session_repo)
+    account_repo = BudgetAccountRepository(session)
+    reservation_repo = SessionReservationRepository(session)
+    budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
 
     result = await budget_service.get_balance_snapshot(user_id)
     
@@ -342,7 +358,9 @@ async def get_blog(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     budget_repo = BudgetRepository(session)
-    budget_service = BudgetService(budget_repo, session_repo)
+    account_repo = BudgetAccountRepository(session)
+    reservation_repo = SessionReservationRepository(session)
+    budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
     blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
 
@@ -401,7 +419,9 @@ async def submit_outline_review(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     budget_repo = BudgetRepository(session)
-    budget_service = BudgetService(budget_repo, session_repo)
+    account_repo = BudgetAccountRepository(session)
+    reservation_repo = SessionReservationRepository(session)
+    budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
     blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
 
@@ -427,7 +447,9 @@ async def submit_final_review(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     budget_repo = BudgetRepository(session)
-    budget_service = BudgetService(budget_repo, session_repo)
+    account_repo = BudgetAccountRepository(session)
+    reservation_repo = SessionReservationRepository(session)
+    budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
     blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
 

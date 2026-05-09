@@ -1,4 +1,4 @@
-"""Canonical V1 ORM models - auth_users, blog_sessions, agent_runs, budget_ledger."""
+"""Canonical V1 ORM models - auth_users, blog_sessions, agent_runs, budget_ledger, budget_accounts, session_reservations."""
 
 import enum
 from datetime import datetime, timezone
@@ -156,6 +156,72 @@ class BudgetLedger(Base):
     __table_args__ = (
         Index("ix_budget_ledger_user_id", "user_id"),
         Index("ix_budget_ledger_session", "blog_session_id"),
+    )
+
+
+
+class BudgetAccount(Base):
+    """Single source-of-truth balance per user.
+
+    One row per user. Updated atomically at every terminal budget event:
+      GRANT   → balance_usd += amount, total_granted_usd += amount
+      RESERVE → reserved_usd += amount  (via SessionReservation; row not touched here)
+      COMMIT  → reserved_usd -= reserved_amount; balance_usd -= actual_usd; total_spent_usd += actual_usd
+      RELEASE → reserved_usd -= excess_usd  (balance_usd unchanged for excess release)
+
+    available_usd = balance_usd - reserved_usd
+    """
+    __tablename__ = "budget_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False, unique=True)
+    balance_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
+    reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
+    total_granted_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
+    total_spent_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
+    last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        Index("ix_budget_accounts_user_id", "user_id"),
+    )
+
+
+class ReservationStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    COMMITTED = "COMMITTED"
+    RELEASED = "RELEASED"
+
+
+class SessionReservation(Base):
+    """Per-session budget reservation record.
+
+    Created when a session's budget is reserved (check_and_reserve).
+    Updated to COMMITTED or RELEASED at terminal budget events.
+    Used by BudgetService to calculate per-session excess on release.
+    """
+    __tablename__ = "session_reservations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False)
+    blog_session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("blog_sessions.id"), nullable=False, unique=True
+    )
+    reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False)
+    reserved_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    actual_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
+    actual_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(
+        Enum(ReservationStatus, values_callable=lambda e: [x.value for x in e], native_enum=False),
+        nullable=False,
+        default=ReservationStatus.ACTIVE,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    __table_args__ = (
+        Index("ix_session_reservations_user", "user_id"),
+        Index("ix_session_reservations_session", "blog_session_id"),
     )
 
 

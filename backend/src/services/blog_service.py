@@ -11,6 +11,7 @@ from src.core.task_queue import BlogJob, TaskQueue
 from src.models.orm_models import BlogSession, BlogSessionStatus
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.services.budget_service import BudgetService
+from src.services.exceptions import SessionTerminalError
 
 
 class BlogService:
@@ -42,6 +43,17 @@ class BlogService:
                 user_id, idempotency_key
             )
             if existing:
+                terminal = {
+                    BlogSessionStatus.COMPLETED.value,
+                    BlogSessionStatus.FAILED.value,
+                    BlogSessionStatus.CANCELLED.value,
+                }
+                if existing.status in terminal:
+                    raise SessionTerminalError(
+                        f"Session {existing.id} is in terminal state '{existing.status}'. "
+                        "Generate a new Idempotency-Key to start a fresh request."
+                    )
+                # Non-terminal — return existing for status-polling
                 return existing
 
         active_count = await self._session_repo.count_active_for_user(user_id)

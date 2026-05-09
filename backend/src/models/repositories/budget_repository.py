@@ -17,19 +17,6 @@ class BudgetRepository:
     def session(self) -> AsyncSession:
         return self._session
 
-    async def get_balance(self, user_id: int) -> dict:
-        result = await self._session.execute(
-            select(
-                func.coalesce(func.sum(BudgetLedger.amount_usd), 0).label("balance_usd"),
-                func.coalesce(func.sum(BudgetLedger.tokens), 0).label("balance_tokens"),
-            ).where(BudgetLedger.user_id == user_id)
-        )
-        row = result.one()
-        return {
-            "balance_usd": row.balance_usd or Decimal("0"),
-            "balance_tokens": row.balance_tokens or 0,
-        }
-
     async def write_entry(
         self,
         *,
