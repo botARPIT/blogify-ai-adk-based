@@ -6,7 +6,7 @@
 .cursor/
 .codex/
 .pytest_cache/
-
+.docs/blogs/*
 # IDE specific
 .cursorrules
 .codesnap/
@@ -16,7 +16,8 @@
 .mcp.json
 .codex
 .skills-lock.json
-
+.opencode.json
+.mcp.json
 # Root-level documentation files
 AGENTS.md
 ASSESSMENT.md
@@ -25,3 +26,5 @@ GEMINI.md
 MANUAL_QA_CHECKLIST.md
 session-ses_1fba.md
 UPSTREAM_SERVICE_DEPLOYMENT.md
+CLAUDE.md
+CODE_REVIEW_GRAPH.md
