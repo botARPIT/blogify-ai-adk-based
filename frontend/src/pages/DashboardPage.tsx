@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
@@ -34,6 +34,9 @@ const DashboardPage: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const { budget, error: budgetError } = useBudgetPolling();
   const navigate = useNavigate();
+  // Idempotency key — one UUID per user-intent.
+  // Kept across network retries; cleared after a terminal outcome.
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   const fetchSessions = async (showLoading = true) => {
     if (showLoading) setRefreshing(true);
@@ -73,7 +76,12 @@ const DashboardPage: React.FC = () => {
       setError('Topic must be at least 10 characters long.');
       return;
     }
-    
+
+    // Generate a fresh UUID if this is a new intent (no key yet)
+    if (!idempotencyKeyRef.current) {
+      idempotencyKeyRef.current = crypto.randomUUID();
+    }
+
     setLoading(true);
     setError('');
 
@@ -82,9 +90,13 @@ const DashboardPage: React.FC = () => {
         topic,
         audience: audience || 'general readers',
         tone,
+        idempotencyKey: idempotencyKeyRef.current,
       };
 
       const data = await generateBlog(payload);
+
+      // Success → terminal outcome, clear key so next Generate is a fresh intent
+      idempotencyKeyRef.current = null;
 
       const newSession: SessionItem = {
         session_id: data.session_id,
@@ -103,9 +115,19 @@ const DashboardPage: React.FC = () => {
       });
       navigate(getRouteForStatus(data.session_id, data.status));
     } catch (err: any) {
-      const message = err.message || 'Generation failed';
-      setError(message);
-      toast.error('Failed to queue blog generation', { description: message });
+      // SESSION_TERMINAL → the previous run finished; auto-rotate key and advise user
+      if (err?.status === 409 && err?.body?.error_code === 'SESSION_TERMINAL') {
+        idempotencyKeyRef.current = null;
+        setError('Previous generation already completed. Click Generate again to start a new one.');
+        toast.info('Previous session was terminal', {
+          description: 'A new request ID has been issued — click Generate to proceed.',
+        });
+      } else {
+        // Transient error → keep the key so retries deduplicate
+        const message = err.message || 'Generation failed';
+        setError(message);
+        toast.error('Failed to queue blog generation', { description: message });
+      }
     } finally {
       setLoading(false);
     }

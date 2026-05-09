@@ -4,6 +4,7 @@ export interface GenerateBlogRequest {
   topic: string;
   audience?: string;
   tone?: string;
+  idempotencyKey?: string;  // passed as Idempotency-Key header
 }
 
 export interface GenerateBlogResponse {
@@ -176,10 +177,13 @@ export interface SessionDetailView {
 }
 
 export async function generateBlog(input: GenerateBlogRequest): Promise<GenerateBlogResponse> {
+  const { idempotencyKey, ...body } = input;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
   return request<GenerateBlogResponse>('/api/v1/blogs/generate', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
+    headers,
+    body: JSON.stringify(body),
   });
 }
 
