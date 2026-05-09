@@ -1,6 +1,10 @@
 """Worker process for blog generation jobs.
 
 Run as: python -m src.workers.blog_worker
+
+NOTE: The Reaper runs as a separate process (`python -m src.workers.reaper`).
+Do NOT instantiate Reaper inside this worker — 3 worker replicas would create
+3 concurrent reapers all racing to expire/requeue the same stale leases.
 """
 
 import asyncio
@@ -17,7 +21,7 @@ from src.core.task_queue import TaskQueue
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.session_lease_repository import SessionLeaseRepository
 from src.workers.executor import PipelineExecutor
-from src.workers.reaper import Reaper
+# Reaper is a separate standalone process — do not import here.
 
 setup_logging(
     config.log_level,
@@ -40,8 +44,6 @@ class BlogWorker:
 
     async def run(self) -> None:
         asyncio.create_task(self._heartbeat_loop())
-        reaper = Reaper(self._queue)
-        asyncio.create_task(reaper.run_forever())
 
         while self._running:
             job = await self._queue.dequeue(timeout=5)

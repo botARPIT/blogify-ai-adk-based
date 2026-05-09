@@ -1,6 +1,10 @@
 """Reaper — recovers stale jobs and re-enqueues them for retry.
 
-Runs as an asyncio task inside blog_worker.py alongside the main loop.
+Run as a standalone process: python -m src.workers.reaper
+
+Exactly ONE reaper should run across the entire cluster. Running multiple
+reapers is safe (idempotent DB updates) but wasteful — keep replicas=1 in
+the compose/k8s config.
 """
 import asyncio
 from datetime import datetime, timezone, timedelta
@@ -83,3 +87,24 @@ class Reaper:
         reclaimed = await self._queue.reclaim_stale()
         if reclaimed > 0:
             logger.info("queue_reclaimed", count=reclaimed)
+
+
+async def main() -> None:
+    from src.config.env_loader import ensure_env_loaded  # noqa: F401
+    from src.config.logging_config import setup_logging
+    from src.config.env_config import config
+    from src.core.task_queue import TaskQueue
+
+    setup_logging(
+        config.log_level,
+        log_format=config.log_format,
+        mask_secrets=config.mask_secrets_in_logs,
+    )
+    logger.info("reaper_starting")
+    reaper = Reaper(TaskQueue())
+    await reaper.run_forever()
+
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
