@@ -37,6 +37,11 @@ export async function parseJsonOrText<T>(res: Response): Promise<T> {
   throw new Error(await res.text());
 }
 
+// In production (Vercel) this is the absolute EC2 API URL, e.g.
+//   https://api.blogifyai.arpitdev.site
+// In development it is empty so that the Vite proxy handles /api/* locally.
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const isMutating = Boolean(init?.method && init.method !== 'GET' && init.method !== 'HEAD');
   const headers = new Headers(init?.headers || {});
@@ -49,7 +54,8 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set('Idempotency-Key', crypto.randomUUID());
   }
 
-  const res = await fetch(path, {
+  const url = `${API_BASE}${path}`;
+  const res = await fetch(url, {
     credentials: 'include',
     ...init,
     headers,

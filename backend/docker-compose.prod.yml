@@ -1,0 +1,206 @@
+# docker-compose.prod.yml — BlogifyAI EC2 Phase 1
+#
+# USAGE:
+#   IMAGE_TAG=<commit-sha> docker compose -f docker-compose.prod.yml up -d
+#
+# All env vars are read from /home/ubuntu/blogifyai/.env (injected by deploy.yml).
+# Ports 80 and 443 are the ONLY ports exposed to the host — everything else
+# is internal to the `backend` network.
+#
+# Access Grafana/Prometheus via SSH tunnel:
+#   ssh -L 3000:localhost:3000 ubuntu@<ec2-ip>   → Grafana
+#   ssh -L 9090:localhost:9090 ubuntu@<ec2-ip>   → Prometheus
+
+x-api-image: &api-image iarpitchauhan/blogify-ai:${IMAGE_TAG:-latest}
+
+x-api-env: &api-env
+  ENVIRONMENT: ${ENVIRONMENT}
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_URL: ${REDIS_URL}
+  GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+  TAVILY_API_KEY: ${TAVILY_API_KEY}
+  JWT_SECRET: ${JWT_SECRET}
+  ADMIN_API_KEY: ${ADMIN_API_KEY}
+  CORS_ORIGINS: ${CORS_ORIGINS}
+
+services:
+  # ── TLS / Reverse Proxy ──────────────────────────────────────────────────────
+  nginx-proxy:
+    image: nginxproxy/nginx-proxy:1.6
+    container_name: nginx-proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - nginx_certs:/etc/nginx/certs:ro
+      - nginx_vhost:/etc/nginx/vhost.d
+      - nginx_html:/usr/share/nginx/html
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+      - ./nginx/blogifyai-security-headers.conf:/etc/nginx/conf.d/blogifyai-security-headers.conf:ro
+    networks:
+      - frontend
+      - backend
+
+  acme-companion:
+    image: nginxproxy/acme-companion:2.4
+    container_name: acme-companion
+    restart: unless-stopped
+    depends_on:
+      - nginx-proxy
+    environment:
+      NGINX_PROXY_CONTAINER: nginx-proxy
+      DEFAULT_EMAIL: ${LETSENCRYPT_EMAIL:-arpit@arpitdev.site}
+    volumes:
+      - nginx_certs:/etc/nginx/certs
+      - nginx_vhost:/etc/nginx/vhost.d
+      - nginx_html:/usr/share/nginx/html
+      - acme_data:/etc/acme.sh
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - frontend
+
+  # ── API ──────────────────────────────────────────────────────────────────────
+  api:
+    image: *api-image
+    container_name: blogifyai-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+      # nginx-proxy auto-routes by these two vars
+      VIRTUAL_HOST: api.blogifyai.arpitdev.site
+      VIRTUAL_PORT: 8000
+      LETSENCRYPT_HOST: api.blogifyai.arpitdev.site
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - frontend
+      - backend
+
+  # ── Workers (3 replicas) ─────────────────────────────────────────────────────
+  worker:
+    image: *api-image
+    restart: unless-stopped
+    command: python -m src.workers.blog_worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+    deploy:
+      replicas: 3
+    networks:
+      - backend
+
+  # ── Reaper ───────────────────────────────────────────────────────────────────
+  reaper:
+    image: *api-image
+    container_name: blogifyai-reaper
+    restart: unless-stopped
+    command: python -m src.workers.reaper
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *api-env
+    networks:
+      - backend
+
+  # ── Database ─────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: blogifyai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: blogifyai-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  # ── Prometheus (internal only — SSH tunnel to access) ────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: blogifyai-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    expose:
+      - "9090"
+    networks:
+      - backend
+
+  # ── Grafana (internal only — SSH tunnel to access) ───────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: blogifyai-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    expose:
+      - "3000"
+    networks:
+      - backend
+
+networks:
+  frontend:
+    name: blogifyai_frontend
+  backend:
+    name: blogifyai_backend
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+  nginx_certs:
+  nginx_vhost:
+  nginx_html:
+  acme_data:

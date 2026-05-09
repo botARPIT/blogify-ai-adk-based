@@ -6,7 +6,7 @@ from typing import Optional
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.orm_models import BlogSessionStatus, SessionLease, LeaseEventType
+from src.models.orm_models import BlogSessionStatus, SessionLease, LeaseEventType, BlogSession
 
 
 class SessionLeaseRepository:
@@ -58,8 +58,8 @@ class SessionLeaseRepository:
         self._session.add(new_lease)
 
         await self._session.execute(
-            update(BlogSessionStatus)
-            .where(BlogSessionStatus.id == session_id)
+            update(BlogSession)
+            .where(BlogSession.id == session_id)
             .values(status=BlogSessionStatus.PROCESSING)
         )
 

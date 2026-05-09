@@ -1,97 +1,85 @@
+# Deployment Pipeline for BlogifyAI — EC2 Phase 1
+#
+# Triggered automatically when CI's build-and-push job succeeds on main.
+# The EC2 instance's IAM role (blogifyai-ec2-role) grants access to
+# AWS Secrets Manager — no AWS credentials are stored in GitHub secrets.
+#
+# Required GitHub Secrets:
+#   DOCKERHUB_USERNAME   — iarpitchauhan
+#   DOCKERHUB_TOKEN      — Docker Hub access token (read: pull on EC2 only)
+#   EC2_HOST             — public IP or DNS of the EC2 instance
+#   EC2_SSH_KEY          — private key PEM (no passphrase) for ubuntu@EC2_HOST
+#   AWS_REGION           — ap-south-1
+#   AWS_SECRET_NAME      — blogifyai/production
+
 name: Deploy to EC2
 
 on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: 'Deployment mode'
-        required: true
-        default: 'local'
-        type: choice
-        options:
-          - local
-          - vpc
-      environment:
-        description: 'Environment'
-        required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
-    secrets:
-      SSH_PRIVATE_KEY:
-        required: true
-      EC2_HOST:
-        required: true
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    env:
+      IMAGE: iarpitchauhan/blogify-ai:${{ github.event.workflow_run.head_sha }}
+      IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+      DEPLOY_DIR: /home/ubuntu/blogifyai
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Docker
-        uses: docker/setup-buildx-action@v3
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push backend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/blogify-backend:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/blogify-backend:${{ github.event.inputs.environment }}
-
-      - name: Build and push frontend image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./frontend
-          file: ./frontend/Dockerfile
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository }}/blogify-frontend:${{ github.sha }}
-            ghcr.io/${{ github.repository }}/blogify-frontend:${{ github.event.inputs.environment }}
-
-      - name: Copy deployment files to EC2
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
-          source: ".github/workflows/deploy-ec2.sh,docker-compose.${{ github.event.inputs.mode }}.yml"
-          target: /home/ubuntu/blogify
-          strip_components: 1
-
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.1.0
+        uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: 22
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: IMAGE,IMAGE_TAG,DEPLOY_DIR
           script: |
-            cd /home/ubuntu/blogify
-            
-            # Login to GHCR
-            echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            
-            # Pull latest images
-            docker compose -f docker-compose.${{ github.event.inputs.mode }}.yml pull
-            
-            # Restart services
-            docker compose -f docker-compose.${{ github.event.inputs.mode }}.yml up -d
-            
-            # Cleanup unused images
+            set -euo pipefail
+            echo "==> [1/5] Injecting secrets from AWS Secrets Manager..."
+            aws secretsmanager get-secret-value \
+              --secret-id "${{ secrets.AWS_SECRET_NAME }}" \
+              --region "${{ secrets.AWS_REGION }}" \
+              --query SecretString \
+              --output text \
+            | python3 -c "
+            import sys, json
+            for k, v in json.load(sys.stdin).items():
+                print(f'{k}={v}')
+            " > "${DEPLOY_DIR}/.env"
+            chmod 600 "${DEPLOY_DIR}/.env"
+            # Append runtime values
+            echo "IMAGE_TAG=${IMAGE_TAG}" >> "${DEPLOY_DIR}/.env"
+
+            echo "==> [2/5] Pulling new image..."
+            docker pull "${IMAGE}"
+
+            echo "==> [3/5] Running Alembic migrations (throwaway container)..."
+            docker run --rm \
+              --env-file "${DEPLOY_DIR}/.env" \
+              --network blogifyai_backend \
+              "${IMAGE}" \
+              alembic upgrade head
+
+            echo "==> [4/5] Bringing up the production stack..."
+            cd "${DEPLOY_DIR}"
+            IMAGE_TAG="${IMAGE_TAG}" docker compose \
+              -f docker-compose.prod.yml \
+              up -d --remove-orphans
+
+            echo "==> [5/5] Pruning old images..."
             docker image prune -f
+
+            echo "✅ Deploy of ${IMAGE} complete."
+
+      - name: Smoke-test health endpoint
+        run: |
+          sleep 10  # allow containers to settle
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+            https://api.blogifyai.arpitdev.site/api/health || echo "000")
+          echo "Health endpoint returned HTTP ${STATUS}"
+          [ "${STATUS}" = "200" ] || (echo "❌ Health check failed" && exit 1)
