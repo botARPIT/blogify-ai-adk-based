@@ -18,7 +18,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+.kubernetes/
+.examples/
 # Environment
 .env
 .env.local
@@ -58,6 +59,9 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+docker-compose.base.yml
+docker-compose.local.yml
+docker-compose.vpc.yml
 
 # Monitoring data
 prometheus_data/
