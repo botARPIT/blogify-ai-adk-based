@@ -4,6 +4,8 @@
 .agents/
 .code-review-graph/
 .cursor/
+.codex/
+.pytest_cache/
 
 # IDE specific
 .cursorrules
@@ -14,3 +16,12 @@
 .mcp.json
 .codex
 .skills-lock.json
+
+# Root-level documentation files
+AGENTS.md
+ASSESSMENT.md
+DEPLOYMENT_READINESS.md
+GEMINI.md
+MANUAL_QA_CHECKLIST.md
+session-ses_1fba.md
+UPSTREAM_SERVICE_DEPLOYMENT.md
