@@ -20,7 +20,7 @@ const LandingPage: React.FC = () => {
         <h1 className="display-title mb-md" style={{ color: 'var(--accent-color)' }}>
           BLOGIFY<span className="text-primary" style={{ color: 'white' }}> AI</span>
         </h1>
-        <h2 className="page-title mb-md">
+        <h2 className="page-title mb-md" style={{ margin: '0 auto', maxWidth: '15ch' }}>
           AI-driven blog generation with a human-in-the-loop review gate.
         </h2>
         <p className="page-subtitle mb-lg" style={{ fontSize: '1.25rem', margin: '0 auto 3rem auto' }}>
