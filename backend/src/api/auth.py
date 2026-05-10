@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -41,8 +41,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/v1/health/ready",
         "/api/v1/health/detailed",
         "/api/v1/auth/login",
-        "/api/v1/auth/me",
-        "/api/v1/auth/logout",
+        "/api/v1/auth/register",
     }
     PUBLIC_PREFIXES = {
         "/health",

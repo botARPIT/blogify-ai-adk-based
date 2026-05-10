@@ -172,7 +172,16 @@ def get_config() -> BaseConfig:
     }
 
     config_class = config_map.get(env, DevelopmentConfig)
-    return config_class()
+    cfg = config_class()
+
+    # DEBUG: Print loaded config
+    print(f"[DEBUG] Environment: {env}")
+    print(f"[DEBUG] CORS_ORIGINS: {cfg.cors_origins}")
+    print(f"[DEBUG] CORS_ALLOW_CREDENTIALS: {cfg.cors_allow_credentials}")
+    print(f"[DEBUG] COOKIE_SECURE: {os.getenv('COOKIE_SECURE', 'false')}")
+    print(f"[DEBUG] COOKIE_SAMESITE: {os.getenv('COOKIE_SAMESITE', 'lax')}")
+
+    return cfg
 
 
 # Global config instance
