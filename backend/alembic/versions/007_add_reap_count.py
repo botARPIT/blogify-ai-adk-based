@@ -1,7 +1,7 @@
 """add reap_count for accurate reaping
 
 Revision ID: 007_add_reap_count
-Revises: 006_budget_ledger_and_reaper_hardening
+Revises: 006_lease_fix
 Create Date: 2026-04-28
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '007_add_reap_count'
-down_revision: Union[str, Sequence[str], None] = '006_budget_ledger_and_reaper_hardening'
+down_revision: Union[str, Sequence[str], None] = '006_lease_fix'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
