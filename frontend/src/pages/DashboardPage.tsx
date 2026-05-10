@@ -149,7 +149,7 @@ const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="dashboard-grid">
+      <div className="dashboard-grid-centered">
         <section className="bento-card panel-card composer-panel" style={{ borderLeft: '4px solid var(--accent-color)' }}>
           <h2 className="card-title">Compose A New Session</h2>
           <form onSubmit={handleGenerate}>
@@ -191,6 +191,7 @@ const DashboardPage: React.FC = () => {
               className="brutalist-button"
               type="submit" 
               disabled={loading}
+              style={{ width: '100%', padding: '1rem', fontSize: '1.2rem', marginTop: '0.5rem' }}
             >
               {loading ? <span className="spinner"></span> : null}
               {loading ? 'Queueing Session...' : 'Commence Generation'}
@@ -244,9 +245,17 @@ const DashboardPage: React.FC = () => {
             <p className="text-secondary">{budgetError}</p>
           ) : budget ? (
             <div className="stat-stack">
-              <div className="meta-row">
-                <span className="eyebrow-label" style={{ margin: 0 }}>Progress</span>
-                <span className="meta-value">{100 - (budget.daily_blog_limit_left || 0)} / 100</span>
+              <div className="meta-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                  <span className="eyebrow-label" style={{ margin: 0 }}>Daily Blogs Remaining</span>
+                  <span className="meta-value">{budget.daily_blog_limit_left || 0} / 100</span>
+                </div>
+                <div className="progress-bar-container">
+                  <div 
+                    className="progress-bar-fill" 
+                    style={{ width: `${Math.max(0, Math.min(100, ((budget.daily_blog_limit_left || 0) / 100) * 100))}%` }} 
+                  />
+                </div>
               </div>
               <div className="meta-row">
                 <span className="eyebrow-label" style={{ margin: 0 }}>Remaining Credits</span>
@@ -254,9 +263,9 @@ const DashboardPage: React.FC = () => {
               </div>
               <div className="meta-row">
                 <span className="eyebrow-label" style={{ margin: 0 }}>Balance USD</span>
-                <span className="meta-value">${(budget.balance_usd || 0).toFixed(2)}</span>
+                <span className="meta-value" style={{ color: 'var(--accent-color)' }}>${(budget.balance_usd || 0).toFixed(2)}</span>
               </div>
-              <button className="brutalist-button secondary" type="button" onClick={() => navigate('/budget')}>
+              <button className="brutalist-button secondary" type="button" onClick={() => navigate('/budget')} style={{ marginTop: '1rem' }}>
                 Open Budget View
               </button>
             </div>
