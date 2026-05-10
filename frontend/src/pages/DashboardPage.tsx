@@ -37,6 +37,19 @@ const DashboardPage: React.FC = () => {
   // Idempotency key — one UUID per user-intent.
   // Kept across network retries; cleared after a terminal outcome.
   const idempotencyKeyRef = useRef<string | null>(null);
+  const carouselRef = useRef<HTMLUListElement>(null);
+
+  const scrollUp = () => {
+    if (carouselRef.current) {
+      carouselRef.current.scrollBy({ top: -140, behavior: 'smooth' });
+    }
+  };
+
+  const scrollDown = () => {
+    if (carouselRef.current) {
+      carouselRef.current.scrollBy({ top: 140, behavior: 'smooth' });
+    }
+  };
 
   const fetchSessions = async (showLoading = true) => {
     if (showLoading) setRefreshing(true);
@@ -208,9 +221,33 @@ const DashboardPage: React.FC = () => {
           {recentSessions.length === 0 ? (
             <p className="text-secondary italic">No recent sessions found.</p>
           ) : (
-            <ul className="session-list">
-              {recentSessions.map((session) => (
-                <li key={session.session_id} className="session-list-item">
+            <div className="vertical-carousel-wrapper">
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                <button type="button" onClick={scrollUp} className="brutalist-button secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.9rem' }} aria-label="Scroll Up">
+                  ▲
+                </button>
+                <button type="button" onClick={scrollDown} className="brutalist-button secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.9rem' }} aria-label="Scroll Down">
+                  ▼
+                </button>
+              </div>
+              <ul 
+                className="session-list" 
+                ref={carouselRef}
+                style={{ 
+                  maxHeight: '400px', 
+                  overflowY: 'auto', 
+                  scrollSnapType: 'y mandatory',
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none'
+                }}
+              >
+                <style>{`.session-list::-webkit-scrollbar { display: none; }`}</style>
+                {recentSessions.map((session) => (
+                  <li 
+                    key={session.session_id} 
+                    className="session-list-item"
+                    style={{ scrollSnapAlign: 'start' }}
+                  >
                   <div className="session-list-row">
                     <div className="session-list-copy">
                       <h4 className="session-list-title">{session.topic}</h4>
@@ -232,7 +269,8 @@ const DashboardPage: React.FC = () => {
                   </div>
                 </li>
               ))}
-            </ul>
+              </ul>
+            </div>
           )}
         </section>
 
