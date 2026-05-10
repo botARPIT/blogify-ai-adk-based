@@ -1,18 +1,15 @@
 """AuthService — user registration, login, and JWT issuance."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Optional
 
 import bcrypt
 import jwt
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.config.budget_config import INITIAL_BUDGET_TOKENS, INITIAL_BUDGET_USD
 from src.models.orm_models import AuthUser, BudgetEntryType
 from src.models.repositories.auth_user_repository import AuthUserRepository
-from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
+from src.models.repositories.budget_repository import BudgetRepository
 from src.services.local_auth_service import LocalAuthService
 
 
@@ -35,7 +32,7 @@ class AuthService:
         self,
         email: str,
         password: str,
-        display_name: Optional[str] = None,
+        display_name: str | None = None,
     ) -> AuthUser:
         existing = await self._user_repo.get_by_email(email)
         if existing:
@@ -77,13 +74,13 @@ class AuthService:
         if not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
             raise ValueError("Invalid credentials")
 
-        user.last_login_at = datetime.now(timezone.utc)
+        user.last_login_at = datetime.now(UTC)
         await self._user_repo.session.flush()
 
         token = jwt.encode(
             {
                 "sub": str(user.id),
-                "exp": datetime.now(timezone.utc).timestamp() + 86400,
+                "exp": datetime.now(UTC).timestamp() + 86400,
                 "aud": self._local_auth.audience,
                 "iss": self._local_auth.issuer,
             },
