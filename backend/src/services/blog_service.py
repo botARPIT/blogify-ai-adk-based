@@ -1,12 +1,8 @@
 """BlogService — owns blog session lifecycle from API side."""
 
 import uuid
-from typing import Optional
+from datetime import UTC, datetime
 
-import redis.asyncio as redis
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from src.core.redis_pool import get_redis_client
 from src.core.task_queue import BlogJob, TaskQueue
 from src.models.orm_models import BlogSession, BlogSessionStatus
 from src.models.repositories.blog_session_repository import BlogSessionRepository
@@ -36,12 +32,10 @@ class BlogService:
         topic: str,
         audience: str,
         tone: str,
-        idempotency_key: Optional[str] = None,
+        idempotency_key: str | None = None,
     ) -> BlogSession:
         if idempotency_key:
-            existing = await self._session_repo.get_by_idempotency_key(
-                user_id, idempotency_key
-            )
+            existing = await self._session_repo.get_by_idempotency_key(user_id, idempotency_key)
             if existing:
                 terminal = {
                     BlogSessionStatus.COMPLETED.value,
@@ -70,9 +64,7 @@ class BlogService:
             idempotency_key=idempotency_key,
         )
 
-        lock_acquired = await self._redis.set(
-            f"budget_lock:{user_id}", "1", nx=True, ex=10
-        )
+        lock_acquired = await self._redis.set(f"budget_lock:{user_id}", "1", nx=True, ex=10)
         if not lock_acquired:
             raise ValueError("Rate limit exceeded, try again later")
 
@@ -111,7 +103,7 @@ class BlogService:
         user_id: int,
         session_id: int,
         approved_outline: dict,
-        feedback_text: Optional[str] = None,
+        feedback_text: str | None = None,
     ) -> BlogSession:
         session = await self.get_session(user_id, session_id)
         if session.status != BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value:
@@ -144,9 +136,8 @@ class BlogService:
         user_id: int,
         session_id: int,
         approved: bool,
-        feedback_text: Optional[str] = None,
+        feedback_text: str | None = None,
     ) -> BlogSession:
-        from datetime import datetime, timezone
 
         session = await self.get_session(user_id, session_id)
         if session.status != BlogSessionStatus.AWAITING_FINAL_REVIEW.value:
@@ -154,7 +145,7 @@ class BlogService:
 
         if approved:
             session.status = BlogSessionStatus.COMPLETED.value
-            session.completed_at = datetime.now(timezone.utc)
+            session.completed_at = datetime.now(UTC)
         else:
             session.status = BlogSessionStatus.FAILED.value
             session.failure_reason = feedback_text or "Rejected by user"
