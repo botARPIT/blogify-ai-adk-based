@@ -8,24 +8,27 @@ class TestLogin:
 
     def test_login_valid_credentials_returns_token(self, test_client):
         """Test user can login with correct email/password and receives JWT token."""
+        mock_user = MagicMock()
+        mock_user.id = 1
+        mock_user.email = "test@example.com"
+        mock_user.password_hash = "$2b$12$hashedpassword"
+        mock_user.display_name = "Test User"
+        mock_user.is_active = True
+        mock_user.created_at = None
+        mock_user.last_login_at = None
+
+        # Patch login on the service AND get_by_email on the repo so the route
+        # handler can build the UserResponse after a successful login.
         with patch(
-            "src.models.repositories.auth_user_repository.AuthUserRepository.get_by_email"
-        ) as mock_get:
-            mock_user = MagicMock()
-            mock_user.id = 1
-            mock_user.email = "test@example.com"
-            mock_user.password_hash = "$2b$12$hashedpassword"  # Pre-hashed
-            mock_user.display_name = "Test User"
-            mock_user.is_active = True
-            mock_user.created_at = None
-            mock_user.last_login_at = None
-            mock_get.return_value = mock_user
-
+            "src.api.routes.auth_routes.AuthService.login",
+            new_callable=AsyncMock,
+            return_value="test-jwt-token",
+        ):
             with patch(
-                "src.services.auth_service.AuthService.login", new_callable=AsyncMock
-            ) as mock_login:
-                mock_login.return_value = "test-jwt-token"
-
+                "src.api.routes.auth_routes.AuthUserRepository.get_by_email",
+                new_callable=AsyncMock,
+                return_value=mock_user,
+            ):
                 response = test_client.post(
                     "/api/v1/auth/login",
                     json={"email": "test@example.com", "password": "password123"},
@@ -128,19 +131,27 @@ class TestAuthenticatedRequests:
 
     def test_authenticated_blogs_list_passes(self, test_client):
         """Test authenticated request to /blogs/ passes."""
-        with patch("src.api.auth.get_current_user") as mock_auth:
-            mock_auth.return_value = MagicMock(user_id=1)
+        from src.api.auth import get_current_user, AuthenticatedUser
+        from src.api.main import app
 
-            with patch(
-                "src.models.repositories.blog_session_repository.BlogSessionRepository.get_for_user"
-            ) as mock_get:
-                mock_get.return_value = []
+        mock_user = AuthenticatedUser(user_id="1", email="test@example.com")
 
-                response = test_client.get(
-                    "/api/v1/blogs/", cookies={"auth_token": "valid-jwt-token"}
-                )
+        # Override the FastAPI dependency directly so the middleware-based
+        # auth check is bypassed regardless of the cookie value.
+        app.dependency_overrides[get_current_user] = lambda: mock_user
 
-                assert response.status_code == 200
+        with patch(
+            "src.api.routes.blog_routes.BlogSessionRepository.get_for_user",
+            new_callable=AsyncMock,
+            return_value=[],
+        ):
+            response = test_client.get(
+                "/api/v1/blogs/", cookies={"auth_token": "valid-jwt-token"}
+            )
+
+        app.dependency_overrides.clear()
+
+        assert response.status_code == 200
 
     def test_protected_route_without_valid_cookie_still_returns_401(self, test_client):
         """Test request with invalid/expired cookie returns 401."""
