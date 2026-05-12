@@ -8,40 +8,41 @@ class TestLogin:
 
     def test_login_valid_credentials_returns_token(self, test_client, mock_db_session):
         """Test user can login with correct email/password and receives JWT token."""
+        import bcrypt as _bcrypt
         from src.api.main import app
         from src.core.database import get_db_session
-        from src.services.auth_service import AuthService
+
+        # Real bcrypt hash for "password123" — lets auth_service.login run
+        # end-to-end without any class-level patching.
+        real_hash = _bcrypt.hashpw(b"password123", _bcrypt.gensalt()).decode()
 
         mock_user = MagicMock()
         mock_user.id = 1
         mock_user.email = "test@example.com"
+        mock_user.password_hash = real_hash
         mock_user.display_name = "Test User"
         mock_user.is_active = True
         mock_user.created_at = None
         mock_user.last_login_at = None
 
-        # Stub the entire AuthService.login so no real bcrypt/DB work happens,
-        # and stub get_by_email so the route can build the UserResponse.
-        with patch.object(AuthService, "login", new_callable=AsyncMock, return_value="test-jwt-token"):
-            with patch(
-                "src.api.routes.auth_routes.AuthUserRepository.get_by_email",
-                new_callable=AsyncMock,
-                return_value=mock_user,
-            ):
-                # Override get_db_session so the route receives our mock session
-                # instead of trying to open a real DB connection.
-                async def override_get_db():
-                    yield mock_db_session
+        # Make session.execute(...).scalar_one_or_none() return mock_user
+        # so both get_by_email calls (inside login + after login) return it.
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_user
+        mock_db_session.execute = AsyncMock(return_value=mock_result)
 
-                app.dependency_overrides[get_db_session] = override_get_db
+        async def override_get_db():
+            yield mock_db_session
 
-                try:
-                    response = test_client.post(
-                        "/api/v1/auth/login",
-                        json={"email": "test@example.com", "password": "password123"},
-                    )
-                finally:
-                    app.dependency_overrides.pop(get_db_session, None)
+        app.dependency_overrides[get_db_session] = override_get_db
+
+        try:
+            response = test_client.post(
+                "/api/v1/auth/login",
+                json={"email": "test@example.com", "password": "password123"},
+            )
+        finally:
+            app.dependency_overrides.pop(get_db_session, None)
 
         assert response.status_code == 200
         data = response.json()
