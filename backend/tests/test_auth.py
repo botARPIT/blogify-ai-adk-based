@@ -9,6 +9,7 @@ class TestLogin:
     def test_login_valid_credentials_returns_token(self, test_client, mock_db_session):
         """Test user can login with correct email/password and receives JWT token."""
         import bcrypt as _bcrypt
+        from datetime import datetime, timezone
         from src.api.main import app
         from src.core.database import get_db_session
 
@@ -21,7 +22,10 @@ class TestLogin:
         mock_user.password_hash = real_hash
         mock_user.display_name = "Test User"
         mock_user.is_active = True
-        mock_user.created_at = None
+        # created_at must be a real datetime — UserResponse schema requires it
+        # and Pydantic v1 ValidationError inherits ValueError, so None here
+        # would be caught by the route's except ValueError -> 401.
+        mock_user.created_at = datetime(2024, 1, 1, tzinfo=timezone.utc)
         mock_user.last_login_at = None
 
         # Wire execute() -> scalar_one_or_none() -> mock_user for all DB calls
