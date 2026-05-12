@@ -7,7 +7,7 @@
 
 set -euo pipefail
 
-SECRET_NAME="${AWS_SECRET_NAME:-blogifyai/production}"
+SECRET_NAME="${AWS_SECRET_NAME:-blogify/production}"
 REGION="${AWS_REGION:-ap-south-1}"
 OUTPUT="${DEPLOY_DIR:-/home/ubuntu/blogifyai}/.env"
 
