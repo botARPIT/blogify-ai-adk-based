@@ -53,8 +53,11 @@ jobs:
             " > "${DEPLOY_DIR}/.env"
             chmod 600 "${DEPLOY_DIR}/.env"
             echo "IMAGE_TAG=${IMAGE_TAG}" >> "${DEPLOY_DIR}/.env"
-
-            echo "==> [2/6] Starting postgres + redis containers..."
+            
+            echo "==> [2/6] Pulling repo from origin/main..."
+            git -C "${DEPLOY_DIR}" fetch origin main
+            git -C "${DEPLOY_DIR}" reset --hard origin/main
+            echo "==> [3/6] Starting postgres + redis containers..."
             cd "${DEPLOY_DIR}"
             docker compose -f backend/docker-compose.prod.yml up -d postgres redis
 
@@ -66,9 +69,7 @@ jobs:
             done
             echo "  postgres is ready."
 
-            echo "==> [4/6] Pulling repo from origin/main..."
-            git -C "${DEPLOY_DIR}" fetch origin main
-            git -C "${DEPLOY_DIR}" reset --hard origin/main
+
 
             echo "==> [4/6] Pulling new image..."
             docker pull "${IMAGE}"
