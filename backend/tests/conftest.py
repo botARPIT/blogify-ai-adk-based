@@ -42,12 +42,11 @@ def mock_db_session():
     return session
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True, scope="function")
 def mock_redis():
     """Mock Redis client with proper async method configuration.
     
-    Returns a configured AsyncMock that can be used in tests.
-    Tests should NOT patch get_redis_client themselves.
+    Automatically patches get_redis_client for all tests.
     """
     redis = AsyncMock()
     # Configure all async methods with proper return values
@@ -69,23 +68,29 @@ def mock_redis():
         return redis
     
     # Patch get_redis_client globally for this test
-    with patch('src.core.redis_pool.get_redis_client', side_effect=mock_get_redis_client):
-        yield redis
+    patcher = patch('src.core.redis_pool.get_redis_client', side_effect=mock_get_redis_client)
+    patcher.start()
+    yield redis
+    # Clean up
+    redis.reset_mock()
+    patcher.stop()
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True, scope="function")
 def mock_session_factory(mock_db_session):
     """Mock AsyncSessionFactory with proper async context manager.
     
-    Returns a configured factory that can be used in tests.
+    Automatically patches AsyncSessionFactory for all tests.
     """
     factory = AsyncMock()
     factory.__aenter__ = AsyncMock(return_value=mock_db_session)
     factory.__aexit__ = AsyncMock(return_value=None)
     
     # Patch AsyncSessionFactory to return this mock
-    with patch('src.core.database.AsyncSessionFactory', return_value=factory):
-        yield factory
+    patcher = patch('src.core.database.AsyncSessionFactory', return_value=factory)
+    patcher.start()
+    yield factory
+    patcher.stop()
 
 
 @pytest.fixture

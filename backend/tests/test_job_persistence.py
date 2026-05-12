@@ -9,7 +9,9 @@ import pytest
 class TestJobPersistence:
     """Test that API persists job to DB and enqueues to Redis."""
 
+    @pytest.mark.integration
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_generate_creates_session_in_db(self):
         """Test POST /generate creates BlogSession record in database."""
         mock_session = AsyncMock()
@@ -49,6 +51,7 @@ class TestJobPersistence:
                 assert result.topic == "Test Topic"
 
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_generate_enqueues_to_redis(self, mock_redis):
         """Test POST /generate adds job to Redis queue."""
         from src.core.task_queue import BlogJob, TaskQueue
@@ -78,6 +81,7 @@ class TestJobPersistence:
         assert enqueued_job["topic"] == "Test Topic"
 
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_generate_creates_budget_ledger_entry(self, mock_session):
         """Test POST /generate creates budget ledger entry for reservation."""
         with patch(
@@ -101,6 +105,7 @@ class TestJobPersistence:
             mock_write.assert_called_once()
 
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_idempotency_key_prevents_duplicate_session(self, mock_session):
         """Test same idempotency key returns existing session without creating new."""
         with patch(
@@ -121,6 +126,7 @@ class TestJobPersistence:
             assert not mock_session.add.called
 
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_idempotency_key_none_creates_new_session(self, mock_session):
         """Test no idempotency key creates new session."""
         with patch(
@@ -157,6 +163,7 @@ class TestJobEnqueueDetails:
     """Test job enqueue structure and details."""
 
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_job_contains_all_required_fields(self, mock_redis):
         """Test job enqueued contains all required fields."""
         from src.core.task_queue import BlogJob, TaskQueue
@@ -189,6 +196,7 @@ class TestJobEnqueueDetails:
         assert "enqueued_at" in enqueued_job
 
     @pytest.mark.asyncio
+    @pytest.mark.integration
     async def test_multiple_jobs_enqueued_separately(self, mock_redis):
         """Test multiple jobs are enqueued with correct order."""
         from src.core.task_queue import BlogJob, TaskQueue
