@@ -56,10 +56,10 @@ jobs:
 
             echo "==> [2/6] Starting postgres + redis containers..."
             cd "${DEPLOY_DIR}"
-            docker compose -f docker-compose.prod.yml up -d postgres redis
+            docker compose -f backend/docker-compose.prod.yml up -d postgres redis
 
             echo "==> [3/6] Waiting for postgres to be healthy..."
-            until docker compose -f docker-compose.prod.yml exec -T postgres \
+            until docker compose -f backend/docker-compose.prod.yml exec -T postgres \
               pg_isready -U "${POSTGRES_USER:-blogifyai}" -d "${POSTGRES_DB:-blogifyai}"; do
               echo "  postgres not ready, retrying in 5s..."
               sleep 5
@@ -81,7 +81,7 @@ jobs:
               alembic upgrade head
 
             echo "==> [6/6] Bringing up the full production stack with 3 worker replicas..."
-            docker compose -f docker-compose.prod.yml up -d --scale worker=3 --remove-orphans
+            docker compose -f backend/docker-compose.prod.yml up -d --scale worker=3 --remove-orphans
 
             echo "==> Pruning old images..."
             docker image prune -f
