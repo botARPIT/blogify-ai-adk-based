@@ -6,8 +6,8 @@ Exactly ONE reaper should run across the entire cluster. Running multiple
 reapers is safe (idempotent DB updates) but wasteful — keep replicas=1 in
 the compose/k8s config.
 """
+
 import asyncio
-from datetime import datetime, timezone, timedelta
 
 from src.config.logging_config import get_logger
 from src.core.database import AsyncSessionFactory
@@ -15,7 +15,6 @@ from src.core.task_queue import BlogJob, TaskQueue
 from src.models.orm_models import BlogSessionStatus
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.session_lease_repository import SessionLeaseRepository
-from src.models.orm_models import LeaseEventType
 
 logger = get_logger(__name__)
 
@@ -39,49 +38,62 @@ class Reaper:
 
     async def _reap_stale_leases(self) -> None:
         async with AsyncSessionFactory() as session:
-            session_repo = BlogSessionRepository(session)
-            lease_repo = SessionLeaseRepository(session)
+            try:
+                session_repo = BlogSessionRepository(session)
+                lease_repo = SessionLeaseRepository(session)
 
-            stale_leases = await lease_repo.get_stale_sessions(STALE_THRESHOLD_MINUTES)
+                stale_leases = await lease_repo.get_stale_sessions(STALE_THRESHOLD_MINUTES)
 
-            for lease in stale_leases:
-                await lease_repo.mark_expired(lease.blog_session_id)
+                seen_sessions = set()
+                unique_leases = []
+                for lease in stale_leases:
+                    if lease.blog_session_id not in seen_sessions:
+                        seen_sessions.add(lease.blog_session_id)
+                        unique_leases.append(lease)
+                stale_leases = unique_leases
 
-                new_reap_count = await session_repo.increment_reap_count(lease.blog_session_id)
-                session = await session_repo.get_by_id(lease.blog_session_id)
+                for lease in stale_leases:
+                    await lease_repo.mark_expired(lease.blog_session_id)
 
-                if not session:
-                    continue
+                    new_reap_count = await session_repo.increment_reap_count(lease.blog_session_id)
+                    session_model = await session_repo.get_by_id(lease.blog_session_id)
 
-                if new_reap_count > MAX_REAP_COUNT:
-                    await session_repo.mark_failed(
-                        lease.blog_session_id, "max reap count exceeded"
-                    )
-                    logger.warning(
-                        "session_marked_failed",
-                        session_id=lease.blog_session_id,
-                        reap_count=new_reap_count,
-                    )
-                else:
-                    await session_repo.update_status(
-                        lease.blog_session_id, BlogSessionStatus.QUEUED
-                    )
-                    job = BlogJob(
-                        session_id=session.id,
-                        user_id=session.user_id,
-                        adk_session_id=session.adk_session_id,
-                        topic=session.topic,
-                        audience=session.audience,
-                        tone=session.tone,
-                        phase="start",
-                    )
-                    await self._queue.enqueue(job)
-                    logger.info(
-                        "session_requeued",
-                        session_id=lease.blog_session_id,
-                        reap_count=new_reap_count,
-                        previous_worker=lease.lease_owner,
-                    )
+                    if not session_model:
+                        continue
+
+                    if new_reap_count > MAX_REAP_COUNT:
+                        await session_repo.mark_failed(lease.blog_session_id, "max reap count exceeded")
+                        logger.warning(
+                            "session_marked_failed",
+                            session_id=lease.blog_session_id,
+                            reap_count=new_reap_count,
+                        )
+                    else:
+                        await session_repo.update_status(
+                            lease.blog_session_id, BlogSessionStatus.QUEUED
+                        )
+                        job = BlogJob(
+                            session_id=session_model.id,
+                            user_id=session_model.user_id,
+                            adk_session_id=session_model.adk_session_id,
+                            topic=session_model.topic,
+                            audience=session_model.audience,
+                            tone=session_model.tone,
+                            phase="start",
+                        )
+                        await self._queue.enqueue(job)
+                        logger.info(
+                            "session_requeued",
+                            session_id=lease.blog_session_id,
+                            reap_count=new_reap_count,
+                            previous_worker=lease.lease_owner,
+                        )
+
+                await session.commit()
+
+            except Exception as e:
+                await session.rollback()
+                logger.error("reaper_cycle_db_error", error=str(e))
 
     async def _reap_queue(self) -> None:
         reclaimed = await self._queue.reclaim_stale()
@@ -90,9 +102,9 @@ class Reaper:
 
 
 async def main() -> None:
+    from src.config.env_config import config
     from src.config.env_loader import ensure_env_loaded  # noqa: F401
     from src.config.logging_config import setup_logging
-    from src.config.env_config import config
     from src.core.task_queue import TaskQueue
 
     setup_logging(
@@ -107,4 +119,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     import asyncio
+
     asyncio.run(main())
