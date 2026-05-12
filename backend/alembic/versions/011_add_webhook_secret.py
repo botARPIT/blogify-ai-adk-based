@@ -10,16 +10,16 @@ Column being added:
 - webhook_secret: VARCHAR(255) NULL (webhook authentication secret)
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision: str = "011_add_webhook_secret"
-down_revision: Union[str, Sequence[str], None] = "010_add_budget_ledger_columns"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "010_add_budget_ledger_columns"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def column_exists(conn, table: str, column: str) -> bool:

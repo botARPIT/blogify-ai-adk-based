@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "003_local_auth_notifications"
 down_revision = "002_outline_review_gate"
@@ -21,8 +22,18 @@ def upgrade() -> None:
         sa.Column("display_name", sa.String(length=255), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+        ),
     )
     op.create_index("ix_auth_users_email", "auth_users", ["email"], unique=True)
 
@@ -38,12 +49,23 @@ def upgrade() -> None:
         sa.Column("is_read", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("payload_json", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("CURRENT_TIMESTAMP")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+        ),
     )
-    op.create_index("ix_user_notifications_user_id", "user_notifications", ["user_id"], unique=False)
-    op.create_index("ix_user_notifications_session_id", "user_notifications", ["session_id"], unique=False)
+    op.create_index(
+        "ix_user_notifications_user_id", "user_notifications", ["user_id"], unique=False
+    )
+    op.create_index(
+        "ix_user_notifications_session_id", "user_notifications", ["session_id"], unique=False
+    )
     op.create_index("ix_user_notifications_type", "user_notifications", ["type"], unique=False)
-    op.create_index("ix_user_notifications_is_read", "user_notifications", ["is_read"], unique=False)
+    op.create_index(
+        "ix_user_notifications_is_read", "user_notifications", ["is_read"], unique=False
+    )
 
 
 def downgrade() -> None:

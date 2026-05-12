@@ -1,8 +1,7 @@
 """PipelineExecutor — bridges worker to ADK pipeline."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,15 +11,16 @@ from src.agents.pipeline import (
     resume_pipeline,
     run_pipeline,
 )
+from src.config.agent_config import agent_delay
 from src.config.budget_config import get_model_cost
 from src.core.task_queue import BlogJob
-from src.models.orm_models import AgentRun, AgentRunStatus, BlogSessionStatus
+from src.models.orm_models import AgentRunStatus, BlogSessionStatus
 from src.models.repositories.agent_run_repository import AgentRunRepository
 from src.models.repositories.blog_session_repository import BlogSessionRepository
-from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
-from src.models.repositories.session_reservation_repository import SessionReservationRepository
+from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.research_sources_repository import ResearchSourcesRepository
+from src.models.repositories.session_reservation_repository import SessionReservationRepository
 from src.services.budget_service import BudgetService
 
 
@@ -33,8 +33,10 @@ class PipelineExecutor:
         self._account_repo = BudgetAccountRepository(session)
         self._reservation_repo = SessionReservationRepository(session)
         self._budget_service = BudgetService(
-            self._budget_repo, self._session_repo,
-            self._account_repo, self._reservation_repo,
+            self._budget_repo,
+            self._session_repo,
+            self._account_repo,
+            self._reservation_repo,
         )
         self._sources_repo = ResearchSourcesRepository(session)
 
@@ -60,6 +62,8 @@ class PipelineExecutor:
             user_id=str(job.user_id),
             session_id=job.adk_session_id,
         )
+
+        await agent_delay()
 
         if result.error:
             await self._handle_failure(job, result.error)
@@ -87,15 +91,15 @@ class PipelineExecutor:
             feedback_text=job.feedback_text,
         )
 
+        await agent_delay()
+
         if result.error:
             await self._handle_failure(job, result.error)
             return
 
         await self._handle_success(job, result)
 
-    async def _handle_outline_pause(
-        self, job: BlogJob, result: PipelineResult
-    ) -> None:
+    async def _handle_outline_pause(self, job: BlogJob, result: PipelineResult) -> None:
         await self._commit_costs(job, result.costs)
 
         await self._session_repo.save_outline(
@@ -115,9 +119,7 @@ class PipelineExecutor:
         await self._commit_costs(job, result.costs, result.research)
 
         if result.final_content:
-            await self._session_repo.save_final_content(
-                job.session_id, result.final_content
-            )
+            await self._session_repo.save_final_content(job.session_id, result.final_content)
 
         await self._budget_service.release_excess(
             user_id=job.user_id, blog_session_id=job.session_id
@@ -131,12 +133,10 @@ class PipelineExecutor:
 
     async def _handle_failure(self, job: BlogJob, error: str) -> None:
         await self._session_repo.mark_failed(job.session_id, reason=error)
-        await self._budget_service.release_all(
-            user_id=job.user_id, blog_session_id=job.session_id
-        )
+        await self._budget_service.release_all(user_id=job.user_id, blog_session_id=job.session_id)
 
     async def _commit_costs(
-        self, job: BlogJob, costs: list[CostInfo], research_data: Optional[dict] = None
+        self, job: BlogJob, costs: list[CostInfo], research_data: dict | None = None
     ) -> None:
         sources_list = []
         if research_data and "sources" in research_data:
@@ -152,18 +152,18 @@ class PipelineExecutor:
             if cost.total_tokens <= 0:
                 continue
 
-            existing = await self._run_repo.get_by_session_and_stage(
-                job.session_id, cost.stage
-            )
+            existing = await self._run_repo.get_by_session_and_stage(job.session_id, cost.stage)
             if existing and existing.status == AgentRunStatus.COMPLETED.value:
                 continue
 
-            output_snapshot: Optional[dict] = {"stage": cost.stage, "costs": cost.__dict__.copy()}
+            output_snapshot: dict | None = {"stage": cost.stage, "costs": cost.__dict__.copy()}
 
             if existing:
                 latency_ms = None
                 if existing.started_at:
-                    latency_ms = int((datetime.now(timezone.utc) - existing.started_at).total_seconds() * 1000)
+                    latency_ms = int(
+                        (datetime.now(UTC) - existing.started_at).total_seconds() * 1000
+                    )
                 await self._run_repo.update(
                     existing.id,
                     prompt_tokens=cost.prompt_tokens,

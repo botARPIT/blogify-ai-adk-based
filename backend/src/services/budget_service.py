@@ -1,15 +1,13 @@
 """BudgetService — V2 budget operations backed by budget_accounts + session_reservations."""
 
 from decimal import Decimal
-from typing import Optional
 
-from src.config.budget_config import ESTIMATED_TOKENS_PER_BLOG, get_model_cost
+from src.config.budget_config import ESTIMATED_TOKENS_PER_BLOG
 from src.models.orm_models import BudgetEntryType
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.session_reservation_repository import SessionReservationRepository
-from src.services.exceptions import InsufficientBudgetError  # re-export for callers
 
 
 class BudgetService:
@@ -101,7 +99,10 @@ class BudgetService:
         # Idempotency guard — skip if already committed for this agent run
         existing = await self._budget_repo.get_ledger_for_session(blog_session_id)
         for entry in existing:
-            if entry.agent_run_id == agent_run_id and entry.entry_type == BudgetEntryType.COMMIT.value:
+            if (
+                entry.agent_run_id == agent_run_id
+                and entry.entry_type == BudgetEntryType.COMMIT.value
+            ):
                 return
 
         # Ledger audit entry
@@ -220,7 +221,7 @@ class BudgetService:
         user_id: int,
         tokens: int,
         amount_usd: Decimal,
-        note: Optional[str] = None,
+        note: str | None = None,
     ) -> None:
         """Grant budget to a user — updates account row and writes ledger entry."""
         await self._account_repo.apply_grant(user_id=user_id, amount_usd=amount_usd)

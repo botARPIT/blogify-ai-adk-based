@@ -1,7 +1,7 @@
 """Prometheus metrics instrumentation."""
 
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from fastapi import Response
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 from src.config.logging_config import get_logger
 

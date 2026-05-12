@@ -17,7 +17,6 @@ from src.agents.intent_agent import intent_agent
 from src.agents.outline_agent import outline_agent
 from src.agents.research_agent import research_agent
 from src.agents.writer_agent import writer_agent
-from src.config import OUTLINE_MODEL, create_retry_config
 from src.config.logging_config import get_logger
 from src.core.sanitization import sanitize_audience, sanitize_topic
 from src.core.session_store import redis_session_service
@@ -293,10 +292,9 @@ def _build_phase_runner(session_service: Any, phase: str) -> Runner:
 def _build_initial_message(topic: str, audience: str) -> types.Content:
     return types.Content(
         role="user",
-        parts=[types.Part(text=(
-            f"Generate a blog post about: {topic}\n"
-            f"Target audience: {audience}"
-        ))],
+        parts=[
+            types.Part(text=(f"Generate a blog post about: {topic}\nTarget audience: {audience}"))
+        ],
     )
 
 
@@ -308,32 +306,42 @@ def _build_confirmation_message(
 ) -> types.Content:
     return types.Content(
         role="user",
-        parts=[types.Part(function_response=types.FunctionResponse(
-            id=confirmation_request_id,
-            name=REQUEST_CONFIRMATION_FUNCTION_CALL_NAME,
-            response={
-                "confirmed": True,
-                "payload": {
-                    "approved_outline": approved_outline,
-                    "feedback_text": feedback_text or "",
-                },
-            },
-        ))],
+        parts=[
+            types.Part(
+                function_response=types.FunctionResponse(
+                    id=confirmation_request_id,
+                    name=REQUEST_CONFIRMATION_FUNCTION_CALL_NAME,
+                    response={
+                        "confirmed": True,
+                        "payload": {
+                            "approved_outline": approved_outline,
+                            "feedback_text": feedback_text or "",
+                        },
+                    },
+                )
+            )
+        ],
     )
 
 
 def _build_phase_message(phase: str, topic: str, audience: str) -> types.Content:
     return types.Content(
         role="user",
-        parts=[types.Part(text=(
-            f"Resume blog generation from {phase}.\n"
-            f"Topic: {topic}\n"
-            f"Target audience: {audience}"
-        ))],
+        parts=[
+            types.Part(
+                text=(
+                    f"Resume blog generation from {phase}.\n"
+                    f"Topic: {topic}\n"
+                    f"Target audience: {audience}"
+                )
+            )
+        ],
     )
 
 
-def _extract_pause_metadata(events: list[Any]) -> tuple[bool, str | None, str | None, dict[str, Any] | None]:
+def _extract_pause_metadata(
+    events: list[Any],
+) -> tuple[bool, str | None, str | None, dict[str, Any] | None]:
     for event in reversed(events):
         function_calls = getattr(event, "get_function_calls", lambda: [])()
         for function_call in function_calls:
@@ -562,7 +570,9 @@ async def resume_pipeline(
     safe_audience = sanitize_audience(audience)
     result = PipelineResult(session_id=session_id)
 
-    with trace_span("pipeline_v2.resume", attributes={"user_id": user_id, "session_id": session_id}):
+    with trace_span(
+        "pipeline_v2.resume", attributes={"user_id": user_id, "session_id": session_id}
+    ):
         try:
             await _ensure_session(
                 svc=svc,
@@ -592,5 +602,7 @@ async def resume_pipeline(
             )
         except Exception as exc:
             result.error = str(exc)
-            logger.error("pipeline_resume_failed", session_id=session_id, error=str(exc), exc_info=True)
+            logger.error(
+                "pipeline_resume_failed", session_id=session_id, error=str(exc), exc_info=True
+            )
             return result

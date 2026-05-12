@@ -6,6 +6,7 @@ from pathlib import Path
 
 # Load environment
 from dotenv import load_dotenv
+
 load_dotenv(dotenv_path=".env.dev")
 
 # Add project root to path

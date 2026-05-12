@@ -37,6 +37,19 @@ const DashboardPage: React.FC = () => {
   // Idempotency key — one UUID per user-intent.
   // Kept across network retries; cleared after a terminal outcome.
   const idempotencyKeyRef = useRef<string | null>(null);
+  const carouselRef = useRef<HTMLUListElement>(null);
+
+  const scrollUp = () => {
+    if (carouselRef.current) {
+      carouselRef.current.scrollBy({ top: -140, behavior: 'smooth' });
+    }
+  };
+
+  const scrollDown = () => {
+    if (carouselRef.current) {
+      carouselRef.current.scrollBy({ top: 140, behavior: 'smooth' });
+    }
+  };
 
   const fetchSessions = async (showLoading = true) => {
     if (showLoading) setRefreshing(true);
@@ -149,7 +162,7 @@ const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="dashboard-grid">
+      <div className="dashboard-grid-centered">
         <section className="bento-card panel-card composer-panel" style={{ borderLeft: '4px solid var(--accent-color)' }}>
           <h2 className="card-title">Compose A New Session</h2>
           <form onSubmit={handleGenerate}>
@@ -191,6 +204,7 @@ const DashboardPage: React.FC = () => {
               className="brutalist-button"
               type="submit" 
               disabled={loading}
+              style={{ width: '100%', padding: '1rem', fontSize: '1.2rem', marginTop: '0.5rem' }}
             >
               {loading ? <span className="spinner"></span> : null}
               {loading ? 'Queueing Session...' : 'Commence Generation'}
@@ -207,9 +221,33 @@ const DashboardPage: React.FC = () => {
           {recentSessions.length === 0 ? (
             <p className="text-secondary italic">No recent sessions found.</p>
           ) : (
-            <ul className="session-list">
-              {recentSessions.map((session) => (
-                <li key={session.session_id} className="session-list-item">
+            <div className="vertical-carousel-wrapper">
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                <button type="button" onClick={scrollUp} className="brutalist-button secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.9rem' }} aria-label="Scroll Up">
+                  ▲
+                </button>
+                <button type="button" onClick={scrollDown} className="brutalist-button secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.9rem' }} aria-label="Scroll Down">
+                  ▼
+                </button>
+              </div>
+              <ul 
+                className="session-list" 
+                ref={carouselRef}
+                style={{ 
+                  maxHeight: '400px', 
+                  overflowY: 'auto', 
+                  scrollSnapType: 'y mandatory',
+                  scrollbarWidth: 'none',
+                  msOverflowStyle: 'none'
+                }}
+              >
+                <style>{`.session-list::-webkit-scrollbar { display: none; }`}</style>
+                {recentSessions.map((session) => (
+                  <li 
+                    key={session.session_id} 
+                    className="session-list-item"
+                    style={{ scrollSnapAlign: 'start' }}
+                  >
                   <div className="session-list-row">
                     <div className="session-list-copy">
                       <h4 className="session-list-title">{session.topic}</h4>
@@ -231,7 +269,8 @@ const DashboardPage: React.FC = () => {
                   </div>
                 </li>
               ))}
-            </ul>
+              </ul>
+            </div>
           )}
         </section>
 
@@ -244,9 +283,17 @@ const DashboardPage: React.FC = () => {
             <p className="text-secondary">{budgetError}</p>
           ) : budget ? (
             <div className="stat-stack">
-              <div className="meta-row">
-                <span className="eyebrow-label" style={{ margin: 0 }}>Progress</span>
-                <span className="meta-value">{100 - (budget.daily_blog_limit_left || 0)} / 100</span>
+              <div className="meta-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                  <span className="eyebrow-label" style={{ margin: 0 }}>Daily Blogs Remaining</span>
+                  <span className="meta-value">{budget.daily_blog_limit_left || 0} / 100</span>
+                </div>
+                <div className="progress-bar-container">
+                  <div 
+                    className="progress-bar-fill" 
+                    style={{ width: `${Math.max(0, Math.min(100, ((budget.daily_blog_limit_left || 0) / 100) * 100))}%` }} 
+                  />
+                </div>
               </div>
               <div className="meta-row">
                 <span className="eyebrow-label" style={{ margin: 0 }}>Remaining Credits</span>
@@ -254,9 +301,9 @@ const DashboardPage: React.FC = () => {
               </div>
               <div className="meta-row">
                 <span className="eyebrow-label" style={{ margin: 0 }}>Balance USD</span>
-                <span className="meta-value">${(budget.balance_usd || 0).toFixed(2)}</span>
+                <span className="meta-value" style={{ color: 'var(--accent-color)' }}>${(budget.balance_usd || 0).toFixed(2)}</span>
               </div>
-              <button className="brutalist-button secondary" type="button" onClick={() => navigate('/budget')}>
+              <button className="brutalist-button secondary" type="button" onClick={() => navigate('/budget')} style={{ marginTop: '1rem' }}>
                 Open Budget View
               </button>
             </div>

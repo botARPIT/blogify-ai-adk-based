@@ -10,17 +10,16 @@ Do NOT instantiate Reaper inside this worker — 3 worker replicas would create
 import asyncio
 import os
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from src.config.env_loader import ensure_env_loaded  # noqa: E402
-from src.config.logging_config import get_logger, setup_logging
 from src.config.env_config import config
+from src.config.logging_config import get_logger, setup_logging
 from src.core.database import AsyncSessionFactory
 from src.core.redis_pool import get_redis_client
 from src.core.task_queue import TaskQueue
-from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.session_lease_repository import SessionLeaseRepository
 from src.workers.executor import PipelineExecutor
+
 # Reaper is a separate standalone process — do not import here.
 
 setup_logging(
@@ -54,11 +53,8 @@ class BlogWorker:
     async def _process_job(self, job) -> None:
         async with self._semaphore:
             async with AsyncSessionFactory() as session:
-                session_repo = BlogSessionRepository(session)
                 lease_repo = SessionLeaseRepository(session)
-                acquired = await lease_repo.acquire_lease(
-                    job.session_id, WORKER_ID, LEASE_SECONDS
-                )
+                acquired = await lease_repo.acquire_lease(job.session_id, WORKER_ID, LEASE_SECONDS)
                 if not acquired:
                     await self._queue.acknowledge(job)
                     return
@@ -90,7 +86,7 @@ class BlogWorker:
         redis = await get_redis_client()
         key = f"blogify:worker:{WORKER_ID}"
         while self._running:
-            await redis.set(key, datetime.now(timezone.utc).isoformat(), ex=60)
+            await redis.set(key, datetime.now(UTC).isoformat(), ex=60)
             await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 

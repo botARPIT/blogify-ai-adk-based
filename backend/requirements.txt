@@ -26,3 +26,4 @@ opentelemetry-instrumentation-sqlalchemy>=0.45b0
 pytest>=7.4.4
 pytest-asyncio>=0.23.3
 pytest-cov>=4.1.0
+bcrypt>=4.0.1

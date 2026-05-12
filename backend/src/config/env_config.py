@@ -4,8 +4,14 @@ import os
 from enum import Enum
 from typing import Any
 
+from dotenv import load_dotenv
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load environment variables immediately when this module is imported
+env = os.getenv("ENVIRONMENT", "dev")
+load_dotenv(f".env.{env}")
+load_dotenv(".env", override=False)
 
 
 class Environment(str, Enum):

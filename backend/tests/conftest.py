@@ -13,14 +13,12 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-# Set test environment - use 'dev' as it's a valid config value
 os.environ["ENVIRONMENT"] = "dev"
 os.environ["GOOGLE_API_KEY"] = "test-api-key"
 os.environ["TAVILY_API_KEY"] = "test-tavily-key"
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://test:test@localhost:5432/test"
 os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 os.environ["ENABLE_CANONICAL_ROUTES"] = "false"
-
 
 
 @pytest.fixture(scope="session")
@@ -32,117 +30,160 @@ def event_loop():
 
 
 @pytest.fixture
-def mock_db_repository():
-    """Mock database repository."""
-    with patch("src.models.repository.db_repository") as mock:
-        mock.get_or_create_user = AsyncMock(return_value=MagicMock(id=1, user_id="test_user"))
-        mock.create_blog = AsyncMock(return_value=MagicMock(id=1, session_id="test-session"))
-        mock.get_blog_by_session = AsyncMock(return_value=MagicMock(
-            id=1,
-            session_id="test-session",
-            topic="Test Topic",
-            audience="Test Audience",
-            status="in_progress",
-            current_stage="intent",
-            stage_data={"status": "CLEAR"},
-            word_count=0,
-            sources_count=0,
-            total_cost_usd=0.0,
-            created_at=None,
-            completed_at=None,
-            title=None,
-            content=None,
-        ))
-        mock.update_blog_stage = AsyncMock()
-        mock.update_blog = AsyncMock()
-        yield mock
+def mock_db_session():
+    """Mock async database session."""
+    session = AsyncMock()
+    session.execute = AsyncMock()
+    session.flush = AsyncMock()
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.add = MagicMock()
+    session.close = AsyncMock()
+    return session
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True, scope="function")
 def mock_redis():
-    """Mock Redis client."""
-    with patch("src.guards.rate_limit_guard.redis_client") as mock:
-        mock.get = AsyncMock(return_value=None)
-        mock.set = AsyncMock(return_value=True)
-        mock.incr = AsyncMock(return_value=1)
-        mock.expire = AsyncMock(return_value=True)
-        yield mock
+    """Mock Redis client with proper async method configuration.
+    
+    Automatically patches get_redis_client for all tests.
+    """
+    redis = AsyncMock()
+    # Configure all async methods with proper return values
+    redis.ping = AsyncMock(return_value=True)
+    redis.get = AsyncMock(return_value=None)
+    redis.set = AsyncMock(return_value=True)
+    redis.lpush = AsyncMock(return_value=1)
+    redis.rpop = AsyncMock(return_value=None)
+    redis.zadd = AsyncMock(return_value=1)
+    redis.zrem = AsyncMock(return_value=1)
+    redis.zrangebyscore = AsyncMock(return_value=[])
+    redis.evalsha = AsyncMock(return_value=None)
+    redis.eval = AsyncMock(return_value=None)
+    redis.script_load = AsyncMock(return_value="test_sha")
+    redis.keys = AsyncMock(return_value=[])
+    
+    # Create async function that returns the mock
+    async def mock_get_redis_client():
+        return redis
+    
+    # Patch get_redis_client in both the source module and every consumer module
+    # that imports it directly (so the already-bound name is replaced too).
+    patchers = [
+        patch('src.core.redis_pool.get_redis_client', side_effect=mock_get_redis_client),
+        patch('src.core.task_queue.get_redis_client', side_effect=mock_get_redis_client),
+    ]
+    for p in patchers:
+        p.start()
+    yield redis
+    # Clean up
+    redis.reset_mock()
+    for p in reversed(patchers):
+        p.stop()
+
+
+@pytest.fixture(autouse=True, scope="function")
+def mock_session_factory(mock_db_session):
+    """Mock AsyncSessionFactory with proper async context manager.
+    
+    Automatically patches AsyncSessionFactory for all tests.
+    """
+    factory = AsyncMock()
+    factory.__aenter__ = AsyncMock(return_value=mock_db_session)
+    factory.__aexit__ = AsyncMock(return_value=None)
+    
+    # Patch AsyncSessionFactory to return this mock
+    patcher = patch('src.core.database.AsyncSessionFactory', return_value=factory)
+    patcher.start()
+    yield factory
+    patcher.stop()
 
 
 @pytest.fixture
-def mock_pipeline():
-    """Mock blog generation pipeline."""
-    with patch("src.agents.pipeline.blog_pipeline") as mock:
-        mock.run_intent_stage = AsyncMock(return_value={
-            "status": "CLEAR",
-            "message": "Topic is clear",
-            "topic": "Test Topic",
-            "audience": "Test Audience"
-        })
-        mock.run_outline_stage = AsyncMock(return_value={
-            "title": "Test Blog",
-            "sections": [{"id": "intro", "heading": "Introduction"}],
-            "estimated_total_words": 500
-        })
-        mock.run_research_stage = AsyncMock(return_value={
-            "topic": "Test Topic",
-            "summary": "Test summary",
-            "sources": [{"title": "Source 1", "url": "https://example.com"}],
-            "total_sources": 1
-        })
-        mock.run_writing_stage = AsyncMock(return_value={
-            "title": "Test Blog",
-            "content": "# Test Blog\n\nContent here...",
-            "word_count": 500,
-            "sources_count": 1
-        })
-        yield mock
+def test_client():
+    """Create test client."""
+    with patch("src.core.database.AsyncSessionFactory"):
+        with patch("src.core.redis_pool.get_redis_client", new_callable=AsyncMock):
+            from src.api.main import app
+
+            return TestClient(app)
 
 
 @pytest.fixture
-def test_client(mock_db_repository, mock_redis):
-    """Create test client with mocked dependencies."""
-    from src.api.main import app
-    return TestClient(app)
+def mock_blog_session():
+    """Mock BlogSession object."""
+    session = MagicMock()
+    session.id = 1
+    session.user_id = 1
+    session.topic = "Test Topic"
+    session.audience = "test audience"
+    session.tone = "professional"
+    session.status = "QUEUED"
+    session.current_stage = None
+    session.adk_session_id = "test-adk-session"
+    session.budget_reserved_tokens = 50000
+    session.budget_reserved_usd = 1.0
+    session.budget_spent_tokens = 0
+    session.budget_spent_usd = 0
+    session.reap_count = 0
+    session.idempotency_key = None
+    session.created_at = None
+    session.updated_at = None
+    session.completed_at = None
+    session.failed_at = None
+    session.failure_reason = None
+    return session
 
 
-# Test data fixtures
+@pytest.fixture
+def mock_agent_run():
+    """Mock AgentRun object."""
+    run = MagicMock()
+    run.id = 1
+    run.blog_session_id = 1
+    run.stage_name = "intent"
+    run.agent_name = "intent"
+    run.model_name = "gemini-2.0-flash"
+    run.status = "COMPLETED"
+    run.prompt_tokens = 100
+    run.completion_tokens = 50
+    run.total_tokens = 150
+    run.cost_usd = 0.000003
+    run.latency_ms = 1000
+    run.output_snapshot = {"stage": "intent", "costs": {}}
+    run.error_message = None
+    run.started_at = None
+    run.completed_at = None
+    return run
+
+
+@pytest.fixture
+def mock_research_source():
+    """Mock ResearchSource object."""
+    source = MagicMock()
+    source.id = 1
+    source.blog_session_id = 1
+    source.user_id = 1
+    source.title = "Test Source"
+    source.url = "https://example.com"
+    source.content = "Test content"
+    source.score = 0.9
+    source.topic = "test"
+    source.collected_at = None
+    return source
+
 
 @pytest.fixture
 def valid_blog_request():
     """Valid blog generation request."""
     return {
-        "user_id": "test_user_123",
         "topic": "The Future of Artificial Intelligence in Healthcare",
-        "audience": "healthcare professionals"
+        "audience": "healthcare professionals",
+        "tone": "professional",
     }
 
 
 @pytest.fixture
 def invalid_blog_request():
     """Invalid blog request (topic too short)."""
-    return {
-        "user_id": "test_user",
-        "topic": "AI",  # Too short
-        "audience": "anyone"
-    }
-
-
-@pytest.fixture
-def approval_request():
-    """Stage approval request."""
-    return {
-        "session_id": "test-session-123",
-        "approved": True,
-        "feedback": None
-    }
-
-
-@pytest.fixture
-def rejection_request():
-    """Stage rejection request."""
-    return {
-        "session_id": "test-session-123",
-        "approved": False,
-        "feedback": "Please focus more on specific examples"
-    }
+    return {"topic": "AI", "audience": "developers", "tone": "professional"}

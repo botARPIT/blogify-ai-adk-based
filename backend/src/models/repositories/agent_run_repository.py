@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
-
+from datetime import UTC, datetime
 from decimal import Decimal
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,10 +20,8 @@ class AgentRunRepository:
     def session(self) -> AsyncSession:
         return self._session
 
-    async def get_by_id(self, run_id: int) -> Optional[AgentRun]:
-        result = await self._session.execute(
-            select(AgentRun).where(AgentRun.id == run_id)
-        )
+    async def get_by_id(self, run_id: int) -> AgentRun | None:
+        result = await self._session.execute(select(AgentRun).where(AgentRun.id == run_id))
         return result.scalar_one_or_none()
 
     async def get_for_session(self, blog_session_id: int) -> list[AgentRun]:
@@ -42,17 +39,14 @@ class AgentRunRepository:
         when resuming a session after a crash or requeue.
         """
         result = await self._session.execute(
-            select(AgentRun.stage_name)
-            .where(
+            select(AgentRun.stage_name).where(
                 AgentRun.blog_session_id == blog_session_id,
                 AgentRun.status == AgentRunStatus.COMPLETED.value,
             )
         )
         return {row[0] for row in result.all()}
 
-    async def is_stage_completed(
-        self, blog_session_id: int, stage_name: str
-    ) -> bool:
+    async def is_stage_completed(self, blog_session_id: int, stage_name: str) -> bool:
         """Check whether a specific stage completed for a session."""
         result = await self._session.execute(
             select(AgentRun.id)
@@ -67,7 +61,7 @@ class AgentRunRepository:
 
     async def get_by_session_and_stage(
         self, blog_session_id: int, stage_name: str
-    ) -> Optional[AgentRun]:
+    ) -> AgentRun | None:
         result = await self._session.execute(
             select(AgentRun).where(
                 AgentRun.blog_session_id == blog_session_id,
@@ -87,8 +81,8 @@ class AgentRunRepository:
         completion_tokens: int = 0,
         total_tokens: int = 0,
         cost_usd: float = 0.0,
-        latency_ms: Optional[int] = None,
-        output_snapshot: Optional[dict] = None,
+        latency_ms: int | None = None,
+        output_snapshot: dict | None = None,
     ) -> AgentRun:
         run = AgentRun(
             blog_session_id=blog_session_id,
@@ -115,8 +109,8 @@ class AgentRunRepository:
         total_tokens: int,
         cost_usd: float,
         status: str,
-        latency_ms: Optional[int] = None,
-        output_snapshot: Optional[dict] = None,
+        latency_ms: int | None = None,
+        output_snapshot: dict | None = None,
     ) -> None:
         run = await self.get_by_id(run_id)
         if run:
@@ -127,24 +121,22 @@ class AgentRunRepository:
             run.status = status
             run.latency_ms = latency_ms
             run.output_snapshot = output_snapshot
-            run.completed_at = datetime.now(timezone.utc)
+            run.completed_at = datetime.now(UTC)
             await self._session.flush()
 
-    async def get_duration_ms(self, run_id: int) -> Optional[int]:
+    async def get_duration_ms(self, run_id: int) -> int | None:
         """Get the duration of an agent run in milliseconds."""
         run = await self.get_by_id(run_id)
         if run and run.completed_at and run.started_at:
             return int((run.completed_at - run.started_at).total_seconds() * 1000)
         return None
 
-    async def get_output_snapshot(self, run_id: int) -> Optional[dict]:
+    async def get_output_snapshot(self, run_id: int) -> dict | None:
         """Get the output snapshot for an agent run."""
         run = await self.get_by_id(run_id)
         return run.output_snapshot if run else None
 
-    async def get_session_timeline(
-        self, blog_session_id: int
-    ) -> list[dict]:
+    async def get_session_timeline(self, blog_session_id: int) -> list[dict]:
         """Get timeline of all agent runs for a session with timing info."""
         runs = await self.get_for_session(blog_session_id)
         timeline = []
@@ -152,19 +144,21 @@ class AgentRunRepository:
             duration_ms = None
             if run.completed_at and run.started_at:
                 duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
-            timeline.append({
-                "run_id": run.id,
-                "stage_name": run.stage_name,
-                "agent_name": run.agent_name,
-                "model_name": run.model_name,
-                "status": run.status,
-                "prompt_tokens": run.prompt_tokens,
-                "completion_tokens": run.completion_tokens,
-                "total_tokens": run.total_tokens,
-                "cost_usd": float(run.cost_usd),
-                "latency_ms": run.latency_ms or duration_ms,
-                "started_at": run.started_at.isoformat() if run.started_at else None,
-                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                "error_message": run.error_message,
-            })
+            timeline.append(
+                {
+                    "run_id": run.id,
+                    "stage_name": run.stage_name,
+                    "agent_name": run.agent_name,
+                    "model_name": run.model_name,
+                    "status": run.status,
+                    "prompt_tokens": run.prompt_tokens,
+                    "completion_tokens": run.completion_tokens,
+                    "total_tokens": run.total_tokens,
+                    "cost_usd": float(run.cost_usd),
+                    "latency_ms": run.latency_ms or duration_ms,
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                    "error_message": run.error_message,
+                }
+            )
         return timeline

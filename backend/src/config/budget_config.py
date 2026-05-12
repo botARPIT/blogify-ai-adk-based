@@ -1,6 +1,5 @@
 """Budget configuration for agents and users."""
 
-import os
 from decimal import Decimal
 from typing import Final
 
@@ -72,4 +71,3 @@ def get_model_cost(model: str, tokens: int) -> float:
     """Calculate cost for given model and token count."""
     price_per_1k = MODEL_PRICING.get(model, MODEL_PRICING["gemini-2.5-flash"])
     return (tokens / 1000) * price_per_1k
-

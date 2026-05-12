@@ -15,15 +15,14 @@ Fix: create the sequence, attach it as the column default, and seed it
 above the current MAX(id) so existing rows are unaffected.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 from alembic import op
-import sqlalchemy as sa
 
-revision: str = '104'
-down_revision: Union[str, Sequence[str], None] = '103'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "104"
+down_revision: str | Sequence[str] | None = "103"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -32,14 +31,11 @@ def upgrade() -> None:
 
     # Attach it as the DEFAULT for the id column
     op.execute(
-        "ALTER TABLE session_leases "
-        "ALTER COLUMN id SET DEFAULT nextval('session_leases_id_seq')"
+        "ALTER TABLE session_leases ALTER COLUMN id SET DEFAULT nextval('session_leases_id_seq')"
     )
 
     # Mark the sequence as owned by the column so it is dropped with the table
-    op.execute(
-        "ALTER SEQUENCE session_leases_id_seq OWNED BY session_leases.id"
-    )
+    op.execute("ALTER SEQUENCE session_leases_id_seq OWNED BY session_leases.id")
 
     # Seed the sequence above the highest existing id (or start at 1 if empty)
     op.execute(
@@ -49,7 +45,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        "ALTER TABLE session_leases ALTER COLUMN id DROP DEFAULT"
-    )
+    op.execute("ALTER TABLE session_leases ALTER COLUMN id DROP DEFAULT")
     op.execute("DROP SEQUENCE IF EXISTS session_leases_id_seq")

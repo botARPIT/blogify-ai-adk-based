@@ -2,11 +2,10 @@
 
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
-from src.core.redis_pool import get_redis_client
 from src.config.logging_config import get_logger
+from src.core.redis_pool import get_redis_client
 
 logger = get_logger(__name__)
 
@@ -20,11 +19,11 @@ class BlogJob:
     audience: str
     tone: str
     phase: str
-    invocation_id: Optional[str] = None
-    confirmation_request_id: Optional[str] = None
-    approved_outline: Optional[dict] = None
-    feedback_text: Optional[str] = None
-    enqueued_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    invocation_id: str | None = None
+    confirmation_request_id: str | None = None
+    approved_outline: dict | None = None
+    feedback_text: str | None = None
+    enqueued_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class TaskQueue:
@@ -40,7 +39,7 @@ class TaskQueue:
     """
 
     def __init__(self):
-        self._dequeue_script_sha: Optional[str] = None
+        self._dequeue_script_sha: str | None = None
 
     async def _get_script_sha(self) -> str:
         if self._dequeue_script_sha is None:
@@ -54,10 +53,10 @@ class TaskQueue:
         await client.lpush(self.QUEUE_KEY, job_json)
         logger.info("job_enqueued", session_id=job.session_id, phase=job.phase)
 
-    async def dequeue(self, timeout: int = 5) -> Optional[BlogJob]:
+    async def dequeue(self, timeout: int = 5) -> BlogJob | None:
         client = await get_redis_client()
 
-        deadline = datetime.now(timezone.utc).timestamp() + self.VISIBILITY_TIMEOUT_SECONDS
+        deadline = datetime.now(UTC).timestamp() + self.VISIBILITY_TIMEOUT_SECONDS
 
         try:
             result = await client.evalsha(
@@ -92,7 +91,7 @@ class TaskQueue:
 
     async def reclaim_stale(self) -> int:
         client = await get_redis_client()
-        now = datetime.now(timezone.utc).timestamp()
+        now = datetime.now(UTC).timestamp()
 
         stale_jobs = await client.zrangebyscore(
             self.PROCESSING_KEY,
@@ -114,7 +113,7 @@ class TaskQueue:
     async def extend_visibility(self, job: BlogJob, additional_seconds: int = 60) -> None:
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
-        new_deadline = datetime.now(timezone.utc).timestamp() + additional_seconds
+        new_deadline = datetime.now(UTC).timestamp() + additional_seconds
         await client.zadd(self.PROCESSING_KEY, {job_json: new_deadline})
         logger.debug("visibility_extended", session_id=job.session_id, seconds=additional_seconds)
 

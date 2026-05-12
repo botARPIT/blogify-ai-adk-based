@@ -7,7 +7,6 @@ from typing import Any
 
 import structlog
 
-
 SENSITIVE_FIELD_PATTERN = re.compile(
     r"(secret|token|api[_-]?key|password|authorization|database_url)", re.IGNORECASE
 )

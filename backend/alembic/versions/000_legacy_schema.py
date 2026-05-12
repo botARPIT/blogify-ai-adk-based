@@ -12,8 +12,9 @@ exist before the additive canonical schema is applied.
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # Revision identifiers
 revision = "000_legacy_schema"

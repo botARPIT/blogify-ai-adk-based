@@ -2,8 +2,8 @@
 
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, EmailStr, Field
 
+from pydantic import BaseModel, EmailStr, Field
 
 # ---------------------------------------------------------------------------
 # Agent I/O schemas (used by ADK agents - NOT part of API contract)
@@ -30,9 +30,7 @@ class OutlineSchema(BaseModel):
     """Blog outline structure."""
 
     title: str = Field(max_length=120, description="Blog title")
-    sections: list[SectionSchema] = Field(
-        min_length=3, max_length=7, description="Blog sections"
-    )
+    sections: list[SectionSchema] = Field(min_length=3, max_length=7, description="Blog sections")
     estimated_total_words: int = Field(ge=300, le=2000, description="Total estimated words")
 
 
@@ -80,7 +78,7 @@ class FinalBlogSchema(BaseModel):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
-    display_name: Optional[str] = None
+    display_name: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -98,17 +96,17 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     id: int
     email: str
-    display_name: Optional[str]
+    display_name: str | None
     is_active: bool
     created_at: datetime
-    last_login_at: Optional[datetime]
+    last_login_at: datetime | None
 
 
 class GenerateRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=500)
     audience: str = Field(default="general readers", max_length=255)
     tone: str = Field(default="professional", max_length=100)
-    idempotency_key: Optional[str] = Field(default=None, max_length=255)
+    idempotency_key: str | None = Field(default=None, max_length=255)
 
 
 class GenerateResponse(BaseModel):
@@ -120,21 +118,21 @@ class GenerateResponse(BaseModel):
 
 class OutlineReviewRequest(BaseModel):
     approved_outline: dict
-    feedback_text: Optional[str] = None
+    feedback_text: str | None = None
 
 
 class OutlineFrontendRequest(BaseModel):
     action: str
-    edited_outline: Optional[dict] = None
-    feedback_text: Optional[str] = None
-    reviewer_user_id: Optional[int] = None
+    edited_outline: dict | None = None
+    feedback_text: str | None = None
+    reviewer_user_id: int | None = None
 
 
 class OutlineFrontendDecision(BaseModel):
     session_id: int
     action: str
     new_status: str
-    current_stage: Optional[str] = None
+    current_stage: str | None = None
 
 
 class OutlineSectionSchema(BaseModel):
@@ -144,25 +142,19 @@ class OutlineSectionSchema(BaseModel):
     target_words: int
 
 
-class OutlineSchema(BaseModel):
-    title: str
-    sections: list[OutlineSectionSchema]
-    estimated_total_words: int
-
-
 class OutlineReviewView(BaseModel):
     session_id: int
     status: str
-    current_stage: Optional[str] = None
+    current_stage: str | None = None
     topic: str
-    audience: Optional[str] = None
-    feedback_text: Optional[str] = None
+    audience: str | None = None
+    feedback_text: str | None = None
     outline: dict
 
 
 class FinalReviewRequest(BaseModel):
     approved: bool
-    feedback_text: Optional[str] = None
+    feedback_text: str | None = None
 
 
 class AgentRunResponse(BaseModel):
@@ -182,35 +174,35 @@ class AgentRunMetrics(BaseModel):
     completion_tokens: int
     total_tokens: int
     cost_usd: float
-    latency_ms: Optional[int] = None
+    latency_ms: int | None = None
     started_at: datetime
-    completed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
+    completed_at: datetime | None = None
+    error_message: str | None = None
 
 
 class SessionInfo(BaseModel):
     session_id: int
     status: str
-    current_stage: Optional[str] = None
+    current_stage: str | None = None
     topic: str
-    audience: Optional[str] = None
+    audience: str | None = None
     created_at: datetime
     updated_at: datetime
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
     # Computed/derived fields for the detail view
     budget_spent_usd: float = 0.0
     budget_spent_tokens: int = 0
     iteration_count: int = 0
     requires_human_review: bool = False
     remaining_revision_iterations: int = 0
-    current_version_number: Optional[int] = None
+    current_version_number: int | None = None
 
 
 class BlogVersionMetrics(BaseModel):
     version_id: int = 1
     version_number: int = 1
-    title: Optional[str] = None
-    content_markdown: Optional[str] = None
+    title: str | None = None
+    content_markdown: str | None = None
     word_count: int = 0
     sources_count: int = 0
     editor_status: str = "completed"
@@ -223,8 +215,8 @@ class BlogSessionMetrics(BaseModel):
     total_cost_usd: float
     total_tokens: int
     total_words: int
-    outline: Optional[dict] = None
-    latest_version: Optional[BlogVersionMetrics] = None
+    outline: dict | None = None
+    latest_version: BlogVersionMetrics | None = None
     agent_runs: list[AgentRunMetrics] = []
     review_events: list = []
 
@@ -235,9 +227,9 @@ class BlogSessionDetail(BaseModel):
     audience: str
     tone: str
     status: str
-    current_stage: Optional[str]
-    outline_data: Optional[dict] = None
-    final_content: Optional[str] = None
+    current_stage: str | None
+    outline_data: dict | None = None
+    final_content: str | None = None
     budget_reserved_usd: float
     budget_spent_usd: float
     agent_runs: list[AgentRunResponse] = []
@@ -251,9 +243,9 @@ class BlogSessionListItem(BaseModel):
     audience: str
     tone: str
     status: str
-    current_stage: Optional[str]
+    current_stage: str | None
     created_at: datetime
-    completed_at: Optional[datetime]
+    completed_at: datetime | None
 
 
 class BudgetResponse(BaseModel):
@@ -265,21 +257,21 @@ class BudgetResponse(BaseModel):
 class SessionStatusResponse(BaseModel):
     session_id: int
     status: str
-    current_stage: Optional[str] = None
-    current_agent: Optional[str] = None
-    topic: Optional[str] = None
+    current_stage: str | None = None
+    current_agent: str | None = None
+    topic: str | None = None
     created_at: datetime
 
 
 class BlogContentView(BaseModel):
     session_id: int
     version_id: int = 1
-    title: Optional[str] = None
+    title: str | None = None
     content_markdown: str
     word_count: int
     sources_count: int = 0
     topic: str
-    audience: Optional[str] = None
+    audience: str | None = None
     status: str
 
 
@@ -288,8 +280,8 @@ class BlogVersionView(BaseModel):
     session_id: int
     version_number: int = 1
     source_type: str = "final"
-    title: Optional[str] = None
-    content_markdown: Optional[str] = None
+    title: str | None = None
+    content_markdown: str | None = None
     word_count: int = 0
     sources_count: int = 0
     editor_status: str = "completed"

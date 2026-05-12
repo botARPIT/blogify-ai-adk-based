@@ -47,7 +47,7 @@ class CostTracker:
     def extract_usage(self, usage_metadata: Any) -> dict[str, int]:
         """
         Extract token usage from ADK usage_metadata.
-        
+
         According to whitepapers, key field is 'token_count'.
         """
         if not usage_metadata:
@@ -76,14 +76,14 @@ class CostTracker:
     ) -> AgentCost:
         """
         Track cost for single agent invocation.
-        
+
         Args:
             session_id: Blog session ID
             agent_name: Name of the agent
             model_name: Model used
             usage_metadata: Usage metadata from ADK response
             latency_ms: Optional latency in milliseconds
-        
+
         Returns:
             AgentCost record
         """

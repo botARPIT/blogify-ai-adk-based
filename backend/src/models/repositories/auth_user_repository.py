@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,13 +18,13 @@ class AuthUserRepository:
     def session(self) -> AsyncSession:
         return self._session
 
-    async def get_by_email(self, email: str) -> Optional[AuthUser]:
+    async def get_by_email(self, email: str) -> AuthUser | None:
         result = await self._session.execute(
             select(AuthUser).where(func.lower(AuthUser.email) == email.strip().lower())
         )
         return result.scalar_one_or_none()
 
-    async def get_by_id(self, user_id: int) -> Optional[AuthUser]:
+    async def get_by_id(self, user_id: int) -> AuthUser | None:
         result = await self._session.execute(select(AuthUser).where(AuthUser.id == user_id))
         return result.scalar_one_or_none()
 
@@ -53,4 +52,4 @@ class AuthUserRepository:
     async def touch_last_login(self, user_id: int) -> None:
         user = await self.get_by_id(user_id)
         if user is not None:
-            user.last_login_at = datetime.now(timezone.utc)
+            user.last_login_at = datetime.now(UTC)

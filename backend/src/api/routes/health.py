@@ -14,7 +14,7 @@ router = APIRouter()
 async def health_check():
     """
     Simple health check endpoint.
-    
+
     Returns basic healthy/unhealthy status.
     Used by load balancers for simple liveness checks.
     """
@@ -29,7 +29,7 @@ async def health_check():
 async def liveness_check():
     """
     Kubernetes liveness probe endpoint.
-    
+
     Returns 200 if the application is running.
     Failure triggers container restart.
     """
@@ -40,17 +40,17 @@ async def liveness_check():
 async def readiness_check(response: Response):
     """
     Kubernetes readiness probe endpoint.
-    
+
     Returns 200 if the application can accept traffic.
     Returns 503 if dependencies are not ready.
     """
     report = await runtime_manager.collect_health_report("api", include_workers=True)
     checks = report.to_dict()["checks"]
     is_ready = report.is_healthy
-    
+
     if not is_ready:
         response.status_code = 503
-    
+
     return {
         "status": "ready" if is_ready else "not_ready",
         "checks": checks,
@@ -61,7 +61,7 @@ async def readiness_check(response: Response):
 async def detailed_health_check():
     """
     Detailed health check with all dependencies.
-    
+
     Checks:
     - Database connectivity
     - Redis connectivity
@@ -71,7 +71,7 @@ async def detailed_health_check():
     """
     report = await runtime_manager.collect_health_report("api", include_workers=True)
     uptime = runtime_manager.uptime()
-    
+
     return {
         "status": report.status,
         "service": "blogify-ai",
@@ -87,11 +87,11 @@ async def detailed_health_check():
 async def startup_health():
     """
     Startup probe endpoint.
-    
+
     Returns information about application startup status.
     """
     uptime = runtime_manager.uptime()
-    
+
     return {
         "status": "started",
         "started_at": runtime_manager.started_at.isoformat(),

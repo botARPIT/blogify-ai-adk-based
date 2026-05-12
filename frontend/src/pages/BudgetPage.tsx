@@ -35,27 +35,15 @@ const BudgetPage: React.FC = () => {
         )}
 
         <div className="bento-card panel-card">
-          <span className="eyebrow-label">Daily Spend</span>
-          <h3 className="stat-number text-accent">${budget.daily_spent_usd.toFixed(2)}</h3>
-          <p className="text-secondary">{budget.daily_spent_tokens} tokens consumed today</p>
+          <span className="eyebrow-label">Balance</span>
+          <h3 className="stat-number text-accent">${(budget.balance_usd ?? 0).toFixed(2)}</h3>
+          <p className="text-secondary">{budget.balance_tokens?.toLocaleString() ?? 0} tokens available</p>
         </div>
 
         <div className="bento-card panel-card">
-          <span className="eyebrow-label">Daily Limit</span>
-          <h3 className="stat-number">${budget.daily_limit_usd.toFixed(2)}</h3>
-          <p className="text-secondary">{budget.daily_limit_tokens} token ceiling</p>
-        </div>
-        
-        <div className="bento-card panel-card">
-          <span className="eyebrow-label">Active Sessions</span>
-          <h3 className="stat-number">{budget.active_sessions}</h3>
-          <p className="text-secondary">Max concurrent: {budget.max_concurrent_sessions}</p>
-        </div>
-
-        <div className="bento-card panel-card">
-          <span className="eyebrow-label">Remaining Revisions</span>
-          <h3 className="stat-number">{budget.remaining_revision_iterations}</h3>
-          <p className="text-secondary">Available revision loops for this user</p>
+          <span className="eyebrow-label">Daily Blog Limit Left</span>
+          <h3 className="stat-number">{budget.daily_blog_limit_left ?? 0}</h3>
+          <p className="text-secondary">Sessions remaining today</p>
         </div>
       </div>
 

@@ -10,6 +10,8 @@ import SessionDetailPage from './pages/SessionDetailPage';
 import BudgetPage from './pages/BudgetPage';
 import LoginPage from './pages/LoginPage';
 import SignupPage from './pages/SignupPage';
+import LandingPage from './pages/LandingPage';
+import ProfilePage from './pages/ProfilePage';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import NotificationBell from './components/notifications/NotificationBell';
@@ -35,14 +37,14 @@ function AppContent() {
   return (
     <div className="app-container">
       <header className="top-bar">
-        <Link to="/" className="brand-logo">
+        <Link to={authenticated ? "/dashboard" : "/"} className="brand-logo">
           Blogify<span className="text-accent">AI</span>
         </Link>
         <nav className="top-bar-nav">
            <Link 
-            to="/" 
+            to="/dashboard" 
             className="top-nav-link"
-            data-active={path === '/'}
+            data-active={path === '/dashboard'}
           >
             Dashboard
           </Link>
@@ -62,7 +64,9 @@ function AppContent() {
                 onMarkAllRead={notifications.markAllRead}
               />
               <div className="user-chip">
-                <span>{user?.display_name || user?.email}</span>
+                <Link to="/profile" style={{ color: 'inherit', textDecoration: 'none' }}>
+                  {user?.display_name || user?.email}
+                </Link>
                 <button className="text-button" type="button" onClick={() => void handleLogout()}>
                   Logout
                 </button>
@@ -74,9 +78,11 @@ function AppContent() {
 
       <main className="main-content">
         <Routes>
+          <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
-          <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+          <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+          <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
           <Route path="/sessions/:sessionId/progress" element={<ProtectedRoute><SessionProgressPage /></ProtectedRoute>} />
           <Route path="/sessions/:sessionId/outline-review" element={<ProtectedRoute><OutlineReviewPage /></ProtectedRoute>} />
           <Route path="/sessions/:sessionId/final-review" element={<ProtectedRoute><FinalReviewPage /></ProtectedRoute>} />

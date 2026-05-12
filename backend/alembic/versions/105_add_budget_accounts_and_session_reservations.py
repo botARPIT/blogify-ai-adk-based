@@ -11,13 +11,14 @@ Changes:
      users have a correct starting balance (ledger sum at migration time).
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "105"
-down_revision: Union[str, Sequence[str], None] = "104"
+down_revision: str | Sequence[str] | None = "104"
 branch_labels = None
 depends_on = None
 
@@ -92,97 +93,98 @@ def upgrade() -> None:
 
     # ------------------------------------------------------------------ #
     # 3. Backfill budget_accounts from ledger sums                        #
-    #    balance_usd  = sum of all GRANT entries (positive, credit)        #
-    #    total_spent  = abs(sum of all COMMIT entries)                     #
-    #    total_granted = same as balance before spending                   #
+    #    Skipped if budget_ledger doesn't exist (fresh DB / renamed table) #
     # ------------------------------------------------------------------ #
-    op.execute(
+    conn = op.get_bind()
+    ledger_exists = conn.execute(
         sa.text(
-            """
-            INSERT INTO budget_accounts (
-                user_id,
-                balance_usd,
-                reserved_usd,
-                total_granted_usd,
-                total_spent_usd,
-                created_at,
-                last_updated_at
-            )
-            SELECT
-                user_id,
-                -- net balance = sum of all entries (GRANT positive, COMMIT/RESERVE negative)
-                COALESCE(SUM(amount_usd), 0)  AS balance_usd,
-                -- reserved_usd: sum of active RESERVE entries not yet released/committed
-                -- Approximation at migration time: assume 0 (clean slate for in-flight sessions)
-                0                              AS reserved_usd,
-                -- total granted = sum of GRANT entries only
-                COALESCE(SUM(CASE WHEN entry_type = 'GRANT' THEN amount_usd ELSE 0 END), 0)
-                                               AS total_granted_usd,
-                -- total spent = abs(sum of COMMIT entries only)
-                COALESCE(ABS(SUM(CASE WHEN entry_type = 'COMMIT' THEN amount_usd ELSE 0 END)), 0)
-                                               AS total_spent_usd,
-                NOW()                          AS created_at,
-                NOW()                          AS last_updated_at
-            FROM budget_ledger
-            GROUP BY user_id
-            ON CONFLICT (user_id) DO NOTHING;
-            """
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = 'budget_ledger'"
         )
-    )
+    ).fetchone()
 
-    # ------------------------------------------------------------------ #
-    # 4. Backfill session_reservations for ACTIVE/in-flight sessions      #
-    #    These are sessions with a RESERVE ledger entry but no RELEASE.   #
-    # ------------------------------------------------------------------ #
-    op.execute(
-        sa.text(
-            """
-            INSERT INTO session_reservations (
-                user_id,
-                blog_session_id,
-                reserved_usd,
-                reserved_tokens,
-                actual_usd,
-                actual_tokens,
-                status,
-                created_at,
-                updated_at
+    if ledger_exists:
+        op.execute(
+            sa.text(
+                """
+                INSERT INTO budget_accounts (
+                    user_id,
+                    balance_usd,
+                    reserved_usd,
+                    total_granted_usd,
+                    total_spent_usd,
+                    created_at,
+                    last_updated_at
+                )
+                SELECT
+                    user_id,
+                    COALESCE(SUM(amount_usd), 0)  AS balance_usd,
+                    0                              AS reserved_usd,
+                    COALESCE(SUM(CASE WHEN entry_type = 'GRANT' THEN amount_usd ELSE 0 END), 0)
+                                                   AS total_granted_usd,
+                    COALESCE(ABS(SUM(CASE WHEN entry_type = 'COMMIT' THEN amount_usd ELSE 0 END)), 0)
+                                                   AS total_spent_usd,
+                    NOW()                          AS created_at,
+                    NOW()                          AS last_updated_at
+                FROM budget_ledger
+                GROUP BY user_id
+                ON CONFLICT (user_id) DO NOTHING;
+                """
             )
-            SELECT
-                r.user_id,
-                r.blog_session_id,
-                ABS(r.reserved_usd)            AS reserved_usd,
-                ABS(r.reserved_tokens)         AS reserved_tokens,
-                COALESCE(ABS(c.committed_usd), 0)  AS actual_usd,
-                COALESCE(ABS(c.committed_tokens), 0) AS actual_tokens,
-                CASE
-                    WHEN bs.status IN ('COMPLETED') THEN 'COMMITTED'
-                    WHEN bs.status IN ('FAILED', 'CANCELLED') THEN 'RELEASED'
-                    ELSE 'ACTIVE'
-                END                            AS status,
-                NOW()                          AS created_at,
-                NOW()                          AS updated_at
-            FROM (
-                SELECT user_id, blog_session_id,
-                       SUM(amount_usd) AS reserved_usd,
-                       SUM(tokens) AS reserved_tokens
-                FROM budget_ledger
-                WHERE entry_type = 'RESERVE' AND blog_session_id IS NOT NULL
-                GROUP BY user_id, blog_session_id
-            ) r
-            LEFT JOIN (
-                SELECT blog_session_id,
-                       SUM(amount_usd) AS committed_usd,
-                       SUM(tokens) AS committed_tokens
-                FROM budget_ledger
-                WHERE entry_type = 'COMMIT' AND blog_session_id IS NOT NULL
-                GROUP BY blog_session_id
-            ) c ON c.blog_session_id = r.blog_session_id
-            LEFT JOIN blog_sessions bs ON bs.id = r.blog_session_id
-            ON CONFLICT (blog_session_id) DO NOTHING;
-            """
         )
-    )
+
+        # ------------------------------------------------------------------ #
+        # 4. Backfill session_reservations for ACTIVE/in-flight sessions      #
+        # ------------------------------------------------------------------ #
+        op.execute(
+            sa.text(
+                """
+                INSERT INTO session_reservations (
+                    user_id,
+                    blog_session_id,
+                    reserved_usd,
+                    reserved_tokens,
+                    actual_usd,
+                    actual_tokens,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    r.user_id,
+                    r.blog_session_id,
+                    ABS(r.reserved_usd)                AS reserved_usd,
+                    ABS(r.reserved_tokens)             AS reserved_tokens,
+                    COALESCE(ABS(c.committed_usd), 0)  AS actual_usd,
+                    COALESCE(ABS(c.committed_tokens), 0) AS actual_tokens,
+                    CASE
+                        WHEN bs.status IN ('COMPLETED') THEN 'COMMITTED'
+                        WHEN bs.status IN ('FAILED', 'CANCELLED') THEN 'RELEASED'
+                        ELSE 'ACTIVE'
+                    END                                AS status,
+                    NOW()                              AS created_at,
+                    NOW()                              AS updated_at
+                FROM (
+                    SELECT user_id, blog_session_id,
+                           SUM(amount_usd) AS reserved_usd,
+                           SUM(tokens) AS reserved_tokens
+                    FROM budget_ledger
+                    WHERE entry_type = 'RESERVE' AND blog_session_id IS NOT NULL
+                    GROUP BY user_id, blog_session_id
+                ) r
+                LEFT JOIN (
+                    SELECT blog_session_id,
+                           SUM(amount_usd) AS committed_usd,
+                           SUM(tokens) AS committed_tokens
+                    FROM budget_ledger
+                    WHERE entry_type = 'COMMIT' AND blog_session_id IS NOT NULL
+                    GROUP BY blog_session_id
+                ) c ON c.blog_session_id = r.blog_session_id
+                LEFT JOIN blog_sessions bs ON bs.id = r.blog_session_id
+                ON CONFLICT (blog_session_id) DO NOTHING;
+                """
+            )
+        )
 
 
 def downgrade() -> None:

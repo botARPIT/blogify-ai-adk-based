@@ -8,14 +8,12 @@ Note: This migration is now a no-op since 100_v1_schema already includes
 the session_leases table. Kept for historical consistency.
 """
 
-from typing import Sequence, Union
-
-from alembic import op
+from collections.abc import Sequence
 
 revision: str = "015_session_leases"
-down_revision: Union[str, Sequence[str], None] = "100"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "100"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

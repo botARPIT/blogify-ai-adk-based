@@ -11,16 +11,16 @@ Changes:
 - Add 'adk_session_id' column (VARCHAR 255, nullable) for ADK session resumability.
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision: str = "008_saga_orchestration_schema"
-down_revision: Union[str, Sequence[str], None] = "007_add_reap_count"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "007_add_reap_count"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -36,10 +36,7 @@ def upgrade() -> None:
     # ── 2. Remove 'budget_exhausted' from enum ──
     # PostgreSQL doesn't natively support DROP VALUE, so we recreate the type.
     # First migrate any rows that currently use the old value to 'failed'.
-    op.execute(
-        "UPDATE blog_sessions SET status = 'failed' "
-        "WHERE status = 'budget_exhausted'"
-    )
+    op.execute("UPDATE blog_sessions SET status = 'failed' WHERE status = 'budget_exhausted'")
 
     # ── 3. Add new saga columns ──
     op.add_column(
@@ -68,10 +65,7 @@ def downgrade() -> None:
     op.drop_column("blog_sessions", "failure_reason")
 
     # Re-add 'budget_exhausted' enum value
-    op.execute(
-        "ALTER TYPE blog_session_status_enum "
-        "ADD VALUE IF NOT EXISTS 'budget_exhausted'"
-    )
+    op.execute("ALTER TYPE blog_session_status_enum ADD VALUE IF NOT EXISTS 'budget_exhausted'")
 
     # Rename back: awaiting_final_review → awaiting_human_review
     op.execute(

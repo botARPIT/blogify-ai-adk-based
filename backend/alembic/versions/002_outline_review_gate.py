@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "002_outline_review_gate"
 down_revision = "001_canonical_schema"
@@ -14,8 +15,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.execute(
-        "ALTER TYPE blog_session_status_enum "
-        "ADD VALUE IF NOT EXISTS 'awaiting_outline_review'"
+        "ALTER TYPE blog_session_status_enum ADD VALUE IF NOT EXISTS 'awaiting_outline_review'"
     )
     op.add_column(
         "blog_sessions",

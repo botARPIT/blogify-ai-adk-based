@@ -1,7 +1,7 @@
 """Canonical V1 ORM models - auth_users, blog_sessions, agent_runs, budget_ledger, budget_accounts, session_reservations."""
 
 import enum
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -9,19 +9,19 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
-    Index,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -88,15 +88,21 @@ class BlogSession(Base):
 
     budget_reserved_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     budget_spent_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    budget_reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
-    budget_spent_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
+    budget_reserved_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 8), nullable=False, default=Decimal("0")
+    )
+    budget_spent_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 8), nullable=False, default=Decimal("0")
+    )
 
     reap_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -112,7 +118,9 @@ class AgentRun(Base):
     __tablename__ = "agent_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    blog_session_id: Mapped[int] = mapped_column(Integer, ForeignKey("blog_sessions.id"), nullable=False)
+    blog_session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("blog_sessions.id"), nullable=False
+    )
     stage_name: Mapped[str] = mapped_column(String(100), nullable=False)
     agent_name: Mapped[str] = mapped_column(String(100), nullable=False)
     model_name: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -142,14 +150,20 @@ class BudgetLedger(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False)
-    blog_session_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("blog_sessions.id"), nullable=True)
-    agent_run_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("agent_runs.id"), nullable=True)
+    blog_session_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("blog_sessions.id"), nullable=True
+    )
+    agent_run_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("agent_runs.id"), nullable=True
+    )
     entry_type: Mapped[str] = mapped_column(
         Enum(BudgetEntryType, values_callable=lambda e: [x.value for x in e], native_enum=False),
         nullable=False,
     )
     tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    amount_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
+    amount_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 8), nullable=False, default=Decimal("0")
+    )
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
@@ -157,7 +171,6 @@ class BudgetLedger(Base):
         Index("ix_budget_ledger_user_id", "user_id"),
         Index("ix_budget_ledger_session", "blog_session_id"),
     )
-
 
 
 class BudgetAccount(Base):
@@ -171,20 +184,31 @@ class BudgetAccount(Base):
 
     available_usd = balance_usd - reserved_usd
     """
+
     __tablename__ = "budget_accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False, unique=True)
-    balance_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
-    reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
-    total_granted_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
-    total_spent_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
-    last_updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("auth_users.id"), nullable=False, unique=True
+    )
+    balance_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 8), nullable=False, default=Decimal("0")
+    )
+    reserved_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 8), nullable=False, default=Decimal("0")
+    )
+    total_granted_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 8), nullable=False, default=Decimal("0")
+    )
+    total_spent_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 8), nullable=False, default=Decimal("0")
+    )
+    last_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
-    __table_args__ = (
-        Index("ix_budget_accounts_user_id", "user_id"),
-    )
+    __table_args__ = (Index("ix_budget_accounts_user_id", "user_id"),)
 
 
 class ReservationStatus(str, enum.Enum):
@@ -200,6 +224,7 @@ class SessionReservation(Base):
     Updated to COMMITTED or RELEASED at terminal budget events.
     Used by BudgetService to calculate per-session excess on release.
     """
+
     __tablename__ = "session_reservations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -209,7 +234,9 @@ class SessionReservation(Base):
     )
     reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False)
     reserved_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    actual_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
+    actual_usd: Mapped[Decimal] = mapped_column(
+        Numeric(12, 8), nullable=False, default=Decimal("0")
+    )
     actual_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(
         Enum(ReservationStatus, values_callable=lambda e: [x.value for x in e], native_enum=False),
@@ -217,7 +244,9 @@ class SessionReservation(Base):
         default=ReservationStatus.ACTIVE,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
 
     __table_args__ = (
         Index("ix_session_reservations_user", "user_id"),
@@ -232,7 +261,9 @@ class ResearchSource(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False)
-    blog_session_id: Mapped[int] = mapped_column(Integer, ForeignKey("blog_sessions.id"), nullable=False)
+    blog_session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("blog_sessions.id"), nullable=False
+    )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=True)
@@ -248,6 +279,7 @@ class ResearchSource(Base):
 
 class LeaseEventType:
     """Lease event types for audit trail."""
+
     ACQUIRED = "ACQUIRED"
     RELEASED = "RELEASED"
     EXPIRED = "EXPIRED"
@@ -257,18 +289,25 @@ class LeaseEventType:
 
 class SessionLease(Base):
     """Lease ownership for sessions - append-only audit trail.
-    
+
     Each row represents a lease acquisition. Multiple rows per session
     create a complete audit trail of handoffs between workers.
     """
+
     __tablename__ = "session_leases"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    blog_session_id: Mapped[int] = mapped_column(Integer, ForeignKey("blog_sessions.id"), nullable=False)
+    blog_session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("blog_sessions.id"), nullable=False
+    )
     lease_owner: Mapped[str] = mapped_column(String(255), nullable=False)
-    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     lease_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     release_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)

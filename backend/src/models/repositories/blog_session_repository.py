@@ -1,9 +1,8 @@
 """BlogSessionRepository — V1 simplified repository."""
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.orm_models import BlogSession, BlogSessionStatus
@@ -25,7 +24,7 @@ class BlogSessionRepository:
         audience: str,
         tone: str,
         adk_session_id: str,
-        idempotency_key: Optional[str] = None,
+        idempotency_key: str | None = None,
     ) -> BlogSession:
         blog_session = BlogSession(
             user_id=user_id,
@@ -40,15 +39,13 @@ class BlogSessionRepository:
         await self._session.flush()
         return blog_session
 
-    async def get_by_id(self, session_id: int) -> Optional[BlogSession]:
+    async def get_by_id(self, session_id: int) -> BlogSession | None:
         result = await self._session.execute(
             select(BlogSession).where(BlogSession.id == session_id)
         )
         return result.scalar_one_or_none()
 
-    async def get_by_idempotency_key(
-        self, user_id: int, key: str
-    ) -> Optional[BlogSession]:
+    async def get_by_idempotency_key(self, user_id: int, key: str) -> BlogSession | None:
         result = await self._session.execute(
             select(BlogSession).where(
                 BlogSession.user_id == user_id,
@@ -68,8 +65,7 @@ class BlogSessionRepository:
 
     async def count_active_for_user(self, user_id: int) -> int:
         result = await self._session.execute(
-            select(BlogSession)
-            .where(
+            select(BlogSession).where(
                 BlogSession.user_id == user_id,
                 BlogSession.status.in_(
                     [
@@ -87,14 +83,14 @@ class BlogSessionRepository:
         self,
         session_id: int,
         status: BlogSessionStatus,
-        current_stage: Optional[str] = None,
+        current_stage: str | None = None,
     ) -> None:
         blog_session = await self.get_by_id(session_id)
         if blog_session:
             blog_session.status = status
             if current_stage:
                 blog_session.current_stage = current_stage
-            blog_session.updated_at = datetime.now(timezone.utc)
+            blog_session.updated_at = datetime.now(UTC)
             await self._session.flush()
 
     async def save_outline(
@@ -109,21 +105,21 @@ class BlogSessionRepository:
             blog_session.outline_data = outline_data
             blog_session.invocation_id = invocation_id
             blog_session.confirmation_request_id = confirmation_request_id
-            blog_session.updated_at = datetime.now(timezone.utc)
+            blog_session.updated_at = datetime.now(UTC)
             await self._session.flush()
 
     async def save_final_content(self, session_id: int, content: str) -> None:
         blog_session = await self.get_by_id(session_id)
         if blog_session:
             blog_session.final_content = content
-            blog_session.updated_at = datetime.now(timezone.utc)
+            blog_session.updated_at = datetime.now(UTC)
             await self._session.flush()
 
     async def increment_reap_count(self, session_id: int) -> int:
         blog_session = await self.get_by_id(session_id)
         if blog_session:
             blog_session.reap_count += 1
-            blog_session.updated_at = datetime.now(timezone.utc)
+            blog_session.updated_at = datetime.now(UTC)
             await self._session.flush()
             return blog_session.reap_count
         return 0
@@ -133,6 +129,6 @@ class BlogSessionRepository:
         if blog_session:
             blog_session.status = BlogSessionStatus.FAILED
             blog_session.failure_reason = reason
-            blog_session.failed_at = datetime.now(timezone.utc)
-            blog_session.updated_at = datetime.now(timezone.utc)
+            blog_session.failed_at = datetime.now(UTC)
+            blog_session.updated_at = datetime.now(UTC)
             await self._session.flush()

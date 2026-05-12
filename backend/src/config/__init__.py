@@ -4,11 +4,12 @@ from src.config.agent_config import (
     CHATBOT_MODEL,
     EDITOR_MODEL,
     INTENT_MODEL,
-    ModelConfig,
     OUTLINE_MODEL,
     RESEARCH_MODEL,
     WRITER_MODEL,
+    ModelConfig,
     _get_default_retry_config,
+    agent_delay,
     create_retry_config,
 )
 from src.config.api_config import APISettings, settings
@@ -31,6 +32,7 @@ __all__ = [
     "EDITOR_MODEL",
     "CHATBOT_MODEL",
     "create_retry_config",
+    "agent_delay",
     "_get_default_retry_config",
     # Budget config
     "budget_settings",

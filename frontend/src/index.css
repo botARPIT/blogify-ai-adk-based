@@ -194,6 +194,15 @@ h1, h2, h3, h4, h5, h6 {
   align-items: start;
 }
 
+.dashboard-grid-centered {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--spacing-md);
+  max-width: 720px;
+  margin: 0 auto;
+  align-items: start;
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -247,6 +256,21 @@ h1, h2, h3, h4, h5, h6 {
   align-items: baseline;
   gap: var(--spacing-sm);
   margin-bottom: var(--spacing-sm);
+}
+
+.progress-bar-container {
+  width: 100%;
+  height: 6px;
+  background: var(--border-color);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-top: 0.35rem;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent-color);
+  transition: width 0.3s ease;
 }
 
 .text-button,
@@ -365,20 +389,21 @@ h1, h2, h3, h4, h5, h6 {
 /* Forms & Inputs */
 .brutalist-input {
   width: 100%;
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
   color: var(--text-primary);
   font-family: var(--font-body);
   font-size: clamp(1.15rem, 2vw, 1.45rem);
-  padding: var(--spacing-sm) 0;
+  padding: 0.85rem 1rem;
   margin-bottom: var(--spacing-md);
-  transition: border-color 0.2s ease;
+  transition: border-color 0.2s ease, background 0.2s ease;
 }
 
 .brutalist-input:focus-visible {
   outline: none;
-  border-bottom-color: var(--accent-color);
+  border-color: var(--accent-color);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .brutalist-input::placeholder {

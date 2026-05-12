@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
 
-revision = "006_budget_ledger_and_reaper_hardening"
+revision = "006_lease_fix"
 down_revision = "005_lease_based_ownership"
 branch_labels = None
 depends_on = None

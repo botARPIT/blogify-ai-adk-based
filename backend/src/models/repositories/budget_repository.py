@@ -1,12 +1,11 @@
 """BudgetRepository — V1 simplified budget ledger."""
 
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.orm_models import BudgetLedger, BudgetEntryType
+from src.models.orm_models import BudgetEntryType, BudgetLedger
 
 
 class BudgetRepository:
@@ -21,12 +20,12 @@ class BudgetRepository:
         self,
         *,
         user_id: int,
-        blog_session_id: Optional[int],
-        agent_run_id: Optional[int],
+        blog_session_id: int | None,
+        agent_run_id: int | None,
         entry_type: BudgetEntryType,
         tokens: int,
         amount_usd: Decimal,
-        note: Optional[str] = None,
+        note: str | None = None,
     ) -> BudgetLedger:
         entry = BudgetLedger(
             user_id=user_id,
@@ -41,9 +40,7 @@ class BudgetRepository:
         await self._session.flush()
         return entry
 
-    async def get_ledger_for_session(
-        self, blog_session_id: int
-    ) -> list[BudgetLedger]:
+    async def get_ledger_for_session(self, blog_session_id: int) -> list[BudgetLedger]:
         result = await self._session.execute(
             select(BudgetLedger)
             .where(BudgetLedger.blog_session_id == blog_session_id)
@@ -53,8 +50,7 @@ class BudgetRepository:
 
     async def get_reserved_for_session(self, blog_session_id: int) -> Decimal:
         result = await self._session.execute(
-            select(func.coalesce(func.sum(BudgetLedger.amount_usd), 0))
-            .where(
+            select(func.coalesce(func.sum(BudgetLedger.amount_usd), 0)).where(
                 BudgetLedger.blog_session_id == blog_session_id,
                 BudgetLedger.entry_type == BudgetEntryType.RESERVE.value,
             )
@@ -63,8 +59,7 @@ class BudgetRepository:
 
     async def get_committed_for_session(self, blog_session_id: int) -> Decimal:
         result = await self._session.execute(
-            select(func.coalesce(func.sum(BudgetLedger.amount_usd), 0))
-            .where(
+            select(func.coalesce(func.sum(BudgetLedger.amount_usd), 0)).where(
                 BudgetLedger.blog_session_id == blog_session_id,
                 BudgetLedger.entry_type == BudgetEntryType.COMMIT.value,
             )

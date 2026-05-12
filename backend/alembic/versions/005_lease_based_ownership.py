@@ -10,6 +10,7 @@ Supports DB-authoritative job reaper and split-brain prevention:
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "005_lease_based_ownership"

@@ -3,13 +3,17 @@
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.auth import get_current_user, AuthenticatedUser
+from src.api.auth import AuthenticatedUser, get_current_user
 from src.core.database import get_db_session
-from src.models.orm_models import AuthUser
 from src.models.repositories.auth_user_repository import AuthUserRepository
-from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
-from src.models.schemas import AuthMeResponse, LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from src.models.repositories.budget_repository import BudgetRepository
+from src.models.schemas import (
+    AuthMeResponse,
+    LoginRequest,
+    RegisterRequest,
+    UserResponse,
+)
 from src.services.auth_service import AuthService
 from src.services.local_auth_service import LocalAuthService
 
@@ -18,7 +22,9 @@ local_auth = LocalAuthService()
 
 
 @router.post("/register", response_model=AuthMeResponse, status_code=201)
-async def register(body: RegisterRequest, response: Response, session: AsyncSession = Depends(get_db_session)):
+async def register(
+    body: RegisterRequest, response: Response, session: AsyncSession = Depends(get_db_session)
+):
     user_repo = AuthUserRepository(session)
     budget_repo = BudgetRepository(session)
     account_repo = BudgetAccountRepository(session)
@@ -48,7 +54,9 @@ async def register(body: RegisterRequest, response: Response, session: AsyncSess
 
 
 @router.post("/login", response_model=AuthMeResponse)
-async def login(body: LoginRequest, response: Response, session: AsyncSession = Depends(get_db_session)):
+async def login(
+    body: LoginRequest, response: Response, session: AsyncSession = Depends(get_db_session)
+):
     user_repo = AuthUserRepository(session)
     budget_repo = BudgetRepository(session)
     account_repo = BudgetAccountRepository(session)
@@ -80,12 +88,12 @@ async def get_me(
 ):
     if not current_user:
         return AuthMeResponse(authenticated=False, user=None)
-    
+
     user_repo = AuthUserRepository(session)
     user = await user_repo.get_by_id(int(current_user.user_id))
     if not user:
         return AuthMeResponse(authenticated=False, user=None)
-    
+
     return AuthMeResponse(
         authenticated=True,
         user=UserResponse(
@@ -97,3 +105,9 @@ async def get_me(
             last_login_at=user.last_login_at,
         ),
     )
+
+
+@router.post("/logout", status_code=200)
+async def logout(response: Response):
+    local_auth.clear_auth_cookie(response)
+    return {"ok": True}

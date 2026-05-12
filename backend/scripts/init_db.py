@@ -7,6 +7,7 @@ from pathlib import Path
 
 # Load .env.dev explicitly
 from dotenv import load_dotenv
+
 load_dotenv(dotenv_path=".env.dev")
 
 # Add project root to path

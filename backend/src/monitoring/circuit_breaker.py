@@ -1,10 +1,10 @@
 """Circuit breaker pattern implementation for fault tolerance."""
 
-import asyncio
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any
 
 from src.config.logging_config import get_logger
 
@@ -60,10 +60,14 @@ class CircuitBreaker:
 
         if self._state == CircuitState.HALF_OPEN:
             self._state = CircuitState.OPEN
-            logger.warning("circuit_breaker_reopened", name=self.name, failure_count=self._failure_count)
+            logger.warning(
+                "circuit_breaker_reopened", name=self.name, failure_count=self._failure_count
+            )
         elif self._state == CircuitState.CLOSED and self._failure_count >= self.failure_threshold:
             self._state = CircuitState.OPEN
-            logger.warning("circuit_breaker_opened", name=self.name, failure_count=self._failure_count)
+            logger.warning(
+                "circuit_breaker_opened", name=self.name, failure_count=self._failure_count
+            )
 
     async def call(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Execute a function with circuit breaker protection."""
