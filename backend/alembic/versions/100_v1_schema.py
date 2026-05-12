@@ -19,15 +19,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute(
-        "CREATE TYPE blogsessionstatus AS ENUM ('QUEUED', 'PROCESSING', 'AWAITING_OUTLINE_REVIEW', 'AWAITING_FINAL_REVIEW', 'COMPLETED', 'FAILED', 'CANCELLED')"
-    )
-    op.execute(
-        "CREATE TYPE budgetentrytype AS ENUM ('GRANT', 'RESERVE', 'COMMIT', 'RELEASE', 'ADJUSTMENT')"
-    )
-    op.execute("CREATE TYPE agentrunstatus AS ENUM ('STARTED', 'COMPLETED', 'FAILED')")
-
-    op.create_table(
+    # This migration documents the V1 schema state but is a no-op
+    # because all tables and types were already created by migrations 001-014.
+    # Migration 015+ will build on top of this baseline.
+    pass
         "auth_users",
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("email", sa.String(length=255), nullable=False),
