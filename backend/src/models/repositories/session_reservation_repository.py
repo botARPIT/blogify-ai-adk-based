@@ -1,7 +1,6 @@
 """SessionReservationRepository — per-session reservation tracking."""
 
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,11 +33,9 @@ class SessionReservationRepository:
         await self._session.flush()
         return reservation
 
-    async def get_by_session(self, blog_session_id: int) -> Optional[SessionReservation]:
+    async def get_by_session(self, blog_session_id: int) -> SessionReservation | None:
         result = await self._session.execute(
-            select(SessionReservation).where(
-                SessionReservation.blog_session_id == blog_session_id
-            )
+            select(SessionReservation).where(SessionReservation.blog_session_id == blog_session_id)
         )
         return result.scalar_one_or_none()
 
@@ -48,7 +45,7 @@ class SessionReservationRepository:
         blog_session_id: int,
         actual_usd: Decimal,
         actual_tokens: int,
-    ) -> Optional[SessionReservation]:
+    ) -> SessionReservation | None:
         """Accumulate stage costs into the reservation row during generation."""
         reservation = await self.get_by_session(blog_session_id)
         if reservation:
@@ -57,7 +54,7 @@ class SessionReservationRepository:
             await self._session.flush()
         return reservation
 
-    async def mark_committed(self, blog_session_id: int) -> Optional[SessionReservation]:
+    async def mark_committed(self, blog_session_id: int) -> SessionReservation | None:
         """Mark reservation as COMMITTED (terminal success)."""
         reservation = await self.get_by_session(blog_session_id)
         if reservation:
@@ -65,7 +62,7 @@ class SessionReservationRepository:
             await self._session.flush()
         return reservation
 
-    async def mark_released(self, blog_session_id: int) -> Optional[SessionReservation]:
+    async def mark_released(self, blog_session_id: int) -> SessionReservation | None:
         """Mark reservation as RELEASED (terminal failure / excess release)."""
         reservation = await self.get_by_session(blog_session_id)
         if reservation:

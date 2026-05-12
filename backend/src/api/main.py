@@ -1,6 +1,7 @@
 """FastAPI main application for Blogify V1."""
 
 import os
+
 from dotenv import load_dotenv
 
 env = os.getenv("ENVIRONMENT", "dev")
@@ -11,13 +12,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.config.env_config import config
-from src.config.logging_config import get_logger, setup_logging
-from src.core.errors import register_exception_handlers
 from src.api.auth import AuthMiddleware
 from src.api.routes import health
 from src.api.routes.auth_routes import router as auth_router
 from src.api.routes.blog_routes import router as blog_router
+from src.config.env_config import config
+from src.config.logging_config import get_logger, setup_logging
+from src.core.errors import register_exception_handlers
 
 setup_logging(
     config.log_level,

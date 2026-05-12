@@ -9,16 +9,17 @@ Create Date: 2026-05-03
 4. Change blog_sessions default status to 'awaiting_budget_resolution'
 """
 
-from typing import Sequence, Union
 import logging
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "014_add_schema_defaults"
-down_revision: Union[str, Sequence[str], None] = "013_fix_schema_gaps"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "013_fix_schema_gaps"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,9 @@ def upgrade() -> None:
 
     # 4. Change blog_sessions default status
     conn.execute(
-        sa.text("ALTER TABLE blog_sessions ALTER COLUMN status SET DEFAULT 'awaiting_budget_resolution'")
+        sa.text(
+            "ALTER TABLE blog_sessions ALTER COLUMN status SET DEFAULT 'awaiting_budget_resolution'"
+        )
     )
 
 
@@ -86,9 +89,7 @@ def downgrade() -> None:
     conn = op.get_bind()
 
     # 4. Reverse: Restore original default status ('queued')
-    conn.execute(
-        sa.text("ALTER TABLE blog_sessions ALTER COLUMN status SET DEFAULT 'queued'")
-    )
+    conn.execute(sa.text("ALTER TABLE blog_sessions ALTER COLUMN status SET DEFAULT 'queued'"))
 
     # 3. Reverse: Drop error_message column
     op.drop_column("blog_sessions", "error_message")

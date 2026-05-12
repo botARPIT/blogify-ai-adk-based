@@ -1,20 +1,18 @@
 """Blog routes — generation, listing, reviews, budget."""
 
-from typing import Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.auth import get_current_user, AuthenticatedUser
+from src.api.auth import AuthenticatedUser, get_current_user
 from src.core.database import get_db_session
 from src.core.redis_pool import get_redis_client
 from src.core.task_queue import task_queue
 from src.guards.input_guard import InputGuard
 from src.models.repositories.blog_session_repository import BlogSessionRepository
-from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
-from src.models.repositories.session_reservation_repository import SessionReservationRepository
+from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.research_sources_repository import ResearchSourcesRepository
+from src.models.repositories.session_reservation_repository import SessionReservationRepository
 from src.models.schemas import (
     AgentRunMetrics,
     BlogContentView,
@@ -36,7 +34,7 @@ from src.models.schemas import (
 )
 from src.services.blog_service import BlogService
 from src.services.budget_service import BudgetService
-from src.services.exceptions import SessionTerminalError, InsufficientBudgetError
+from src.services.exceptions import InsufficientBudgetError, SessionTerminalError
 
 router = APIRouter(prefix="/blogs", tags=["blogs"])
 
@@ -53,7 +51,7 @@ input_guard = InputGuard()
 @router.post("/generate", status_code=202, response_model=GenerateResponse)
 async def generate_blog(
     body: GenerateRequest,
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     current_user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
@@ -89,7 +87,10 @@ async def generate_blog(
     except SessionTerminalError:
         raise HTTPException(
             status_code=409,
-            detail={"error_code": "SESSION_TERMINAL", "message": "This request ID has already completed. Generate a new Idempotency-Key to retry."},
+            detail={
+                "error_code": "SESSION_TERMINAL",
+                "message": "This request ID has already completed. Generate a new Idempotency-Key to retry.",
+            },
         )
     except InsufficientBudgetError as e:
         raise HTTPException(status_code=402, detail=str(e))
@@ -138,14 +139,14 @@ async def get_outline(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
-    
+
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     if not blog_session.outline_data:
         raise HTTPException(status_code=404, detail="No outline available")
-    
+
     return OutlineReviewView(
         session_id=blog_session.id,
         status=blog_session.status,
@@ -173,9 +174,9 @@ async def submit_outline_review_frontend(
     redis_client = await get_redis_client()
     blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
 
-    if body.action == 'revise' and body.edited_outline:
+    if body.action == "revise" and body.edited_outline:
         approved_outline = body.edited_outline
-    elif body.action == 'approve' and body.edited_outline:
+    elif body.action == "approve" and body.edited_outline:
         approved_outline = body.edited_outline
     else:
         raise HTTPException(status_code=400, detail="Invalid action")
@@ -210,11 +211,11 @@ async def get_budget(
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
 
     result = await budget_service.get_balance_snapshot(user_id)
-    
+
     active_count = await session_repo.count_active_for_user(user_id)
     daily_limit = 1
     daily_limit_left = max(0, daily_limit - active_count)
-    
+
     return BudgetResponse(
         balance_usd=result["balance_usd"],
         balance_tokens=result["balance_tokens"],
@@ -230,14 +231,15 @@ async def get_session_status(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
-    
+
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
+    from sqlalchemy import desc, select
+
     from src.models.orm_models import AgentRun
-    from sqlalchemy import select, desc
-    
+
     result = await session.execute(
         select(AgentRun)
         .where(AgentRun.blog_session_id == session_id)
@@ -245,11 +247,11 @@ async def get_session_status(
         .limit(1)
     )
     latest_agent_run = result.scalar_one_or_none()
-    
+
     current_agent = None
     if latest_agent_run and latest_agent_run.status == "RUNNING":
         current_agent = latest_agent_run.stage_name
-    
+
     return SessionStatusResponse(
         session_id=blog_session.id,
         status=blog_session.status,
@@ -269,23 +271,22 @@ async def get_session_detail(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     sources_repo = ResearchSourcesRepository(session)
-    
+
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     from sqlalchemy import select
+
     from src.models.orm_models import AgentRun
-    
-    result = await session.execute(
-        select(AgentRun).where(AgentRun.blog_session_id == session_id)
-    )
+
+    result = await session.execute(select(AgentRun).where(AgentRun.blog_session_id == session_id))
     agent_runs = result.scalars().all()
-    
+
     total_tokens = sum(ar.total_tokens for ar in agent_runs)
     total_words = len(blog_session.final_content.split()) if blog_session.final_content else 0
     sources_count = await sources_repo.count_for_session(session_id)
-    
+
     latest_version = None
     if blog_session.final_content:
         latest_version = BlogVersionMetrics(
@@ -299,7 +300,7 @@ async def get_session_detail(
             created_by="system",
             created_at=blog_session.updated_at,
         )
-    
+
     # Determine if content is available (completed status)
     has_content = blog_session.status == "COMPLETED" and bool(blog_session.final_content)
 
@@ -316,9 +317,8 @@ async def get_session_detail(
             budget_spent_usd=float(blog_session.budget_spent_usd),
             budget_spent_tokens=blog_session.budget_spent_tokens,
             iteration_count=0,
-            requires_human_review=blog_session.status in (
-                "AWAITING_OUTLINE_REVIEW", "AWAITING_FINAL_REVIEW"
-            ),
+            requires_human_review=blog_session.status
+            in ("AWAITING_OUTLINE_REVIEW", "AWAITING_FINAL_REVIEW"),
             remaining_revision_iterations=0,
             current_version_number=1 if has_content else None,
         ),
@@ -333,7 +333,7 @@ async def get_session_detail(
                 stage_name=ar.stage_name,
                 agent_name=ar.agent_name,
                 model_name=ar.model_name,
-                status=ar.status.value if hasattr(ar.status, 'value') else ar.status,
+                status=ar.status.value if hasattr(ar.status, "value") else ar.status,
                 prompt_tokens=ar.prompt_tokens,
                 completion_tokens=ar.completion_tokens,
                 total_tokens=ar.total_tokens,
@@ -375,11 +375,10 @@ async def get_blog(
         raise HTTPException(status_code=400, detail=error_msg)
 
     from sqlalchemy import select
+
     from src.models.orm_models import AgentRun
 
-    result = await session.execute(
-        select(AgentRun).where(AgentRun.blog_session_id == session_id)
-    )
+    result = await session.execute(select(AgentRun).where(AgentRun.blog_session_id == session_id))
     agent_runs = result.scalars().all()
 
     return BlogSessionDetail(
@@ -405,8 +404,6 @@ async def get_blog(
         created_at=s.created_at,
         updated_at=s.updated_at,
     )
-
-
 
 
 @router.post("/{session_id}/outline-review")
@@ -474,21 +471,21 @@ async def get_content(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     sources_repo = ResearchSourcesRepository(session)
-    
+
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     if not blog_session.final_content:
         raise HTTPException(
             status_code=404,
             detail="Final blog content is not available for this session",
         )
-    
+
     content = blog_session.final_content
     word_count = len(content.split()) if content else 0
     sources_count = await sources_repo.count_for_session(session_id)
-    
+
     return BlogContentView(
         session_id=blog_session.id,
         version_id=1,
@@ -511,19 +508,19 @@ async def get_latest_version(
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     sources_repo = ResearchSourcesRepository(session)
-    
+
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     if not blog_session.final_content:
         raise HTTPException(
             status_code=404,
             detail="No blog version found",
         )
-    
+
     sources_count = await sources_repo.count_for_session(session_id)
-    
+
     return BlogVersionView(
         version_id=1,
         session_id=blog_session.id,

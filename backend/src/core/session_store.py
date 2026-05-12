@@ -11,6 +11,7 @@ from typing import Any
 from google.adk.events import Event
 from google.adk.sessions import BaseSessionService, Session
 from google.adk.sessions.base_session_service import ListSessionsResponse
+
 from src.config.logging_config import get_logger
 from src.core.redis_pool import get_redis_client
 
@@ -20,24 +21,24 @@ logger = get_logger(__name__)
 class RedisSessionStore:
     """
     Redis-backed session store for ADK agent sessions.
-    
+
     Features:
     - Persistent across application restarts
     - Shared across multiple instances
     - Automatic TTL-based cleanup
     - Atomic operations
     """
-    
+
     SESSION_PREFIX = "adk:session:"
     SESSION_TTL = 86400  # 24 hours
-    
+
     def __init__(self):
         pass
 
     async def _get_client(self):
         """Return a Redis client from the shared pool."""
         return get_redis_client()
-    
+
     async def create_session(
         self,
         app_name: str,
@@ -47,23 +48,23 @@ class RedisSessionStore:
     ) -> dict:
         """
         Create a new session.
-        
+
         Args:
             app_name: Application name
             user_id: User identifier
             session_id: Optional session ID (generated if not provided)
             initial_state: Initial state data
-            
+
         Returns:
             Session object with id and metadata
         """
         import uuid
-        
+
         client = await self._get_client()
-        
+
         if session_id is None:
             session_id = str(uuid.uuid4())
-        
+
         session = {
             "id": session_id,
             "app_name": app_name,
@@ -73,14 +74,14 @@ class RedisSessionStore:
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
         }
-        
+
         key = f"{self.SESSION_PREFIX}{session_id}"
         await client.set(key, json.dumps(session), ex=self.SESSION_TTL)
-        
+
         logger.info("session_created", session_id=session_id, user_id=user_id)
-        
+
         return session
-    
+
     async def get_session(
         self,
         app_name: str,
@@ -89,25 +90,25 @@ class RedisSessionStore:
     ) -> dict | None:
         """
         Get an existing session.
-        
+
         Args:
             app_name: Application name
             user_id: User identifier
             session_id: Session ID
-            
+
         Returns:
             Session object or None if not found
         """
         client = await self._get_client()
-        
+
         key = f"{self.SESSION_PREFIX}{session_id}"
         data = await client.get(key)
-        
+
         if data is None:
             return None
-        
+
         session = json.loads(data)
-        
+
         # Verify ownership
         if session.get("user_id") != user_id or session.get("app_name") != app_name:
             logger.warning(
@@ -117,9 +118,9 @@ class RedisSessionStore:
                 actual_user=session.get("user_id"),
             )
             return None
-        
+
         return session
-    
+
     async def update_session(
         self,
         session_id: str,
@@ -128,59 +129,59 @@ class RedisSessionStore:
     ) -> dict | None:
         """
         Update session state and/or events.
-        
+
         Args:
             session_id: Session ID
             state: New state (merged with existing)
             events: New events to append
-            
+
         Returns:
             Updated session or None if not found
         """
         client = await self._get_client()
-        
+
         key = f"{self.SESSION_PREFIX}{session_id}"
         data = await client.get(key)
-        
+
         if data is None:
             return None
-        
+
         session = json.loads(data)
-        
+
         if state is not None:
             session["state"] = {**session.get("state", {}), **state}
-        
+
         if events is not None:
             session["events"] = session.get("events", []) + events
-        
+
         session["updated_at"] = datetime.utcnow().isoformat()
-        
+
         await client.set(key, json.dumps(session), ex=self.SESSION_TTL)
-        
+
         logger.debug("session_updated", session_id=session_id)
-        
+
         return session
-    
+
     async def delete_session(self, session_id: str) -> bool:
         """
         Delete a session.
-        
+
         Args:
             session_id: Session ID
-            
+
         Returns:
             True if deleted, False if not found
         """
         client = await self._get_client()
-        
+
         key = f"{self.SESSION_PREFIX}{session_id}"
         deleted = await client.delete(key)
-        
+
         if deleted:
             logger.info("session_deleted", session_id=session_id)
-        
+
         return deleted > 0
-    
+
     async def list_user_sessions(
         self,
         app_name: str,
@@ -189,17 +190,17 @@ class RedisSessionStore:
     ) -> list[dict]:
         """
         List all sessions for a user.
-        
+
         Note: This is O(n) where n is total sessions. Use sparingly.
         """
         client = await self._get_client()
-        
+
         sessions = []
         cursor = 0
-        
+
         while True:
             cursor, keys = await client.scan(cursor, match=f"{self.SESSION_PREFIX}*", count=100)
-            
+
             for key in keys:
                 data = await client.get(key)
                 if data:
@@ -209,12 +210,12 @@ class RedisSessionStore:
                         sessions.append(session)
                         if len(sessions) >= limit:
                             return sessions
-            
+
             if cursor == 0:
                 break
-        
+
         return sessions
-    
+
     async def close(self):
         """No-op. Pool cleanup is centralised in redis_pool."""
         pass
@@ -224,13 +225,13 @@ class RedisSessionStore:
 class RedisSessionService(BaseSessionService):
     """
     ADK-compatible session service backed by Redis.
-    
+
     Drop-in replacement for InMemorySessionService.
     """
-    
+
     def __init__(self):
         self._store = RedisSessionStore()
-    
+
     def _to_adk_session(self, session: dict) -> Session:
         events = [
             Event.model_validate(event) if not isinstance(event, Event) else event
@@ -262,7 +263,7 @@ class RedisSessionService(BaseSessionService):
         )
         session["last_update_time"] = datetime.utcnow().timestamp()
         return self._to_adk_session(session)
-    
+
     async def get_session(
         self,
         *,
@@ -341,7 +342,7 @@ class RedisSessionService(BaseSessionService):
             events=[appended_event.model_dump(mode="json")],
         )
         return appended_event
-    
+
     async def close(self):
         """Close connections."""
         await self._store.close()

@@ -7,6 +7,7 @@ temporary generation lockout until the next UTC day boundary.
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "004_service_client_budget_policy"

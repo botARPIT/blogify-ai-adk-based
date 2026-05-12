@@ -11,13 +11,14 @@ Changes:
      users have a correct starting balance (ledger sum at migration time).
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "105"
-down_revision: Union[str, Sequence[str], None] = "104"
+down_revision: str | Sequence[str] | None = "104"
 branch_labels = None
 depends_on = None
 

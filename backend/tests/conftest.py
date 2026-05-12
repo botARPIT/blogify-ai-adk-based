@@ -76,6 +76,7 @@ def test_client():
     with patch("src.core.database.AsyncSessionFactory"):
         with patch("src.core.redis_pool.get_redis_client", new_callable=AsyncMock):
             from src.api.main import app
+
             return TestClient(app)
 
 
@@ -149,15 +150,11 @@ def valid_blog_request():
     return {
         "topic": "The Future of Artificial Intelligence in Healthcare",
         "audience": "healthcare professionals",
-        "tone": "professional"
+        "tone": "professional",
     }
 
 
 @pytest.fixture
 def invalid_blog_request():
     """Invalid blog request (topic too short)."""
-    return {
-        "topic": "AI",
-        "audience": "developers",
-        "tone": "professional"
-    }
+    return {"topic": "AI", "audience": "developers", "tone": "professional"}

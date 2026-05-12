@@ -1,7 +1,5 @@
 """Repository for research sources from Tavily."""
 
-from typing import Optional
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,9 +19,9 @@ class ResearchSourcesRepository:
         blog_session_id: int,
         title: str,
         url: str,
-        content: Optional[str] = None,
+        content: str | None = None,
         score: float = 0.0,
-        topic: Optional[str] = None,
+        topic: str | None = None,
     ) -> ResearchSource:
         source = ResearchSource(
             user_id=user_id,
@@ -70,15 +68,13 @@ class ResearchSourcesRepository:
 
     async def count_for_session(self, blog_session_id: int) -> int:
         result = await self.session.execute(
-            select(ResearchSource)
-            .where(ResearchSource.blog_session_id == blog_session_id)
+            select(ResearchSource).where(ResearchSource.blog_session_id == blog_session_id)
         )
         return len(list(result.scalars().all()))
 
     async def delete_for_session(self, blog_session_id: int) -> None:
         result = await self.session.execute(
-            select(ResearchSource)
-            .where(ResearchSource.blog_session_id == blog_session_id)
+            select(ResearchSource).where(ResearchSource.blog_session_id == blog_session_id)
         )
         sources = result.scalars().all()
         for source in sources:

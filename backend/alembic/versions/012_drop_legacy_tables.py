@@ -9,15 +9,16 @@ The source of truth for user data is now the Prisma `User` table in the frontend
 and backend canonical tables (end_users, blog_sessions, etc.).
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "012_drop_legacy_tables"
-down_revision: Union[str, Sequence[str], None] = "011_add_webhook_secret"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "011_add_webhook_secret"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

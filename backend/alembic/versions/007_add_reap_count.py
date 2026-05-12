@@ -5,27 +5,27 @@ Revises: 006_lease_fix
 Create Date: 2026-04-28
 
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '007_add_reap_count'
-down_revision: Union[str, Sequence[str], None] = '006_lease_fix'
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+revision: str = "007_add_reap_count"
+down_revision: str | Sequence[str] | None = "006_lease_fix"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     """Add reap_count column to track actual reaps separately from lease_version."""
     op.add_column(
-        'blog_sessions',
-        sa.Column('reap_count', sa.Integer(), nullable=False, server_default='0')
+        "blog_sessions", sa.Column("reap_count", sa.Integer(), nullable=False, server_default="0")
     )
 
 
 def downgrade() -> None:
     """Remove reap_count column."""
-    op.drop_column('blog_sessions', 'reap_count')
+    op.drop_column("blog_sessions", "reap_count")

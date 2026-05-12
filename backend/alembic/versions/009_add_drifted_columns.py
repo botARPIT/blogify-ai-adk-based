@@ -13,16 +13,16 @@ Columns being added:
 - research_review_deadline: TIMESTAMP WITH TIME ZONE NULL (48h review deadline)
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision: str = "009_add_drifted_columns"
-down_revision: Union[str, Sequence[str], None] = "008_saga_orchestration_schema"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | Sequence[str] | None = "008_saga_orchestration_schema"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def column_exists(conn, table: str, column: str) -> bool:

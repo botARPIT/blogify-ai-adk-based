@@ -9,8 +9,9 @@ Migration is additive and reversible.
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # Revision identifiers
 revision = "001_canonical_schema"
@@ -54,33 +55,58 @@ def upgrade() -> None:
     budget_scope.create(op.get_bind(), checkfirst=True)
 
     ledger_entry_type = postgresql.ENUM(
-        "reserve", "commit", "release", "adjustment", "refund", "reject",
-        name="ledger_entry_type_enum", create_type=False,
+        "reserve",
+        "commit",
+        "release",
+        "adjustment",
+        "refund",
+        "reject",
+        name="ledger_entry_type_enum",
+        create_type=False,
     )
     ledger_entry_type.create(op.get_bind(), checkfirst=True)
 
     ledger_resource_type = postgresql.ENUM(
-        "tokens", "usd", "blog_count", "revision_count",
-        name="ledger_resource_type_enum", create_type=False,
+        "tokens",
+        "usd",
+        "blog_count",
+        "revision_count",
+        name="ledger_resource_type_enum",
+        create_type=False,
     )
     ledger_resource_type.create(op.get_bind(), checkfirst=True)
 
     blog_session_status = postgresql.ENUM(
-        "queued", "processing", "awaiting_human_review", "revision_requested",
-        "completed", "failed", "cancelled", "budget_exhausted",
-        name="blog_session_status_enum", create_type=False,
+        "queued",
+        "processing",
+        "awaiting_human_review",
+        "revision_requested",
+        "completed",
+        "failed",
+        "cancelled",
+        "budget_exhausted",
+        name="blog_session_status_enum",
+        create_type=False,
     )
     blog_session_status.create(op.get_bind(), checkfirst=True)
 
     blog_version_source = postgresql.ENUM(
-        "initial_generation", "human_revision", "chat_edit", "manual_import",
-        name="blog_version_source_enum", create_type=False,
+        "initial_generation",
+        "human_revision",
+        "chat_edit",
+        "manual_import",
+        name="blog_version_source_enum",
+        create_type=False,
     )
     blog_version_source.create(op.get_bind(), checkfirst=True)
 
     blog_editor_status = postgresql.ENUM(
-        "draft", "editor_approved", "human_approved", "human_rejected",
-        name="blog_editor_status_enum", create_type=False,
+        "draft",
+        "editor_approved",
+        "human_approved",
+        "human_rejected",
+        name="blog_editor_status_enum",
+        create_type=False,
     )
     blog_editor_status.create(op.get_bind(), checkfirst=True)
 
@@ -90,14 +116,23 @@ def upgrade() -> None:
     blog_created_by.create(op.get_bind(), checkfirst=True)
 
     agent_run_status = postgresql.ENUM(
-        "started", "completed", "failed", "timed_out", "cancelled",
-        name="agent_run_status_enum", create_type=False,
+        "started",
+        "completed",
+        "failed",
+        "timed_out",
+        "cancelled",
+        name="agent_run_status_enum",
+        create_type=False,
     )
     agent_run_status.create(op.get_bind(), checkfirst=True)
 
     human_review_action = postgresql.ENUM(
-        "approve", "request_revision", "reject", "reopen",
-        name="human_review_action_enum", create_type=False,
+        "approve",
+        "request_revision",
+        "reject",
+        "reopen",
+        name="human_review_action_enum",
+        create_type=False,
     )
     human_review_action.create(op.get_bind(), checkfirst=True)
 
@@ -107,8 +142,12 @@ def upgrade() -> None:
     export_format.create(op.get_bind(), checkfirst=True)
 
     export_status = postgresql.ENUM(
-        "pending", "processing", "completed", "failed",
-        name="export_status_enum", create_type=False,
+        "pending",
+        "processing",
+        "completed",
+        "failed",
+        name="export_status_enum",
+        create_type=False,
     )
     export_status.create(op.get_bind(), checkfirst=True)
 
@@ -134,7 +173,12 @@ def upgrade() -> None:
     op.create_table(
         "tenants",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
-        sa.Column("service_client_id", sa.BigInteger(), sa.ForeignKey("service_clients.id"), nullable=False),
+        sa.Column(
+            "service_client_id",
+            sa.BigInteger(),
+            sa.ForeignKey("service_clients.id"),
+            nullable=False,
+        ),
         sa.Column("external_tenant_id", sa.String(255), nullable=True),
         sa.Column("name", sa.String(255), nullable=False),
         sa.Column("plan_tier", tenant_plan, nullable=False, server_default="free"),
@@ -173,7 +217,9 @@ def upgrade() -> None:
         sa.Column("daily_blog_limit", sa.Integer(), nullable=False, server_default="5"),
         sa.Column("per_session_cost_limit_usd", sa.Float(), nullable=False, server_default="0.10"),
         sa.Column("per_session_token_limit", sa.Integer(), nullable=False, server_default="15000"),
-        sa.Column("max_revision_iterations_per_session", sa.Integer(), nullable=False, server_default="3"),
+        sa.Column(
+            "max_revision_iterations_per_session", sa.Integer(), nullable=False, server_default="3"
+        ),
         sa.Column("max_concurrent_sessions", sa.Integer(), nullable=False, server_default="2"),
         sa.Column("soft_stop_enabled", sa.Boolean(), nullable=False, server_default="false"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
@@ -188,7 +234,12 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column("tenant_id", sa.BigInteger(), sa.ForeignKey("tenants.id"), nullable=False),
         sa.Column("end_user_id", sa.BigInteger(), sa.ForeignKey("end_users.id"), nullable=False),
-        sa.Column("service_client_id", sa.BigInteger(), sa.ForeignKey("service_clients.id"), nullable=False),
+        sa.Column(
+            "service_client_id",
+            sa.BigInteger(),
+            sa.ForeignKey("service_clients.id"),
+            nullable=False,
+        ),
         sa.Column("external_request_id", sa.String(255), nullable=True),
         sa.Column("external_blog_id", sa.String(255), nullable=True),
         sa.Column("topic", sa.String(500), nullable=False),
@@ -210,7 +261,9 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.create_index("ix_blog_sessions_external_request_id", "blog_sessions", ["external_request_id"])
+    op.create_index(
+        "ix_blog_sessions_external_request_id", "blog_sessions", ["external_request_id"]
+    )
     op.create_index("ix_blog_sessions_status", "blog_sessions", ["status"])
 
     # ------------------------------------------------------------------
@@ -219,7 +272,9 @@ def upgrade() -> None:
     op.create_table(
         "blog_versions",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
-        sa.Column("blog_session_id", sa.BigInteger(), sa.ForeignKey("blog_sessions.id"), nullable=False),
+        sa.Column(
+            "blog_session_id", sa.BigInteger(), sa.ForeignKey("blog_sessions.id"), nullable=False
+        ),
         sa.Column("version_number", sa.Integer(), nullable=False, server_default="1"),
         sa.Column("source_type", blog_version_source, nullable=False),
         sa.Column("title", sa.String(500), nullable=True),
@@ -238,9 +293,15 @@ def upgrade() -> None:
     op.create_table(
         "agent_runs",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
-        sa.Column("blog_session_id", sa.BigInteger(), sa.ForeignKey("blog_sessions.id"), nullable=False),
-        sa.Column("blog_version_id", sa.BigInteger(), sa.ForeignKey("blog_versions.id"), nullable=True),
-        sa.Column("parent_agent_run_id", sa.BigInteger(), sa.ForeignKey("agent_runs.id"), nullable=True),
+        sa.Column(
+            "blog_session_id", sa.BigInteger(), sa.ForeignKey("blog_sessions.id"), nullable=False
+        ),
+        sa.Column(
+            "blog_version_id", sa.BigInteger(), sa.ForeignKey("blog_versions.id"), nullable=True
+        ),
+        sa.Column(
+            "parent_agent_run_id", sa.BigInteger(), sa.ForeignKey("agent_runs.id"), nullable=True
+        ),
         sa.Column("stage_name", sa.String(80), nullable=False),
         sa.Column("agent_name", sa.String(100), nullable=False),
         sa.Column("model_name", sa.String(100), nullable=False),
@@ -268,8 +329,12 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
         sa.Column("tenant_id", sa.BigInteger(), sa.ForeignKey("tenants.id"), nullable=False),
         sa.Column("end_user_id", sa.BigInteger(), sa.ForeignKey("end_users.id"), nullable=False),
-        sa.Column("blog_session_id", sa.BigInteger(), sa.ForeignKey("blog_sessions.id"), nullable=True),
-        sa.Column("blog_version_id", sa.BigInteger(), sa.ForeignKey("blog_versions.id"), nullable=True),
+        sa.Column(
+            "blog_session_id", sa.BigInteger(), sa.ForeignKey("blog_sessions.id"), nullable=True
+        ),
+        sa.Column(
+            "blog_version_id", sa.BigInteger(), sa.ForeignKey("blog_versions.id"), nullable=True
+        ),
         sa.Column("agent_run_id", sa.BigInteger(), sa.ForeignKey("agent_runs.id"), nullable=True),
         sa.Column("entry_type", ledger_entry_type, nullable=False),
         sa.Column("resource_type", ledger_resource_type, nullable=False),
@@ -285,15 +350,21 @@ def upgrade() -> None:
     op.create_table(
         "human_review_events",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
-        sa.Column("blog_session_id", sa.BigInteger(), sa.ForeignKey("blog_sessions.id"), nullable=False),
-        sa.Column("blog_version_id", sa.BigInteger(), sa.ForeignKey("blog_versions.id"), nullable=False),
+        sa.Column(
+            "blog_session_id", sa.BigInteger(), sa.ForeignKey("blog_sessions.id"), nullable=False
+        ),
+        sa.Column(
+            "blog_version_id", sa.BigInteger(), sa.ForeignKey("blog_versions.id"), nullable=False
+        ),
         sa.Column("reviewer_user_id", sa.String(255), nullable=False),
         sa.Column("action", human_review_action, nullable=False),
         sa.Column("feedback_text", sa.Text(), nullable=True),
         sa.Column("review_context", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
-    op.create_index("ix_human_review_events_blog_session_id", "human_review_events", ["blog_session_id"])
+    op.create_index(
+        "ix_human_review_events_blog_session_id", "human_review_events", ["blog_session_id"]
+    )
 
     # ------------------------------------------------------------------
     # export_jobs
@@ -301,7 +372,9 @@ def upgrade() -> None:
     op.create_table(
         "export_jobs",
         sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
-        sa.Column("blog_version_id", sa.BigInteger(), sa.ForeignKey("blog_versions.id"), nullable=False),
+        sa.Column(
+            "blog_version_id", sa.BigInteger(), sa.ForeignKey("blog_versions.id"), nullable=False
+        ),
         sa.Column("format", export_format, nullable=False),
         sa.Column("status", export_status, nullable=False, server_default="pending"),
         sa.Column("artifact_uri", sa.String(1000), nullable=True),
@@ -325,11 +398,21 @@ def downgrade() -> None:
 
     # Drop all enums
     for enum_name in [
-        "export_status_enum", "export_format_enum", "human_review_action_enum",
-        "agent_run_status_enum", "blog_created_by_enum", "blog_editor_status_enum",
-        "blog_version_source_enum", "blog_session_status_enum",
-        "ledger_resource_type_enum", "ledger_entry_type_enum", "budget_scope_enum",
-        "end_user_status_enum", "tenant_status_enum", "tenant_plan_enum",
-        "client_status_enum", "client_mode_enum",
+        "export_status_enum",
+        "export_format_enum",
+        "human_review_action_enum",
+        "agent_run_status_enum",
+        "blog_created_by_enum",
+        "blog_editor_status_enum",
+        "blog_version_source_enum",
+        "blog_session_status_enum",
+        "ledger_resource_type_enum",
+        "ledger_entry_type_enum",
+        "budget_scope_enum",
+        "end_user_status_enum",
+        "tenant_status_enum",
+        "tenant_plan_enum",
+        "client_status_enum",
+        "client_mode_enum",
     ]:
         op.execute(f"DROP TYPE IF EXISTS {enum_name}")

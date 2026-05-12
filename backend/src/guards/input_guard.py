@@ -1,7 +1,5 @@
 """Schema-based input validation for blog generation requests."""
 
-from typing import Optional
-
 
 class InputGuard:
     """Validates blog generation input using schema rules (not keyword matching)."""
@@ -14,12 +12,12 @@ class InputGuard:
     def validate(
         self,
         topic: str,
-        audience: Optional[str] = None,
-        tone: Optional[str] = None,
+        audience: str | None = None,
+        tone: str | None = None,
     ) -> tuple[bool, str]:
         """
         Validate blog generation input using schema rules.
-        
+
         Returns:
             tuple[bool, str]: (is_valid, error_message)
         """
@@ -53,12 +51,12 @@ class InputGuard:
 
 def validate_generate_input(
     topic: str,
-    audience: Optional[str] = None,
-    tone: Optional[str] = None,
+    audience: str | None = None,
+    tone: str | None = None,
 ) -> None:
     """
     Validates and raises HTTPException if invalid.
-    
+
     Raises:
         ValueError: If validation fails
     """

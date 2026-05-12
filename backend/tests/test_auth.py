@@ -1,6 +1,5 @@
 """Tests for authentication - login and protected routes."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -9,7 +8,9 @@ class TestLogin:
 
     def test_login_valid_credentials_returns_token(self, test_client):
         """Test user can login with correct email/password and receives JWT token."""
-        with patch("src.models.repositories.auth_user_repository.AuthUserRepository.get_by_email") as mock_get:
+        with patch(
+            "src.models.repositories.auth_user_repository.AuthUserRepository.get_by_email"
+        ) as mock_get:
             mock_user = MagicMock()
             mock_user.id = 1
             mock_user.email = "test@example.com"
@@ -20,12 +21,14 @@ class TestLogin:
             mock_user.last_login_at = None
             mock_get.return_value = mock_user
 
-            with patch("src.services.auth_service.AuthService.login", new_callable=AsyncMock) as mock_login:
+            with patch(
+                "src.services.auth_service.AuthService.login", new_callable=AsyncMock
+            ) as mock_login:
                 mock_login.return_value = "test-jwt-token"
 
                 response = test_client.post(
                     "/api/v1/auth/login",
-                    json={"email": "test@example.com", "password": "password123"}
+                    json={"email": "test@example.com", "password": "password123"},
                 )
 
                 assert response.status_code == 200
@@ -36,7 +39,9 @@ class TestLogin:
 
     def test_login_invalid_password_returns_401(self, test_client):
         """Test login fails with incorrect password returns 401."""
-        with patch("src.models.repositories.auth_user_repository.AuthUserRepository.get_by_email") as mock_get:
+        with patch(
+            "src.models.repositories.auth_user_repository.AuthUserRepository.get_by_email"
+        ) as mock_get:
             mock_user = MagicMock()
             mock_user.id = 1
             mock_user.email = "test@example.com"
@@ -44,24 +49,28 @@ class TestLogin:
             mock_user.is_active = True
             mock_get.return_value = mock_user
 
-            with patch("src.services.auth_service.AuthService.login", new_callable=AsyncMock) as mock_login:
+            with patch(
+                "src.services.auth_service.AuthService.login", new_callable=AsyncMock
+            ) as mock_login:
                 mock_login.side_effect = ValueError("Invalid password")
 
                 response = test_client.post(
                     "/api/v1/auth/login",
-                    json={"email": "test@example.com", "password": "wrongpassword"}
+                    json={"email": "test@example.com", "password": "wrongpassword"},
                 )
 
                 assert response.status_code == 401
 
     def test_login_nonexistent_user_returns_401(self, test_client):
         """Test login fails for non-existent user returns 401."""
-        with patch("src.models.repositories.auth_user_repository.AuthUserRepository.get_by_email") as mock_get:
+        with patch(
+            "src.models.repositories.auth_user_repository.AuthUserRepository.get_by_email"
+        ) as mock_get:
             mock_get.return_value = None
 
             response = test_client.post(
                 "/api/v1/auth/login",
-                json={"email": "nonexistent@example.com", "password": "password123"}
+                json={"email": "nonexistent@example.com", "password": "password123"},
             )
 
             assert response.status_code == 401
@@ -79,7 +88,7 @@ class TestProtectedRoutes:
         """Test POST /api/v1/blogs/generate returns 401 without authentication."""
         response = test_client.post(
             "/api/v1/blogs/generate",
-            json={"topic": "Test Topic", "audience": "test", "tone": "professional"}
+            json={"topic": "Test Topic", "audience": "test", "tone": "professional"},
         )
         assert response.status_code == 401
 
@@ -122,22 +131,20 @@ class TestAuthenticatedRequests:
         with patch("src.api.auth.get_current_user") as mock_auth:
             mock_auth.return_value = MagicMock(user_id=1)
 
-            with patch("src.models.repositories.blog_session_repository.BlogSessionRepository.get_for_user") as mock_get:
+            with patch(
+                "src.models.repositories.blog_session_repository.BlogSessionRepository.get_for_user"
+            ) as mock_get:
                 mock_get.return_value = []
 
                 response = test_client.get(
-                    "/api/v1/blogs/",
-                    cookies={"auth_token": "valid-jwt-token"}
+                    "/api/v1/blogs/", cookies={"auth_token": "valid-jwt-token"}
                 )
 
                 assert response.status_code == 200
 
     def test_protected_route_without_valid_cookie_still_returns_401(self, test_client):
         """Test request with invalid/expired cookie returns 401."""
-        response = test_client.get(
-            "/api/v1/blogs/",
-            cookies={"auth_token": "invalid-token"}
-        )
+        response = test_client.get("/api/v1/blogs/", cookies={"auth_token": "invalid-token"})
 
         assert response.status_code in [401, 403]
 
@@ -155,10 +162,7 @@ class TestAuthMe:
 
     def test_auth_me_with_invalid_cookie_returns_unauthenticated(self, test_client):
         """Test GET /api/v1/auth/me returns unauthenticated with invalid cookie."""
-        response = test_client.get(
-            "/api/v1/auth/me",
-            cookies={"auth_token": "invalid-token"}
-        )
+        response = test_client.get("/api/v1/auth/me", cookies={"auth_token": "invalid-token"})
         assert response.status_code == 200
         data = response.json()
         assert data["authenticated"] is False

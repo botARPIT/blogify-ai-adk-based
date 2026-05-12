@@ -1,7 +1,5 @@
 """Schema-based output validation for generated blog content."""
 
-from typing import Optional
-
 
 class OutputGuard:
     """Validates generated blog content using schema rules."""
@@ -12,10 +10,10 @@ class OutputGuard:
     def validate(self, content: dict) -> tuple[bool, str]:
         """
         Validate generated blog content structure.
-        
+
         Args:
             content: Dict with keys: title, sections, final_content, word_count
-            
+
         Returns:
             tuple[bool, str]: (is_valid, error_message)
         """
@@ -35,7 +33,10 @@ class OutputGuard:
         if not isinstance(word_count, int):
             return False, "Word count must be an integer"
         if word_count < self.MIN_WORD_COUNT:
-            return False, f"Content must have at least {self.MIN_WORD_COUNT} words (got {word_count})"
+            return (
+                False,
+                f"Content must have at least {self.MIN_WORD_COUNT} words (got {word_count})",
+            )
 
         if "sections" in content:
             sections = content.get("sections")
@@ -56,7 +57,7 @@ class OutputGuard:
 def validate_blog_output(content: dict) -> None:
     """
     Validates blog output and raises ValueError if invalid.
-    
+
     Raises:
         ValueError: If validation fails
     """
