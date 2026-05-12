@@ -11,23 +11,17 @@ class TestWorkerJobProcessing:
     @pytest.mark.asyncio
     async def test_worker_dequeues_job_from_redis(self, mock_redis):
         """Test worker pops job from Redis queue."""
+        from unittest.mock import AsyncMock
         from src.core.task_queue import TaskQueue
 
         queue = TaskQueue()
         queue._dequeue_script_sha = "test"
 
-        test_job = {
-            "session_id": 1,
-            "user_id": 1,
-            "adk_session_id": "test-adk",
-            "topic": "Test",
-            "audience": "test",
-            "tone": "professional",
-            "phase": "start",
-        }
-
-        mock_redis.evalsha.return_value = '{"session_id": 1, "user_id": 1, "adk_session_id": "test-adk", "topic": "Test", "audience": "test", "tone": "professional", "phase": "start"}'
-        mock_redis.zadd.return_value = 1
+        test_job_json = '{"session_id": 1, "user_id": 1, "adk_session_id": "test-adk", "topic": "Test", "audience": "test", "tone": "professional", "phase": "start"}'
+        
+        # Reconfigure evalsha to return the JSON string
+        mock_redis.evalsha = AsyncMock(return_value=test_job_json)
+        mock_redis.zadd = AsyncMock(return_value=1)
 
         job = await queue.dequeue(timeout=1)
 

@@ -51,34 +51,31 @@ class TestJobPersistence:
     @pytest.mark.asyncio
     async def test_generate_enqueues_to_redis(self, mock_redis):
         """Test POST /generate adds job to Redis queue."""
-        with patch("src.core.redis_pool.get_redis_client", return_value=mock_redis):
-            from src.core.task_queue import TaskQueue
+        from src.core.task_queue import BlogJob, TaskQueue
 
-            queue = TaskQueue()
-            queue._dequeue_script_sha = "test"
+        queue = TaskQueue()
+        queue._dequeue_script_sha = "test"
 
-            from src.core.task_queue import BlogJob
+        job = BlogJob(
+            session_id=1,
+            user_id=1,
+            adk_session_id="test-adk-session",
+            topic="Test Topic",
+            audience="test",
+            tone="professional",
+            phase="start",
+        )
 
-            job = BlogJob(
-                session_id=1,
-                user_id=1,
-                adk_session_id="test-adk-session",
-                topic="Test Topic",
-                audience="test",
-                tone="professional",
-                phase="start",
-            )
+        await queue.enqueue(job)
 
-            await queue.enqueue(job)
+        mock_redis.lpush.assert_called_once()
+        call_args = mock_redis.lpush.call_args
+        assert call_args[0][0] == "blogify:tasks"
 
-            mock_redis.lpush.assert_called_once()
-            call_args = mock_redis.lpush.call_args
-            assert call_args[0][0] == "blogify:tasks"
-
-            enqueued_job = json.loads(call_args[0][1])
-            assert enqueued_job["session_id"] == 1
-            assert enqueued_job["user_id"] == 1
-            assert enqueued_job["topic"] == "Test Topic"
+        enqueued_job = json.loads(call_args[0][1])
+        assert enqueued_job["session_id"] == 1
+        assert enqueued_job["user_id"] == 1
+        assert enqueued_job["topic"] == "Test Topic"
 
     @pytest.mark.asyncio
     async def test_generate_creates_budget_ledger_entry(self, mock_session):
@@ -162,65 +159,63 @@ class TestJobEnqueueDetails:
     @pytest.mark.asyncio
     async def test_job_contains_all_required_fields(self, mock_redis):
         """Test job enqueued contains all required fields."""
-        with patch("src.core.redis_pool.get_redis_client", return_value=mock_redis):
-            from src.core.task_queue import BlogJob, TaskQueue
+        from src.core.task_queue import BlogJob, TaskQueue
 
-            queue = TaskQueue()
-            queue._dequeue_script_sha = "test"
+        queue = TaskQueue()
+        queue._dequeue_script_sha = "test"
 
-            job = BlogJob(
-                session_id=42,
-                user_id=7,
-                adk_session_id="adk-session-123",
-                topic="Python Best Practices",
-                audience="developers",
-                tone="professional",
-                phase="start",
-            )
+        job = BlogJob(
+            session_id=42,
+            user_id=7,
+            adk_session_id="adk-session-123",
+            topic="Python Best Practices",
+            audience="developers",
+            tone="professional",
+            phase="start",
+        )
 
-            await queue.enqueue(job)
+        await queue.enqueue(job)
 
-            call_args = mock_redis.lpush.call_args
-            enqueued_job = json.loads(call_args[0][1])
+        call_args = mock_redis.lpush.call_args
+        enqueued_job = json.loads(call_args[0][1])
 
-            assert "session_id" in enqueued_job
-            assert "user_id" in enqueued_job
-            assert "adk_session_id" in enqueued_job
-            assert "topic" in enqueued_job
-            assert "audience" in enqueued_job
-            assert "tone" in enqueued_job
-            assert "phase" in enqueued_job
-            assert "enqueued_at" in enqueued_job
+        assert "session_id" in enqueued_job
+        assert "user_id" in enqueued_job
+        assert "adk_session_id" in enqueued_job
+        assert "topic" in enqueued_job
+        assert "audience" in enqueued_job
+        assert "tone" in enqueued_job
+        assert "phase" in enqueued_job
+        assert "enqueued_at" in enqueued_job
 
     @pytest.mark.asyncio
     async def test_multiple_jobs_enqueued_separately(self, mock_redis):
         """Test multiple jobs are enqueued with correct order."""
-        with patch("src.core.redis_pool.get_redis_client", return_value=mock_redis):
-            from src.core.task_queue import BlogJob, TaskQueue
+        from src.core.task_queue import BlogJob, TaskQueue
 
-            queue = TaskQueue()
-            queue._dequeue_script_sha = "test"
+        queue = TaskQueue()
+        queue._dequeue_script_sha = "test"
 
-            job1 = BlogJob(
-                session_id=1,
-                user_id=1,
-                adk_session_id="1",
-                topic="Topic 1",
-                audience="a1",
-                tone="t1",
-                phase="start",
-            )
-            job2 = BlogJob(
-                session_id=2,
-                user_id=1,
-                adk_session_id="2",
-                topic="Topic 2",
-                audience="a2",
-                tone="t2",
-                phase="start",
-            )
+        job1 = BlogJob(
+            session_id=1,
+            user_id=1,
+            adk_session_id="1",
+            topic="Topic 1",
+            audience="a1",
+            tone="t1",
+            phase="start",
+        )
+        job2 = BlogJob(
+            session_id=2,
+            user_id=1,
+            adk_session_id="2",
+            topic="Topic 2",
+            audience="a2",
+            tone="t2",
+            phase="start",
+        )
 
-            await queue.enqueue(job1)
-            await queue.enqueue(job2)
+        await queue.enqueue(job1)
+        await queue.enqueue(job2)
 
-            assert mock_redis.lpush.call_count == 2
+        assert mock_redis.lpush.call_count == 2
