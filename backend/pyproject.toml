@@ -64,6 +64,7 @@ ignore = ["E501", "E402", "UP042", "UP017", "W293"]
 
 [tool.mypy]
 python_version = "3.11"
+explicit_package_bases = true
 strict = true
 warn_return_any = true
 warn_unused_configs = true
