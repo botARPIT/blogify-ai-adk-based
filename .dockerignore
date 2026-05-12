@@ -1,0 +1,30 @@
+# Agent IDEs and tools
+.opencode/
+.claude/
+.agents/
+.code-review-graph/
+.cursor/
+.codex/
+.pytest_cache/
+.docs/blogs/*
+# IDE specific
+.cursorrules
+.codesnap/
+.windsurfrules
+
+# Project config (personal)
+.mcp.json
+.codex
+.skills-lock.json
+.opencode.json
+.mcp.json
+# Root-level documentation files
+AGENTS.md
+ASSESSMENT.md
+DEPLOYMENT_READINESS.md
+GEMINI.md
+MANUAL_QA_CHECKLIST.md
+session-ses_1fba.md
+UPSTREAM_SERVICE_DEPLOYMENT.md
+CLAUDE.md
+CODE_REVIEW_GRAPH.md
