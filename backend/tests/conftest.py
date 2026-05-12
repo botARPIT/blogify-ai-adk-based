@@ -67,13 +67,19 @@ def mock_redis():
     async def mock_get_redis_client():
         return redis
     
-    # Patch get_redis_client globally for this test
-    patcher = patch('src.core.redis_pool.get_redis_client', side_effect=mock_get_redis_client)
-    patcher.start()
+    # Patch get_redis_client in both the source module and every consumer module
+    # that imports it directly (so the already-bound name is replaced too).
+    patchers = [
+        patch('src.core.redis_pool.get_redis_client', side_effect=mock_get_redis_client),
+        patch('src.core.task_queue.get_redis_client', side_effect=mock_get_redis_client),
+    ]
+    for p in patchers:
+        p.start()
     yield redis
     # Clean up
     redis.reset_mock()
-    patcher.stop()
+    for p in reversed(patchers):
+        p.stop()
 
 
 @pytest.fixture(autouse=True, scope="function")
