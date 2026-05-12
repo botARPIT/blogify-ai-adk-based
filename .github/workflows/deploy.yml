@@ -40,7 +40,7 @@ jobs:
           envs: IMAGE,IMAGE_TAG,DEPLOY_DIR
           script: |
             set -euo pipefail
-            echo "==> [1/5] Injecting secrets from AWS Secrets Manager..."
+            echo "==> [1/6] Injecting secrets from AWS Secrets Manager..."
             aws secretsmanager get-secret-value \
               --secret-id "${{ secrets.AWS_SECRET_NAME }}" \
               --region "${{ secrets.AWS_REGION }}" \
@@ -52,26 +52,34 @@ jobs:
                 print(f'{k}={v}')
             " > "${DEPLOY_DIR}/.env"
             chmod 600 "${DEPLOY_DIR}/.env"
-            # Append runtime values
             echo "IMAGE_TAG=${IMAGE_TAG}" >> "${DEPLOY_DIR}/.env"
 
-            echo "==> [2/5] Pulling new image..."
+            echo "==> [2/6] Starting postgres + redis containers..."
+            cd "${DEPLOY_DIR}"
+            docker compose -f docker-compose.prod.yml up -d postgres redis
+
+            echo "==> [3/6] Waiting for postgres to be healthy..."
+            until docker compose -f docker-compose.prod.yml exec -T postgres \
+              pg_isready -U "${POSTGRES_USER:-blogifyai}" -d "${POSTGRES_DB:-blogifyai}"; do
+              echo "  postgres not ready, retrying in 5s..."
+              sleep 5
+            done
+            echo "  postgres is ready."
+
+            echo "==> [4/6] Pulling new image..."
             docker pull "${IMAGE}"
 
-            echo "==> [3/5] Running Alembic migrations (throwaway container)..."
+            echo "==> [5/6] Running Alembic migrations..."
             docker run --rm \
               --env-file "${DEPLOY_DIR}/.env" \
               --network blogifyai_backend \
               "${IMAGE}" \
               alembic upgrade head
 
-            echo "==> [4/5] Bringing up the production stack..."
-            cd "${DEPLOY_DIR}"
-            IMAGE_TAG="${IMAGE_TAG}" docker compose \
-              -f docker-compose.prod.yml \
-              up -d --remove-orphans
+            echo "==> [6/6] Bringing up the full production stack..."
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-            echo "==> [5/5] Pruning old images..."
+            echo "==> Pruning old images..."
             docker image prune -f
 
             echo "✅ Deploy of ${IMAGE} complete."
