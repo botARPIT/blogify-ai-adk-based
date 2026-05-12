@@ -12,8 +12,7 @@ class TestLogin:
         from src.api.main import app
         from src.core.database import get_db_session
 
-        # Real bcrypt hash for "password123" — lets auth_service.login run
-        # end-to-end without any class-level patching.
+        # Real bcrypt hash for "password123"
         real_hash = _bcrypt.hashpw(b"password123", _bcrypt.gensalt()).decode()
 
         mock_user = MagicMock()
@@ -25,12 +24,14 @@ class TestLogin:
         mock_user.created_at = None
         mock_user.last_login_at = None
 
-        # Make session.execute(...).scalar_one_or_none() return mock_user
-        # so both get_by_email calls (inside login + after login) return it.
+        # Wire execute() -> scalar_one_or_none() -> mock_user for all DB calls
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = mock_user
         mock_db_session.execute = AsyncMock(return_value=mock_result)
+        mock_db_session.flush = AsyncMock(return_value=None)
 
+        # Override get_db_session AND get_current_user so the full request
+        # pipeline uses our mock session with no real DB connection.
         async def override_get_db():
             yield mock_db_session
 
@@ -44,7 +45,9 @@ class TestLogin:
         finally:
             app.dependency_overrides.pop(get_db_session, None)
 
-        assert response.status_code == 200
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}. Body: {response.text}"
+        )
         data = response.json()
         assert data["authenticated"] is True
         assert data["user"]["email"] == "test@example.com"
