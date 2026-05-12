@@ -100,8 +100,6 @@ services:
         condition: service_healthy
     environment:
       <<: *api-env
-    deploy:
-      replicas: 3
     networks:
       - backend
 
