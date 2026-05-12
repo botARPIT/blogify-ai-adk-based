@@ -4,8 +4,14 @@ import os
 from enum import Enum
 from typing import Any
 
+from dotenv import load_dotenv
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Load environment variables immediately when this module is imported
+env = os.getenv("ENVIRONMENT", "dev")
+load_dotenv(f".env.{env}")
+load_dotenv(".env", override=False)
 
 
 class Environment(str, Enum):
@@ -172,16 +178,7 @@ def get_config() -> BaseConfig:
     }
 
     config_class = config_map.get(env, DevelopmentConfig)
-    cfg = config_class()
-
-    # DEBUG: Print loaded config
-    print(f"[DEBUG] Environment: {env}")
-    print(f"[DEBUG] CORS_ORIGINS: {cfg.cors_origins}")
-    print(f"[DEBUG] CORS_ALLOW_CREDENTIALS: {cfg.cors_allow_credentials}")
-    print(f"[DEBUG] COOKIE_SECURE: {os.getenv('COOKIE_SECURE', 'false')}")
-    print(f"[DEBUG] COOKIE_SAMESITE: {os.getenv('COOKIE_SAMESITE', 'lax')}")
-
-    return cfg
+    return config_class()
 
 
 # Global config instance

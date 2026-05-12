@@ -10,19 +10,9 @@ Do NOT instantiate Reaper inside this worker — 3 worker replicas would create
 import asyncio
 import os
 import socket
-from datetime import datetime
-
-# Load environment variables BEFORE other imports
-from src.config.env_loader import ensure_env_loaded
-
-ensure_env_loaded()
-
-from datetime import UTC
+from datetime import UTC, datetime
 
 from src.config.env_config import config
-
-# DEBUG: Print API key status
-print(f"[DEBUG] GOOGLE_API_KEY loaded: {bool(os.getenv('GOOGLE_API_KEY'))}, key starts with: {os.getenv('GOOGLE_API_KEY', '')[:10]}...")
 from src.config.logging_config import get_logger, setup_logging
 from src.core.database import AsyncSessionFactory
 from src.core.redis_pool import get_redis_client

@@ -103,7 +103,6 @@ class Reaper:
 
 async def main() -> None:
     from src.config.env_config import config
-    from src.config.env_loader import ensure_env_loaded  # noqa: F401
     from src.config.logging_config import setup_logging
     from src.core.task_queue import TaskQueue
 
