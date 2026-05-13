@@ -145,7 +145,7 @@ class ProductionConfig(BaseConfig):
     log_level: str = "warning"
     api_workers: int = 8
     max_concurrent_requests: int = 50
-    cors_allow_credentials: bool = False
+    cors_allow_credentials: bool = True
     enable_datadog: bool = True
     metrics_public: bool = False
     enable_canonical_routes: bool = True
