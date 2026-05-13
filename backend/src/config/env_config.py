@@ -3,7 +3,7 @@
 import json
 import os
 from enum import Enum
-from typing import Any, Union
+from typing import Any
 
 from dotenv import load_dotenv
 from pydantic import computed_field, field_validator
