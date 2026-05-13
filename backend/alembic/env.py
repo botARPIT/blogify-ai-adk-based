@@ -5,30 +5,26 @@ Updated (Phase 1) to wire the ORM Base.metadata so that autogenerate works.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from logging.config import fileConfig
 from pathlib import Path
 
 from dotenv import load_dotenv
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy import create_engine, text
 
 from alembic import context
 
-# Import ORM metadata for autogenerate
 from src.models.orm_models import Base  # noqa: E402
 
 config = context.config
 
 BASE_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(BASE_DIR / ".env")
-load_dotenv(BASE_DIR / f".env.{os.getenv('ENVIRONMENT', 'dev')}", override=True)
+load_dotenv(BASE_DIR / ".env", override=False)
+load_dotenv(BASE_DIR / f".env.{os.getenv('ENVIRONMENT', 'dev')}", override=False)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Expose the metadata for autogenerate support
 target_metadata = Base.metadata
 
 
@@ -53,32 +49,47 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in online mode."""
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_url()
+    """Run migrations in online mode using sync psycopg2 engine for alembic compatibility."""
+    import psycopg2
+    from urllib.parse import urlparse
 
-    connectable = async_engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
+    url = get_url()
+    sync_url = url.replace("+asyncpg", "")
+
+    parsed = urlparse(sync_url)
+    pg_conn = psycopg2.connect(
+        host=parsed.hostname or "localhost",
+        port=parsed.port or 5432,
+        user=parsed.username or "blogify",
+        password=parsed.password or "",
+        database=parsed.path.lstrip("/") or "blogify",
     )
+    pg_conn.autocommit = True
+    cursor = pg_conn.cursor()
+    cursor.execute(
+        "CREATE TABLE IF NOT EXISTS alembic_version (version_num character varying(32) NOT NULL)"
+    )
+    cursor.close()
+    pg_conn.close()
 
-    async def _run() -> None:
-        async with connectable.connect() as connection:
-            await connection.run_sync(_do_run_migrations)
-        await connectable.dispose()
+    engine = create_engine(sync_url, poolclass=None)
 
-    def _do_run_migrations(connection) -> None:
+    with engine.connect() as connection:
+        raw_conn = connection.connection
+        db_conn = raw_conn.connection if hasattr(raw_conn, "connection") else raw_conn
+
+        db_conn.set_session(autocommit=True)
+
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            transactional_ddl=False,
         )
 
-        with context.begin_transaction():
-            context.run_migrations()
+        context.run_migrations()
 
-    asyncio.run(_run())
+    engine.dispose()
 
 
 if context.is_offline_mode():
