@@ -31,6 +31,25 @@ jobs:
       DEPLOY_DIR: /home/ubuntu/blogifyai
 
     steps:
+      # ── Checkout so scp-action has the files on the runner ──────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # ── Copy only the config files the EC2 actually needs ───────────────────
+      - name: Copy config files to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "backend/docker-compose.prod.yml,backend/nginx/,backend/monitoring/"
+          target: "/home/ubuntu/blogifyai/"
+          strip_components: 0
+          overwrite: true
+
+      # ── Deploy ───────────────────────────────────────────────────────────────
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -61,22 +80,25 @@ jobs:
             source "${DEPLOY_DIR}/.env"
             set +o allexport
 
-            echo "==> [2/6] Pulling repo from origin/main..."
-            git -C "${DEPLOY_DIR}" fetch origin main
-            git -C "${DEPLOY_DIR}" reset --hard origin/main
+            echo "==> [2/6] Starting postgres + redis containers..."
+            docker compose \
+              -f "${DEPLOY_DIR}/backend/docker-compose.prod.yml" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              up -d postgres redis
 
-            echo "==> [3/6] Starting postgres + redis containers..."
-            cd "${DEPLOY_DIR}"
-            docker compose -f backend/docker-compose.prod.yml up -d postgres redis
-
-            echo "==> [4/6] Waiting for postgres to be healthy..."
+            echo "==> [3/6] Waiting for postgres to be healthy..."
             RETRIES=0
-            until docker compose -f backend/docker-compose.prod.yml exec -T postgres \
-              pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"; do
+            until docker compose \
+              -f "${DEPLOY_DIR}/backend/docker-compose.prod.yml" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              exec -T postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"; do
               RETRIES=$((RETRIES + 1))
               if [ "$RETRIES" -ge 12 ]; then
                 echo "❌ Postgres never became ready after 60s — aborting."
-                docker compose -f backend/docker-compose.prod.yml logs postgres
+                docker compose \
+                  -f "${DEPLOY_DIR}/backend/docker-compose.prod.yml" \
+                  --env-file "${DEPLOY_DIR}/.env" \
+                  logs postgres
                 exit 1
               fi
               echo "  postgres not ready, retrying in 5s... (${RETRIES}/12)"
@@ -84,10 +106,10 @@ jobs:
             done
             echo "  postgres is ready."
 
-            echo "==> [5/6] Pulling new image..."
+            echo "==> [4/6] Pulling new image..."
             docker pull "${IMAGE}"
 
-            echo "==> Running Alembic migrations..."
+            echo "==> [5/6] Running Alembic migrations..."
             docker run --rm \
               --env-file "${DEPLOY_DIR}/.env" \
               --network blogifyai_backend \
@@ -95,16 +117,23 @@ jobs:
               alembic upgrade head
 
             echo "==> [6/6] Bringing up the full production stack with 3 worker replicas..."
-            docker compose -f backend/docker-compose.prod.yml up -d --scale worker=3 --remove-orphans
+            docker compose \
+              -f "${DEPLOY_DIR}/backend/docker-compose.prod.yml" \
+              --env-file "${DEPLOY_DIR}/.env" \
+              up -d \
+              --scale worker=3 \
+              --force-recreate \
+              --remove-orphans
 
             echo "==> Pruning old images..."
             docker image prune -f
 
             echo "✅ Deploy of ${IMAGE} complete."
 
+      # ── Smoke test ───────────────────────────────────────────────────────────
       - name: Smoke-test health endpoint
         run: |
-          sleep 10  # allow containers to settle
+          sleep 15  # allow containers to settle
           STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
             https://api.blogifyai.arpitdev.site/api/health || echo "000")
           echo "Health endpoint returned HTTP ${STATUS}"
