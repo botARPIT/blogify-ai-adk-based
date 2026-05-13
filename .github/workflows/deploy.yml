@@ -4,13 +4,14 @@
 # The EC2 instance's IAM role (blogifyai-ec2-role) grants access to
 # AWS Secrets Manager — no AWS credentials are stored in GitHub secrets.
 #
+# Secrets are written to a tmpfs RAM mount at /run/secrets/blogifyai/.env
+# and are never written to disk on the EC2.
+#
 # Required GitHub Secrets:
-#   DOCKERHUB_USERNAME   — iarpitchauhan
-#   DOCKERHUB_TOKEN      — Docker Hub access token (read: pull on EC2 only)
-#   EC2_HOST             — public IP or DNS of the EC2 instance
-#   EC2_SSH_KEY          — private key PEM (no passphrase) for ubuntu@EC2_HOST
-#   AWS_REGION           — ap-south-1
-#   AWS_SECRET_NAME      — blogifyai/production
+#   EC2_HOST           — public IP or DNS of the EC2 instance
+#   EC2_SSH_KEY        — private key PEM (no passphrase) for ubuntu@EC2_HOST
+#   AWS_REGION         — ap-south-1
+#   AWS_SECRET_NAME    — blogifyai/production
 
 name: Deploy to EC2
 
@@ -29,6 +30,7 @@ jobs:
       IMAGE: iarpitchauhan/blogify-ai:${{ github.event.workflow_run.head_sha }}
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
       DEPLOY_DIR: /home/ubuntu/blogifyai
+      SECRETS_DIR: /run/secrets/blogifyai
 
     steps:
       # ── Checkout so scp-action has the files on the runner ──────────────────
@@ -45,7 +47,7 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           source: "backend/docker-compose.prod.yml,backend/nginx/,backend/monitoring/"
-          target: "/home/ubuntu/blogifyai/"
+          target: "${{ env.DEPLOY_DIR }}/"
           strip_components: 0
           overwrite: true
 
@@ -56,11 +58,26 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: IMAGE,IMAGE_TAG,DEPLOY_DIR
+          envs: IMAGE,IMAGE_TAG,DEPLOY_DIR,SECRETS_DIR
           script: |
             set -euo pipefail
+            # ── Step 0: Ensure deploy directory exists ────────────────────────────────
+            echo "==> [0/6] Ensuring deploy directories exist..."
+            mkdir -p "${DEPLOY_DIR}/backend"
+            sudo mkdir -p "${SECRETS_DIR}"
+            if ! mountpoint -q "${SECRETS_DIR}"; then
+              sudo mount -t tmpfs -o size=1m,mode=0700 tmpfs "${SECRETS_DIR}"
+              sudo chown ubuntu:ubuntu "${SECRETS_DIR}"
+            fi
+            
+            # ── Step 1: Mount tmpfs and inject secrets (never touches disk) ───
+            echo "==> [1/6] Mounting tmpfs and injecting secrets..."
+            if ! mountpoint -q "${SECRETS_DIR}"; then
+              sudo mkdir -p "${SECRETS_DIR}"
+              sudo mount -t tmpfs -o size=1m,mode=0700 tmpfs "${SECRETS_DIR}"
+              sudo chown ubuntu:ubuntu "${SECRETS_DIR}"
+            fi
 
-            echo "==> [1/6] Injecting secrets from AWS Secrets Manager..."
             aws secretsmanager get-secret-value \
               --secret-id "${{ secrets.AWS_SECRET_NAME }}" \
               --region "${{ secrets.AWS_REGION }}" \
@@ -70,34 +87,38 @@ jobs:
             import sys, json
             for k, v in json.load(sys.stdin).items():
                 print(f'{k}={v}')
-            " > "${DEPLOY_DIR}/.env"
-            chmod 600 "${DEPLOY_DIR}/.env"
-            echo "IMAGE_TAG=${IMAGE_TAG}" >> "${DEPLOY_DIR}/.env"
+            " > "${SECRETS_DIR}/.env"
+            chmod 600 "${SECRETS_DIR}/.env"
 
-            # Export all vars into the current shell so docker compose
-            # interpolation and pg_isready both see them
+            # IMAGE_TAG is not a secret but compose needs it to resolve the image
+            echo "IMAGE_TAG=${IMAGE_TAG}" >> "${SECRETS_DIR}/.env"
+
+            # Export into shell for pg_isready and compose interpolation
+            # (POSTGRES_* vars needed by postgres service and healthcheck)
             set -o allexport
-            source "${DEPLOY_DIR}/.env"
+            source "${SECRETS_DIR}/.env"
             set +o allexport
 
+            # ── Step 2: Start postgres + redis ────────────────────────────────
             echo "==> [2/6] Starting postgres + redis containers..."
             docker compose \
               -f "${DEPLOY_DIR}/backend/docker-compose.prod.yml" \
-              --env-file "${DEPLOY_DIR}/.env" \
+              --env-file "${SECRETS_DIR}/.env" \
               up -d postgres redis
 
+            # ── Step 3: Wait for postgres ─────────────────────────────────────
             echo "==> [3/6] Waiting for postgres to be healthy..."
             RETRIES=0
             until docker compose \
               -f "${DEPLOY_DIR}/backend/docker-compose.prod.yml" \
-              --env-file "${DEPLOY_DIR}/.env" \
+              --env-file "${SECRETS_DIR}/.env" \
               exec -T postgres pg_isready -U "${POSTGRES_USER}" -d "${POSTGRES_DB}"; do
               RETRIES=$((RETRIES + 1))
               if [ "$RETRIES" -ge 12 ]; then
                 echo "❌ Postgres never became ready after 60s — aborting."
                 docker compose \
                   -f "${DEPLOY_DIR}/backend/docker-compose.prod.yml" \
-                  --env-file "${DEPLOY_DIR}/.env" \
+                  --env-file "${SECRETS_DIR}/.env" \
                   logs postgres
                 exit 1
               fi
@@ -106,20 +127,23 @@ jobs:
             done
             echo "  postgres is ready."
 
+            # ── Step 4: Pull new image ────────────────────────────────────────
             echo "==> [4/6] Pulling new image..."
             docker pull "${IMAGE}"
 
+            # ── Step 5: Run Alembic migrations ────────────────────────────────
             echo "==> [5/6] Running Alembic migrations..."
             docker run --rm \
-              --env-file "${DEPLOY_DIR}/.env" \
+              --env-file "${SECRETS_DIR}/.env" \
               --network blogifyai_backend \
               "${IMAGE}" \
               alembic upgrade head
 
-            echo "==> [6/6] Bringing up the full production stack with 3 worker replicas..."
+            # ── Step 6: Bring up full stack ───────────────────────────────────
+            echo "==> [6/6] Bringing up the full production stack..."
             docker compose \
               -f "${DEPLOY_DIR}/backend/docker-compose.prod.yml" \
-              --env-file "${DEPLOY_DIR}/.env" \
+              --env-file "${SECRETS_DIR}/.env" \
               up -d \
               --scale worker=3 \
               --force-recreate \
@@ -133,7 +157,7 @@ jobs:
       # ── Smoke test ───────────────────────────────────────────────────────────
       - name: Smoke-test health endpoint
         run: |
-          sleep 15  # allow containers to settle
+          sleep 15
           STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
             https://api.blogifyai.arpitdev.site/api/health || echo "000")
           echo "Health endpoint returned HTTP ${STATUS}"
