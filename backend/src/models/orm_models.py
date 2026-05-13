@@ -146,7 +146,7 @@ class AgentRun(Base):
 
 
 class BudgetLedger(Base):
-    __tablename__ = "budget_ledger_entries"
+    __tablename__ = "budget_ledger"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False)
@@ -168,8 +168,8 @@ class BudgetLedger(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     __table_args__ = (
-        Index("ix_budget_ledger_entries_user_id", "user_id"),
-        Index("ix_budget_ledger_entries_session", "blog_session_id"),
+        Index("ix_budget_ledger_user_id", "user_id"),
+        Index("ix_budget_ledger_session", "blog_session_id"),
     )
 
 
