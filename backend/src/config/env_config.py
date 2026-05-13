@@ -121,20 +121,11 @@ class DevelopmentConfig(BaseConfig):
 
     environment: Environment = Environment.DEV
     log_level: str = "debug"
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
     enable_datadog: bool = False
 
 
 class StagingConfig(BaseConfig):
     """Staging environment configuration."""
-
-    model_config = SettingsConfigDict(
-        env_file=[
-            os.path.join(BACKEND_ROOT, ".env.stage"),
-            ".env.stage",
-        ],
-        env_file_encoding="utf-8",
-    )
 
     environment: Environment = Environment.STAGE
     log_level: str = "info"
@@ -148,19 +139,10 @@ class StagingConfig(BaseConfig):
 class ProductionConfig(BaseConfig):
     """Production environment configuration."""
 
-    model_config = SettingsConfigDict(
-        env_file=[
-            os.path.join(BACKEND_ROOT, ".env.prod"),
-            ".env.prod",
-        ],
-        env_file_encoding="utf-8",
-    )
-
     environment: Environment = Environment.PROD
     log_level: str = "warning"
     api_workers: int = 8
     max_concurrent_requests: int = 50
-    cors_origins: list[str] = []  # Must be explicitly set in prod
     cors_allow_credentials: bool = False
     enable_datadog: bool = True
     metrics_public: bool = False
