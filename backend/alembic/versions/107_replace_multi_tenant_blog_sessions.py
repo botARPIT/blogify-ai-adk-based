@@ -137,6 +137,12 @@ def upgrade() -> None:
         DROP CONSTRAINT IF EXISTS budget_ledger_blog_session_id_fkey
     """)
     op.execute("""
+        UPDATE budget_ledger
+        SET blog_session_id = NULL
+        WHERE blog_session_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM blog_sessions WHERE id = budget_ledger.blog_session_id)
+    """)
+    op.execute("""
         ALTER TABLE budget_ledger
         ADD CONSTRAINT budget_ledger_blog_session_id_fkey
         FOREIGN KEY (blog_session_id) REFERENCES blog_sessions(id) ON DELETE SET NULL
