@@ -1,11 +1,11 @@
 """Environment-specific configuration loader."""
 
+import json
 import os
 from enum import Enum
-from typing import Any
 
 from dotenv import load_dotenv
-from pydantic import field_validator
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load environment variables immediately when this module is imported
@@ -31,7 +31,7 @@ BACKEND_ROOT = os.path.dirname(SRC_DIR)
 class BaseConfig(BaseSettings):
     """Base configuration."""
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", populate_by_name=True)
 
     # Environment
     environment: Environment = Environment.DEV
@@ -45,28 +45,30 @@ class BaseConfig(BaseSettings):
     mask_secrets_in_logs: bool = True
 
     # CORS
-    cors_origins: str = "*"
+    cors_origins_raw: str = Field(default="*", validation_alias="CORS_ORIGINS")
     cors_allow_credentials: bool = True
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v: Any) -> list[str]:
-        """Parse CORS origins if provided as a string or list."""
-        if not v:
+    @computed_field
+    @property
+    def cors_origins(self) -> list[str]:
+        """Parse and return CORS origins as list for FastAPI."""
+        v = self.cors_origins_raw
+        if not v or v == "*":
             return ["*"]
-        if isinstance(v, str):
-            v_strip = v.strip()
-            if not v_strip:
-                return ["*"]
-            try:
-                # Try JSON first
-                import json
 
-                return json.loads(v_strip)
+        # Try JSON parse first
+        if v.startswith("["):
+            try:
+                return json.loads(v)
             except json.JSONDecodeError:
-                # Fallback to comma-separated
-                return [s.strip() for s in v_strip.split(",")]
-        return v
+                pass
+
+        # Comma-separated values
+        if "," in v:
+            return [s.strip() for s in v.split(",") if s.strip()]
+
+        # Single value
+        return [v]
 
     # Database
     database_url: str
@@ -121,20 +123,11 @@ class DevelopmentConfig(BaseConfig):
 
     environment: Environment = Environment.DEV
     log_level: str = "debug"
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
     enable_datadog: bool = False
 
 
 class StagingConfig(BaseConfig):
     """Staging environment configuration."""
-
-    model_config = SettingsConfigDict(
-        env_file=[
-            os.path.join(BACKEND_ROOT, ".env.stage"),
-            ".env.stage",
-        ],
-        env_file_encoding="utf-8",
-    )
 
     environment: Environment = Environment.STAGE
     log_level: str = "info"
@@ -148,19 +141,10 @@ class StagingConfig(BaseConfig):
 class ProductionConfig(BaseConfig):
     """Production environment configuration."""
 
-    model_config = SettingsConfigDict(
-        env_file=[
-            os.path.join(BACKEND_ROOT, ".env.prod"),
-            ".env.prod",
-        ],
-        env_file_encoding="utf-8",
-    )
-
     environment: Environment = Environment.PROD
     log_level: str = "warning"
     api_workers: int = 8
     max_concurrent_requests: int = 50
-    cors_origins: list[str] = []  # Must be explicitly set in prod
     cors_allow_credentials: bool = False
     enable_datadog: bool = True
     metrics_public: bool = False
