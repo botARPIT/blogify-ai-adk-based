@@ -1,0 +1,4 @@
+# Disable nginx-proxy's built-in CORS handler for the API subdomain.
+# FastAPI's CORSMiddleware (configured via CORS_ORIGINS env var) handles CORS instead.
+# nginx-proxy should only proxy — not intercept OPTIONS preflight requests.
+set $cors "";
