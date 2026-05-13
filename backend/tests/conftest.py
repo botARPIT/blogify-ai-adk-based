@@ -19,6 +19,7 @@ os.environ["TAVILY_API_KEY"] = "test-tavily-key"
 os.environ["DATABASE_URL"] = "postgresql+asyncpg://test:test@localhost:5432/test"
 os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 os.environ["ENABLE_CANONICAL_ROUTES"] = "false"
+os.environ["CORS_ORIGINS"] = "*"
 
 
 @pytest.fixture(scope="session")

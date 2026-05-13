@@ -1,11 +1,12 @@
 """Environment-specific configuration loader."""
 
+import json
 import os
 from enum import Enum
-from typing import Any
+from typing import Any, Union
 
 from dotenv import load_dotenv
-from pydantic import field_validator
+from pydantic import computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load environment variables immediately when this module is imported
@@ -31,7 +32,7 @@ BACKEND_ROOT = os.path.dirname(SRC_DIR)
 class BaseConfig(BaseSettings):
     """Base configuration."""
 
-    model_config = SettingsConfigDict(extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore", populate_by_name=True)
 
     # Environment
     environment: Environment = Environment.DEV
@@ -45,28 +46,42 @@ class BaseConfig(BaseSettings):
     mask_secrets_in_logs: bool = True
 
     # CORS
-    cors_origins: list[str] = ["*"]
+    _cors_origins: str = "*"
     cors_allow_credentials: bool = True
 
-    @field_validator("cors_origins", mode="before")
+    @field_validator("_cors_origins", mode="before")
     @classmethod
-    def parse_cors_origins(cls, v: Any) -> list[str]:
-        """Parse CORS origins if provided as a string or list."""
+    def parse_cors_origins_input(cls, v: Any) -> str:
+        """Normalize CORS origins input to string for storage."""
         if not v:
-            return ["*"]
+            return "*"
+        if isinstance(v, list):
+            return json.dumps(v)
         if isinstance(v, str):
-            v_strip = v.strip()
-            if not v_strip:
-                return ["*"]
-            try:
-                # Try JSON first
-                import json
+            return v.strip() or "*"
+        return str(v)
 
-                return json.loads(v_strip)
+    @computed_field
+    @property
+    def cors_origins(self) -> list[str]:
+        """Parse and return CORS origins as list for FastAPI."""
+        v = self._cors_origins
+        if not v or v == "*":
+            return ["*"]
+        
+        # Try JSON parse first
+        if v.startswith("["):
+            try:
+                return json.loads(v)
             except json.JSONDecodeError:
-                # Fallback to comma-separated
-                return [s.strip() for s in v_strip.split(",")]
-        return v
+                pass
+        
+        # Comma-separated values
+        if "," in v:
+            return [s.strip() for s in v.split(",") if s.strip()]
+        
+        # Single value
+        return [v]
 
     # Database
     database_url: str
