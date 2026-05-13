@@ -38,6 +38,7 @@ services:
       - nginx_html:/usr/share/nginx/html
       - /var/run/docker.sock:/tmp/docker.sock:ro
       - ./nginx/blogifyai-security-headers.conf:/etc/nginx/conf.d/blogifyai-security-headers.conf:ro
+      - ./nginx/api.blogifyai.arpitdev.site:/etc/nginx/vhost.d/api.blogifyai.arpitdev.site:ro
     networks:
       - frontend
       - backend
