@@ -3,7 +3,6 @@
 import json
 import os
 from enum import Enum
-from typing import Any
 
 from dotenv import load_dotenv
 from pydantic import Field, computed_field
@@ -46,28 +45,28 @@ class BaseConfig(BaseSettings):
     mask_secrets_in_logs: bool = True
 
     # CORS
-    _cors_origins_raw: str = Field(default="*", validation_alias="CORS_ORIGINS")
+    cors_origins_raw: str = Field(default="*", validation_alias="CORS_ORIGINS")
     cors_allow_credentials: bool = True
 
     @computed_field
     @property
     def cors_origins(self) -> list[str]:
         """Parse and return CORS origins as list for FastAPI."""
-        v = self._cors_origins_raw
+        v = self.cors_origins_raw
         if not v or v == "*":
             return ["*"]
-        
+
         # Try JSON parse first
         if v.startswith("["):
             try:
                 return json.loads(v)
             except json.JSONDecodeError:
                 pass
-        
+
         # Comma-separated values
         if "," in v:
             return [s.strip() for s in v.split(",") if s.strip()]
-        
+
         # Single value
         return [v]
 
