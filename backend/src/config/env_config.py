@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any
 
 from dotenv import load_dotenv
-from pydantic import computed_field, field_validator
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Load environment variables immediately when this module is imported
@@ -46,26 +46,14 @@ class BaseConfig(BaseSettings):
     mask_secrets_in_logs: bool = True
 
     # CORS
-    _cors_origins: str = "*"
+    _cors_origins_raw: str = Field(default="*", validation_alias="CORS_ORIGINS")
     cors_allow_credentials: bool = True
-
-    @field_validator("_cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins_input(cls, v: Any) -> str:
-        """Normalize CORS origins input to string for storage."""
-        if not v:
-            return "*"
-        if isinstance(v, list):
-            return json.dumps(v)
-        if isinstance(v, str):
-            return v.strip() or "*"
-        return str(v)
 
     @computed_field
     @property
     def cors_origins(self) -> list[str]:
         """Parse and return CORS origins as list for FastAPI."""
-        v = self._cors_origins
+        v = self._cors_origins_raw
         if not v or v == "*":
             return ["*"]
         
