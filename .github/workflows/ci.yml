@@ -62,6 +62,9 @@ jobs:
           TAVILY_API_KEY: test-key
           DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
           REDIS_URL: redis://localhost:6379/0
+          CORS_ORIGINS: "http://localhost:3000"
+          JWT_SECRET: test-secret
+          ADMIN_API_KEY: test-admin-key
         run: |
           python -m pytest tests/ -v --cov=src --cov-report=xml
 
