@@ -45,7 +45,7 @@ class BaseConfig(BaseSettings):
     mask_secrets_in_logs: bool = True
 
     # CORS
-    cors_origins: str = "*"
+    cors_origins: list[str] = ["*"]
     cors_allow_credentials: bool = True
 
     @field_validator("cors_origins", mode="before")
