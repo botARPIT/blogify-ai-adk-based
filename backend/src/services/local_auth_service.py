@@ -9,7 +9,7 @@ import json
 import os
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import Response
@@ -106,7 +106,7 @@ class LocalAuthService:
         if not hmac.compare_digest(expected_signature, _b64url_decode(encoded_signature)):
             raise ValueError("Invalid token signature")
         payload = json.loads(_b64url_decode(encoded_payload))
-        now_ts = int(datetime.now(UTC).timestamp())
+        now_ts = int(datetime.now(timezone.utc).timestamp())
         if payload.get("aud") != self.audience:
             raise ValueError("Invalid token audience")
         if payload.get("iss") != self.issuer:

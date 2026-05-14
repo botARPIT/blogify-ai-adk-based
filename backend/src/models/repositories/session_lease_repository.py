@@ -1,6 +1,6 @@
 """Repository for session lease management - append-only audit trail."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +21,7 @@ class SessionLeaseRepository:
         self, session_id: int, worker_id: str, lease_seconds: int = 300
     ) -> bool:
         """Acquire a new lease for a session. Creates a new row (append-only)."""
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=lease_seconds)
 
         current_lease = await self._get_active_lease(session_id)
@@ -69,7 +69,7 @@ class SessionLeaseRepository:
         """Release the current lease for a session."""
         active_lease = await self._get_active_lease(session_id)
         if active_lease and active_lease.lease_owner == worker_id:
-            active_lease.ended_at = datetime.now(UTC)
+            active_lease.ended_at = datetime.now(timezone.utc)
             active_lease.release_reason = LeaseEventType.RELEASED
             await self._session.flush()
 
@@ -84,7 +84,7 @@ class SessionLeaseRepository:
         if not active_lease or active_lease.lease_owner != worker_id:
             return False
 
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         expires_at = now + timedelta(seconds=extend_seconds)
 
         active_lease.lease_expires_at = expires_at
@@ -107,7 +107,7 @@ class SessionLeaseRepository:
 
     async def get_stale_sessions(self, stale_threshold_minutes: int = 10) -> list[SessionLease]:
         """Get all leases that have expired (heartbeat lost)."""
-        threshold = datetime.now(UTC) - timedelta(minutes=stale_threshold_minutes)
+        threshold = datetime.now(timezone.utc) - timedelta(minutes=stale_threshold_minutes)
         result = await self._session.execute(
             select(SessionLease)
             .where(
@@ -122,7 +122,7 @@ class SessionLeaseRepository:
         """Mark the current lease as expired due to heartbeat failure."""
         active_lease = await self._get_active_lease(session_id)
         if active_lease:
-            active_lease.ended_at = datetime.now(UTC)
+            active_lease.ended_at = datetime.now(timezone.utc)
             active_lease.release_reason = LeaseEventType.HEARTBEAT_FAILED
             await self._session.flush()
 

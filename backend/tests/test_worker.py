@@ -1,6 +1,6 @@
 """Tests for worker behavior - job processing and agent snapshots."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,15 +11,13 @@ class TestWorkerJobProcessing:
     @pytest.mark.asyncio
     async def test_worker_dequeues_job_from_redis(self, mock_redis):
         """Test worker pops job from Redis queue."""
-        from unittest.mock import AsyncMock
         from src.core.task_queue import TaskQueue
 
         queue = TaskQueue()
         queue._dequeue_script_sha = "test"
 
         test_job_json = '{"session_id": 1, "user_id": 1, "adk_session_id": "test-adk", "topic": "Test", "audience": "test", "tone": "professional", "phase": "start"}'
-        
-        # Reconfigure evalsha to return the JSON string
+
         mock_redis.evalsha = AsyncMock(return_value=test_job_json)
         mock_redis.zadd = AsyncMock(return_value=1)
 
@@ -123,11 +121,7 @@ class TestAgentRunSnapshots:
             result = await repo.create(
                 blog_session_id=1,
                 stage_name="intent",
-                agent_name="intent",
-                model_name="gemini-2.0-flash",
                 status="COMPLETED",
-                prompt_tokens=100,
-                completion_tokens=50,
                 total_tokens=150,
                 cost_usd=0.000003,
             )
@@ -142,9 +136,6 @@ class TestAgentRunSnapshots:
         """Test worker stores output_snapshot for each agent run."""
         output_snapshot = {
             "stage": "intent",
-            "model": "gemini-2.0-flash",
-            "prompt_tokens": 100,
-            "completion_tokens": 50,
             "total_tokens": 150,
             "cost_usd": 0.000003,
         }
@@ -161,11 +152,7 @@ class TestAgentRunSnapshots:
             await repo.create(
                 blog_session_id=1,
                 stage_name="intent",
-                agent_name="intent",
-                model_name="gemini-2.0-flash",
                 status="COMPLETED",
-                prompt_tokens=100,
-                completion_tokens=50,
                 total_tokens=150,
                 cost_usd=0.000003,
                 output_snapshot=output_snapshot,
@@ -189,11 +176,7 @@ class TestAgentRunSnapshots:
             await repo.create(
                 blog_session_id=1,
                 stage_name="intent",
-                agent_name="intent",
-                model_name="gemini-2.0-flash",
                 status="COMPLETED",
-                prompt_tokens=100,
-                completion_tokens=50,
                 total_tokens=150,
                 cost_usd=0.000003,
                 latency_ms=1500,
@@ -204,7 +187,7 @@ class TestAgentRunSnapshots:
 
     @pytest.mark.asyncio
     async def test_worker_stores_token_counts(self, mock_db_session):
-        """Test worker records prompt/completion/total tokens."""
+        """Test worker records total_tokens."""
         with patch(
             "src.models.repositories.agent_run_repository.AgentRunRepository.create"
         ) as mock_create:
@@ -217,18 +200,12 @@ class TestAgentRunSnapshots:
             await repo.create(
                 blog_session_id=1,
                 stage_name="writer",
-                agent_name="writer",
-                model_name="gemini-2.0-flash",
                 status="COMPLETED",
-                prompt_tokens=5000,
-                completion_tokens=2000,
                 total_tokens=7000,
                 cost_usd=0.00014,
             )
 
             call_kwargs = mock_create.call_args.kwargs
-            assert call_kwargs["prompt_tokens"] == 5000
-            assert call_kwargs["completion_tokens"] == 2000
             assert call_kwargs["total_tokens"] == 7000
 
     @pytest.mark.asyncio
@@ -241,11 +218,7 @@ class TestAgentRunSnapshots:
         async def mock_create(
             blog_session_id,
             stage_name,
-            agent_name,
-            model_name,
-            status,
-            prompt_tokens=0,
-            completion_tokens=0,
+            status="STARTED",
             total_tokens=0,
             cost_usd=0.0,
             latency_ms=None,
@@ -269,8 +242,6 @@ class TestAgentRunSnapshots:
                 await repo.create(
                     blog_session_id=1,
                     stage_name=stage,
-                    agent_name=stage,
-                    model_name="gemini-2.0-flash",
                     status="COMPLETED",
                 )
 
@@ -289,20 +260,16 @@ class TestResearchSourcesStorage:
             {
                 "title": "AI in Healthcare",
                 "url": "https://example.com/1",
-                "score": 0.9,
-                "content": "Content 1",
             },
             {
                 "title": "Machine Learning Basics",
                 "url": "https://example.com/2",
-                "score": 0.8,
-                "content": "Content 2",
             },
         ]
 
         created_sources = []
 
-        async def mock_create_many(user_id, blog_session_id, sources):
+        async def mock_create_many(blog_session_id, sources):
             for src in sources:
                 s = MagicMock()
                 s.title = src["title"]
@@ -320,7 +287,7 @@ class TestResearchSourcesStorage:
 
             repo = ResearchSourcesRepository(mock_db_session)
 
-            result = await repo.create_many(user_id=1, blog_session_id=1, sources=sources_data)
+            result = await repo.create_many(blog_session_id=1, sources=sources_data)
 
             assert len(result) == 2
             assert result[0].title == "AI in Healthcare"

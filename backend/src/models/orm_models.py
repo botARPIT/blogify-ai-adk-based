@@ -1,13 +1,14 @@
-"""Canonical V1 ORM models - auth_users, blog_sessions, agent_runs, budget_ledger, budget_accounts, session_reservations."""
+"""Canonical V1 ORM models - all tables use plain VARCHAR for status fields."""
 
-import enum
-from datetime import UTC, datetime
+from __future__ import annotations
+
+from datetime import datetime, timezone
 from decimal import Decimal
+from enum import Enum
 
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Enum,
     ForeignKey,
     Index,
     Integer,
@@ -21,14 +22,20 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def _now() -> datetime:
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
     pass
 
 
-class BlogSessionStatus(str, enum.Enum):
+class StrEnum(str, Enum):
+    """Base for string-valued enums — safe for DB VARCHAR storage."""
+
+    pass
+
+
+class BlogSessionStatus(StrEnum):
     QUEUED = "QUEUED"
     PROCESSING = "PROCESSING"
     AWAITING_OUTLINE_REVIEW = "AWAITING_OUTLINE_REVIEW"
@@ -38,7 +45,7 @@ class BlogSessionStatus(str, enum.Enum):
     CANCELLED = "CANCELLED"
 
 
-class BudgetEntryType(str, enum.Enum):
+class BudgetEntryType(StrEnum):
     GRANT = "GRANT"
     RESERVE = "RESERVE"
     COMMIT = "COMMIT"
@@ -46,16 +53,26 @@ class BudgetEntryType(str, enum.Enum):
     ADJUSTMENT = "ADJUSTMENT"
 
 
-class AgentRunStatus(str, enum.Enum):
+class AgentRunStatus(StrEnum):
     STARTED = "STARTED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
 
-class ReservationStatus(str, enum.Enum):
+class ReservationStatus(StrEnum):
     ACTIVE = "ACTIVE"
     COMMITTED = "COMMITTED"
     RELEASED = "RELEASED"
+
+
+class LeaseEventType:
+    """Lease event type constants for audit trail values — not persisted as enum."""
+
+    ACQUIRED = "ACQUIRED"
+    RELEASED = "RELEASED"
+    EXPIRED = "EXPIRED"
+    HEARTBEAT_FAILED = "HEARTBEAT_FAILED"
+    REAPED = "REAPED"
 
 
 class AuthUser(Base):
@@ -78,11 +95,7 @@ class BlogSession(Base):
     topic: Mapped[str] = mapped_column(String(500), nullable=False)
     audience: Mapped[str] = mapped_column(String(255), nullable=False, default="general readers")
     tone: Mapped[str] = mapped_column(String(100), nullable=False, default="professional")
-    status: Mapped[str] = mapped_column(
-        Enum(BlogSessionStatus, values_callable=lambda e: [x.value for x in e], native_enum=False),
-        nullable=False,
-        default=BlogSessionStatus.QUEUED,
-    )
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="QUEUED")
     current_stage: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     adk_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -125,14 +138,10 @@ class AgentRun(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     blog_session_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("blog_sessions.id"), nullable=False
+        Integer, ForeignKey("blog_sessions.id", ondelete="CASCADE"), nullable=False
     )
-    stage_name: Mapped[str] = mapped_column("stage", String(100), nullable=False)
-    status: Mapped[str] = mapped_column(
-        Enum(AgentRunStatus, values_callable=lambda e: [x.value for x in e], native_enum=False),
-        nullable=False,
-        default=AgentRunStatus.STARTED,
-    )
+    stage_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="STARTED")
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -155,10 +164,7 @@ class BudgetLedger(Base):
     agent_run_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("agent_runs.id"), nullable=True
     )
-    entry_type: Mapped[str] = mapped_column(
-        Enum(BudgetEntryType, values_callable=lambda e: [x.value for x in e], native_enum=False),
-        nullable=False,
-    )
+    entry_type: Mapped[str] = mapped_column(String(50), nullable=False)
     tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     amount_usd: Mapped[Decimal] = mapped_column(
         Numeric(12, 8), nullable=False, default=Decimal("0")
@@ -222,7 +228,7 @@ class SessionReservation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     blog_session_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("blog_sessions.id"), nullable=False, unique=True
+        Integer, ForeignKey("blog_sessions.id", ondelete="CASCADE"), nullable=False, unique=True
     )
     reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False)
     reserved_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -239,7 +245,7 @@ class ResearchSource(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     blog_session_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("blog_sessions.id"), nullable=False
+        Integer, ForeignKey("blog_sessions.id", ondelete="CASCADE"), nullable=False
     )
     url: Mapped[str | None] = mapped_column(Text, nullable=True)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -247,16 +253,6 @@ class ResearchSource(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     __table_args__ = (Index("ix_research_sources_session", "blog_session_id"),)
-
-
-class LeaseEventType:
-    """Lease event types for audit trail."""
-
-    ACQUIRED = "ACQUIRED"
-    RELEASED = "RELEASED"
-    EXPIRED = "EXPIRED"
-    HEARTBEAT_FAILED = "HEARTBEAT_FAILED"
-    REAPED = "REAPED"
 
 
 class SessionLease(Base):

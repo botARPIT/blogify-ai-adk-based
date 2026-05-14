@@ -1,8 +1,8 @@
-"""001_baseline — single source of truth, generated from ORM models.
+"""initial_schema
 
-Revision ID: 001_baseline
+Revision ID: b0d04a975349
 Revises:
-Create Date: 2026-05-14
+Create Date: 2026-05-14 16:09:49.101602
 
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "001_baseline"
+revision: str = "b0d04a975349"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -41,21 +41,7 @@ def upgrade() -> None:
         sa.Column("topic", sa.String(length=500), nullable=False),
         sa.Column("audience", sa.String(length=255), nullable=False),
         sa.Column("tone", sa.String(length=100), nullable=False),
-        sa.Column(
-            "status",
-            sa.Enum(
-                "QUEUED",
-                "PROCESSING",
-                "AWAITING_OUTLINE_REVIEW",
-                "AWAITING_FINAL_REVIEW",
-                "COMPLETED",
-                "FAILED",
-                "CANCELLED",
-                name="blogsessionstatus",
-                native_enum=False,
-            ),
-            nullable=False,
-        ),
+        sa.Column("status", sa.String(length=50), nullable=False),
         sa.Column("current_stage", sa.String(length=50), nullable=True),
         sa.Column("adk_session_id", sa.String(length=255), nullable=True),
         sa.Column("invocation_id", sa.String(length=255), nullable=True),
@@ -73,10 +59,7 @@ def upgrade() -> None:
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("failed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("failure_reason", sa.Text(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["user_id"],
-            ["auth_users.id"],
-        ),
+        sa.ForeignKeyConstraint(["user_id"], ["auth_users.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("user_id", "idempotency_key", name="uq_blog_sessions_idempotency"),
     )
@@ -92,10 +75,7 @@ def upgrade() -> None:
         sa.Column("total_spent_usd", sa.Numeric(precision=12, scale=8), nullable=False),
         sa.Column("last_updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["user_id"],
-            ["auth_users.id"],
-        ),
+        sa.ForeignKeyConstraint(["user_id"], ["auth_users.id"]),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("user_id"),
     )
@@ -113,10 +93,7 @@ def upgrade() -> None:
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["blog_session_id"],
-            ["blog_sessions.id"],
-        ),
+        sa.ForeignKeyConstraint(["blog_session_id"], ["blog_sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_agent_runs_session", "agent_runs", ["blog_session_id"], unique=False)
@@ -128,10 +105,7 @@ def upgrade() -> None:
         sa.Column("title", sa.Text(), nullable=True),
         sa.Column("snippet", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["blog_session_id"],
-            ["blog_sessions.id"],
-        ),
+        sa.ForeignKeyConstraint(["blog_session_id"], ["blog_sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
@@ -148,10 +122,7 @@ def upgrade() -> None:
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("release_reason", sa.String(length=50), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["blog_session_id"],
-            ["blog_sessions.id"],
-        ),
+        sa.ForeignKeyConstraint(["blog_session_id"], ["blog_sessions.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_session_leases_ended", "session_leases", ["ended_at"], unique=False)
@@ -168,11 +139,9 @@ def upgrade() -> None:
         sa.Column("reserved_tokens", sa.Integer(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("released_at", sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["blog_session_id"],
-            ["blog_sessions.id"],
-        ),
+        sa.ForeignKeyConstraint(["blog_session_id"], ["blog_sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("blog_session_id"),
     )
     op.create_index(
         "ix_session_reservations_session", "session_reservations", ["blog_session_id"], unique=False
@@ -183,35 +152,14 @@ def upgrade() -> None:
         sa.Column("user_id", sa.Integer(), nullable=False),
         sa.Column("blog_session_id", sa.Integer(), nullable=True),
         sa.Column("agent_run_id", sa.Integer(), nullable=True),
-        sa.Column(
-            "entry_type",
-            sa.Enum(
-                "GRANT",
-                "RESERVE",
-                "COMMIT",
-                "RELEASE",
-                "ADJUSTMENT",
-                name="budgetentrytype",
-                native_enum=False,
-            ),
-            nullable=False,
-        ),
+        sa.Column("entry_type", sa.String(length=50), nullable=False),
         sa.Column("tokens", sa.Integer(), nullable=False),
         sa.Column("amount_usd", sa.Numeric(precision=12, scale=8), nullable=False),
         sa.Column("note", sa.String(length=255), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["agent_run_id"],
-            ["agent_runs.id"],
-        ),
-        sa.ForeignKeyConstraint(
-            ["blog_session_id"],
-            ["blog_sessions.id"],
-        ),
-        sa.ForeignKeyConstraint(
-            ["user_id"],
-            ["auth_users.id"],
-        ),
+        sa.ForeignKeyConstraint(["agent_run_id"], ["agent_runs.id"]),
+        sa.ForeignKeyConstraint(["blog_session_id"], ["blog_sessions.id"]),
+        sa.ForeignKeyConstraint(["user_id"], ["auth_users.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_budget_ledger_session", "budget_ledger", ["blog_session_id"], unique=False)
@@ -225,7 +173,6 @@ def downgrade() -> None:
     op.drop_index("ix_budget_ledger_user_id", table_name="budget_ledger")
     op.drop_index("ix_budget_ledger_session", table_name="budget_ledger")
     op.drop_table("budget_ledger")
-    op.drop_index("ix_session_reservations_user", table_name="session_reservations")
     op.drop_index("ix_session_reservations_session", table_name="session_reservations")
     op.drop_table("session_reservations")
     op.drop_index("ix_session_leases_started", table_name="session_leases")
@@ -233,7 +180,6 @@ def downgrade() -> None:
     op.drop_index("ix_session_leases_owner", table_name="session_leases")
     op.drop_index("ix_session_leases_ended", table_name="session_leases")
     op.drop_table("session_leases")
-    op.drop_index("ix_research_sources_user", table_name="research_sources")
     op.drop_index("ix_research_sources_session", table_name="research_sources")
     op.drop_table("research_sources")
     op.drop_index("ix_agent_runs_session", table_name="agent_runs")

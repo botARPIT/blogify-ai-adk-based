@@ -1,6 +1,6 @@
 """AuthService — user registration, login, and JWT issuance."""
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import bcrypt
@@ -74,13 +74,13 @@ class AuthService:
         if not bcrypt.checkpw(password.encode(), user.password_hash.encode()):
             raise ValueError("Invalid credentials")
 
-        user.last_login_at = datetime.now(UTC)
+        user.last_login_at = datetime.now(timezone.utc)
         await self._user_repo.session.flush()
 
         token = jwt.encode(
             {
                 "sub": str(user.id),
-                "exp": datetime.now(UTC).timestamp() + 86400,
+                "exp": datetime.now(timezone.utc).timestamp() + 86400,
                 "aud": self._local_auth.audience,
                 "iss": self._local_auth.issuer,
             },
