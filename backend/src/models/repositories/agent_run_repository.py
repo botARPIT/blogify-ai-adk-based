@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -41,7 +41,7 @@ class AgentRunRepository:
         result = await self._session.execute(
             select(AgentRun.stage_name).where(
                 AgentRun.blog_session_id == blog_session_id,
-                AgentRun.status == AgentRunStatus.COMPLETED.value,
+                AgentRun.status == AgentRunStatus.COMPLETED,
             )
         )
         return {row[0] for row in result.all()}
@@ -53,7 +53,7 @@ class AgentRunRepository:
             .where(
                 AgentRun.blog_session_id == blog_session_id,
                 AgentRun.stage_name == stage_name,
-                AgentRun.status == AgentRunStatus.COMPLETED.value,
+                AgentRun.status == AgentRunStatus.COMPLETED,
             )
             .limit(1)
         )
@@ -109,7 +109,7 @@ class AgentRunRepository:
             run.status = status
             run.latency_ms = latency_ms
             run.output_snapshot = output_snapshot
-            run.completed_at = datetime.now(UTC)
+            run.completed_at = datetime.now(timezone.utc)
             await self._session.flush()
 
     async def get_duration_ms(self, run_id: int) -> int | None:

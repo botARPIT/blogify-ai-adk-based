@@ -31,7 +31,7 @@ class BudgetRepository:
             user_id=user_id,
             blog_session_id=blog_session_id,
             agent_run_id=agent_run_id,
-            entry_type=entry_type.value,
+            entry_type=entry_type,
             tokens=tokens,
             amount_usd=amount_usd,
             note=note,
@@ -52,7 +52,7 @@ class BudgetRepository:
         result = await self._session.execute(
             select(func.coalesce(func.sum(BudgetLedger.amount_usd), 0)).where(
                 BudgetLedger.blog_session_id == blog_session_id,
-                BudgetLedger.entry_type == BudgetEntryType.RESERVE.value,
+                BudgetLedger.entry_type == BudgetEntryType.RESERVE,
             )
         )
         return result.scalar() or Decimal("0")
@@ -61,7 +61,7 @@ class BudgetRepository:
         result = await self._session.execute(
             select(func.coalesce(func.sum(BudgetLedger.amount_usd), 0)).where(
                 BudgetLedger.blog_session_id == blog_session_id,
-                BudgetLedger.entry_type == BudgetEntryType.COMMIT.value,
+                BudgetLedger.entry_type == BudgetEntryType.COMMIT,
             )
         )
         return result.scalar() or Decimal("0")

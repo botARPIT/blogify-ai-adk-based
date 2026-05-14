@@ -1,6 +1,6 @@
-"""001_baseline — single source of truth, generated from ORM models.
+"""initial_schema — single source of truth, generated from ORM models.
 
-Revision ID: 001_baseline
+Revision ID: b0d04a975349
 Revises:
 Create Date: 2026-05-14
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "001_baseline"
+revision: str = "b0d04a975349"
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
