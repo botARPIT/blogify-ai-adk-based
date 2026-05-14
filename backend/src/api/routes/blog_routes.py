@@ -203,22 +203,26 @@ async def get_budget(
     current_user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
+    from src.config.budget_config import MODEL_PRICING
+
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
-    budget_repo = BudgetRepository(session)
     account_repo = BudgetAccountRepository(session)
-    reservation_repo = SessionReservationRepository(session)
-    budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
 
-    result = await budget_service.get_balance_snapshot(user_id)
+    snapshot = await account_repo.get_snapshot(user_id)
+
+    # Derive token equivalent from available USD at Gemini Flash rate
+    price_per_token = MODEL_PRICING["gemini-2.5-flash"] / 1000  # USD per token
+    available_usd = float(snapshot["available_usd"])
+    balance_tokens = int(available_usd / price_per_token) if price_per_token > 0 else 0
 
     active_count = await session_repo.count_active_for_user(user_id)
     daily_limit = 1
     daily_limit_left = max(0, daily_limit - active_count)
 
     return BudgetResponse(
-        balance_usd=result["balance_usd"],
-        balance_tokens=result["balance_tokens"],
+        balance_usd=float(snapshot["balance_usd"]),
+        balance_tokens=balance_tokens,
         daily_blog_limit_left=daily_limit_left,
     )
 
