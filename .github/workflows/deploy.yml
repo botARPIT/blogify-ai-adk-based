@@ -131,22 +131,41 @@ jobs:
             echo "==> [4/6] Pulling new image..."
             docker pull "${IMAGE}"
 
-            # ── Step 4.5: Align alembic_version with consolidated baseline ──
-            # After migration consolidation, the DB schema already matches
-            # the single baseline revision. Stamp directly to head so alembic
-            # knows the schema is current — no DDL is executed.
-            # On a fresh DB, upgrade head (Step 5) creates everything from scratch.
-            echo "==> [4.5/6] Stamping alembic version to head..."
-            docker run --rm \
+            # ── Step 4.5: Bootstrap alembic on a brand-new DB only ───────────
+            # On a fresh DB (no alembic_version row), stamp the consolidated
+            # baseline so Alembic knows the schema is current without re-running
+            # the baseline DDL. On an existing DB (row already present), skip
+            # the stamp so that incremental migrations can actually execute.
+            echo "==> [4.5/6] Checking alembic version state..."
+            ALEMBIC_COUNT=$(docker run --rm \
               --env-file "${SECRETS_DIR}/.env" \
               --network blogifyai_backend \
               "${IMAGE}" \
-              alembic stamp head
-            echo "  alembic_version set to head."
+              sh -c 'python -c "
+import os, psycopg2
+conn = psycopg2.connect(os.environ[\"DATABASE_URL\"].replace(\"+asyncpg\",\"\").replace(\"postgresql+psycopg2\",\"postgresql\"))
+cur = conn.cursor()
+try:
+    cur.execute(\"SELECT count(*) FROM alembic_version\")
+    print(cur.fetchone()[0])
+except Exception:
+    print(0)
+conn.close()
+"' 2>/dev/null || echo "0")
+            if [ "${ALEMBIC_COUNT:-0}" = "0" ]; then
+              echo "  Fresh DB detected — stamping baseline b0d04a975349..."
+              docker run --rm \
+                --env-file "${SECRETS_DIR}/.env" \
+                --network blogifyai_backend \
+                "${IMAGE}" \
+                alembic stamp b0d04a975349
+            else
+              echo "  Existing DB at version ${ALEMBIC_COUNT} row(s) — skipping stamp."
+            fi
 
-            # ── Step 5: Run Alembic migrations (no-op if already at head) ─────
-            # Idempotent: if stamp set us to head, this detects nothing to do.
-            # For future migrations added after the baseline, this applies them.
+            # ── Step 5: Run Alembic migrations ───────────────────────────────
+            # On a fresh DB: upgrades from baseline to head (applies all incremental revisions).
+            # On an existing DB: applies only new migrations since the stored version.
             echo "==> [5/6] Running Alembic migrations..."
             docker run --rm \
               --env-file "${SECRETS_DIR}/.env" \
