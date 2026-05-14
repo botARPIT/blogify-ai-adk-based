@@ -131,6 +131,18 @@ jobs:
             echo "==> [4/6] Pulling new image..."
             docker pull "${IMAGE}"
 
+            # ── Step 4.5: Stamp alembic_version to base ───────────────────────
+            # Clears any stale revision (e.g. 107 from old migration chain) so
+            # upgrade head always runs from a known-clean state.
+            # On a fresh DB with no alembic_version table this is a no-op.
+            echo "==> [4.5/6] Stamping alembic version to base..."
+            docker run --rm \
+              --env-file "${SECRETS_DIR}/.env" \
+              --network blogifyai_backend \
+              "${IMAGE}" \
+              alembic stamp base
+            echo "  alembic_version cleared."
+
             # ── Step 5: Run Alembic migrations ────────────────────────────────
             echo "==> [5/6] Running Alembic migrations..."
             docker run --rm \
