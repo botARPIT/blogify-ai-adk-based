@@ -131,31 +131,7 @@ jobs:
             echo "==> [4/6] Pulling new image..."
             docker pull "${IMAGE}"
 
-            # ── Step 4.5: Bootstrap alembic on a brand-new DB only ───────────
-            # On a fresh DB (empty alembic_version), stamp the consolidated
-            # baseline so Alembic knows the schema is current without re-running
-            # the baseline DDL. On an existing DB, skip the stamp so that
-            # incremental migrations (e.g. repair migration) actually execute.
-            echo "==> [4.5/6] Checking alembic version state..."
-            ALEMBIC_CURRENT=$(docker run --rm \
-              --env-file "${SECRETS_DIR}/.env" \
-              --network blogifyai_backend \
-              "${IMAGE}" \
-              alembic current 2>/dev/null || true)
-            if [ -z "${ALEMBIC_CURRENT}" ]; then
-              echo "  Fresh DB detected — stamping baseline b0d04a975349..."
-              docker run --rm \
-                --env-file "${SECRETS_DIR}/.env" \
-                --network blogifyai_backend \
-                "${IMAGE}" \
-                alembic stamp b0d04a975349
-            else
-              echo "  Existing DB already tracked: ${ALEMBIC_CURRENT} — skipping stamp."
-            fi
-
             # ── Step 5: Run Alembic migrations ───────────────────────────────
-            # On a fresh DB: upgrades from baseline to head (applies all incremental revisions).
-            # On an existing DB: applies only new migrations since the stored version.
             echo "==> [5/6] Running Alembic migrations..."
             docker run --rm \
               --env-file "${SECRETS_DIR}/.env" \
