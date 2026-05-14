@@ -74,11 +74,7 @@ class AgentRunRepository:
         self,
         blog_session_id: int,
         stage_name: str,
-        agent_name: str,
-        model_name: str,
         status: str = "STARTED",
-        prompt_tokens: int = 0,
-        completion_tokens: int = 0,
         total_tokens: int = 0,
         cost_usd: float = 0.0,
         latency_ms: int | None = None,
@@ -87,11 +83,7 @@ class AgentRunRepository:
         run = AgentRun(
             blog_session_id=blog_session_id,
             stage_name=stage_name,
-            agent_name=agent_name,
-            model_name=model_name,
             status=status,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             cost_usd=Decimal(str(cost_usd)),
             latency_ms=latency_ms,
@@ -104,8 +96,6 @@ class AgentRunRepository:
     async def update(
         self,
         run_id: int,
-        prompt_tokens: int,
-        completion_tokens: int,
         total_tokens: int,
         cost_usd: float,
         status: str,
@@ -114,8 +104,6 @@ class AgentRunRepository:
     ) -> None:
         run = await self.get_by_id(run_id)
         if run:
-            run.prompt_tokens = prompt_tokens
-            run.completion_tokens = completion_tokens
             run.total_tokens = total_tokens
             run.cost_usd = Decimal(str(cost_usd))
             run.status = status
@@ -148,11 +136,7 @@ class AgentRunRepository:
                 {
                     "run_id": run.id,
                     "stage_name": run.stage_name,
-                    "agent_name": run.agent_name,
-                    "model_name": run.model_name,
                     "status": run.status,
-                    "prompt_tokens": run.prompt_tokens,
-                    "completion_tokens": run.completion_tokens,
                     "total_tokens": run.total_tokens,
                     "cost_usd": float(run.cost_usd),
                     "latency_ms": run.latency_ms or duration_ms,

@@ -166,12 +166,8 @@ class AgentRunResponse(BaseModel):
 
 class AgentRunMetrics(BaseModel):
     run_id: int
-    stage_name: str
-    agent_name: str
-    model_name: str
+    stage: str
     status: str
-    prompt_tokens: int
-    completion_tokens: int
     total_tokens: int
     cost_usd: float
     latency_ms: int | None = None

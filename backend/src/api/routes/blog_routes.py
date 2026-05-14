@@ -330,12 +330,8 @@ async def get_session_detail(
         agent_runs=[
             AgentRunMetrics(
                 run_id=ar.id,
-                stage_name=ar.stage_name,
-                agent_name=ar.agent_name,
-                model_name=ar.model_name,
+                stage=ar.stage_name,
                 status=ar.status.value if hasattr(ar.status, "value") else ar.status,
-                prompt_tokens=ar.prompt_tokens,
-                completion_tokens=ar.completion_tokens,
                 total_tokens=ar.total_tokens,
                 cost_usd=float(ar.cost_usd),
                 latency_ms=ar.latency_ms,
