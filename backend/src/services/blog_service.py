@@ -1,7 +1,7 @@
 """BlogService — owns blog session lifecycle from API side."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from src.core.task_queue import BlogJob, TaskQueue
 from src.models.orm_models import BlogSession, BlogSessionStatus
@@ -145,7 +145,7 @@ class BlogService:
 
         if approved:
             session.status = BlogSessionStatus.COMPLETED.value
-            session.completed_at = datetime.now(UTC)
+            session.completed_at = datetime.now(timezone.utc)
         else:
             session.status = BlogSessionStatus.FAILED.value
             session.failure_reason = feedback_text or "Rejected by user"

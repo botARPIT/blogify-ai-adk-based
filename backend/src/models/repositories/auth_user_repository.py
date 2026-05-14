@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,4 +52,4 @@ class AuthUserRepository:
     async def touch_last_login(self, user_id: int) -> None:
         user = await self.get_by_id(user_id)
         if user is not None:
-            user.last_login_at = datetime.now(UTC)
+            user.last_login_at = datetime.now(timezone.utc)

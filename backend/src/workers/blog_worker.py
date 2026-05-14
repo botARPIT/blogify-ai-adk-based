@@ -10,7 +10,7 @@ Do NOT instantiate Reaper inside this worker — 3 worker replicas would create
 import asyncio
 import os
 import socket
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
@@ -86,7 +86,7 @@ class BlogWorker:
         redis = await get_redis_client()
         key = f"blogify:worker:{WORKER_ID}"
         while self._running:
-            await redis.set(key, datetime.now(UTC).isoformat(), ex=60)
+            await redis.set(key, datetime.now(timezone.utc).isoformat(), ex=60)
             await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 

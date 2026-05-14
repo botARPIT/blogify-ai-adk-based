@@ -1,6 +1,6 @@
 """PipelineExecutor — bridges worker to ADK pipeline."""
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -152,7 +152,7 @@ class PipelineExecutor:
                 continue
 
             existing = await self._run_repo.get_by_session_and_stage(job.session_id, cost.stage)
-            if existing and existing.status == AgentRunStatus.COMPLETED.value:
+            if existing and existing.status == AgentRunStatus.COMPLETED:
                 continue
 
             output_snapshot: dict | None = {"stage": cost.stage, "costs": cost.__dict__.copy()}
@@ -161,13 +161,13 @@ class PipelineExecutor:
                 latency_ms = None
                 if existing.started_at:
                     latency_ms = int(
-                        (datetime.now(UTC) - existing.started_at).total_seconds() * 1000
+                        (datetime.now(timezone.utc) - existing.started_at).total_seconds() * 1000
                     )
                 await self._run_repo.update(
                     existing.id,
                     total_tokens=cost.total_tokens,
                     cost_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
-                    status=AgentRunStatus.COMPLETED.value,
+                    status=AgentRunStatus.COMPLETED,
                     latency_ms=latency_ms,
                     output_snapshot=output_snapshot,
                 )
@@ -176,7 +176,7 @@ class PipelineExecutor:
                 agent_run = await self._run_repo.create(
                     blog_session_id=job.session_id,
                     stage_name=cost.stage,
-                    status=AgentRunStatus.COMPLETED.value,
+                    status=AgentRunStatus.COMPLETED,
                     total_tokens=cost.total_tokens,
                     cost_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
                     output_snapshot=output_snapshot,

@@ -62,7 +62,9 @@ class Reaper:
                         continue
 
                     if new_reap_count > MAX_REAP_COUNT:
-                        await session_repo.mark_failed(lease.blog_session_id, "max reap count exceeded")
+                        await session_repo.mark_failed(
+                            lease.blog_session_id, "max reap count exceeded"
+                        )
                         logger.warning(
                             "session_marked_failed",
                             session_id=lease.blog_session_id,
