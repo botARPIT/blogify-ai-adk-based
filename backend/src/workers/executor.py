@@ -143,7 +143,6 @@ class PipelineExecutor:
             sources_list = research_data["sources"]
             if sources_list:
                 await self._sources_repo.create_many(
-                    user_id=job.user_id,
                     blog_session_id=job.session_id,
                     sources=sources_list,
                 )
@@ -166,8 +165,6 @@ class PipelineExecutor:
                     )
                 await self._run_repo.update(
                     existing.id,
-                    prompt_tokens=cost.prompt_tokens,
-                    completion_tokens=cost.completion_tokens,
                     total_tokens=cost.total_tokens,
                     cost_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
                     status=AgentRunStatus.COMPLETED.value,
@@ -179,11 +176,7 @@ class PipelineExecutor:
                 agent_run = await self._run_repo.create(
                     blog_session_id=job.session_id,
                     stage_name=cost.stage,
-                    agent_name=cost.stage,
-                    model_name=cost.model,
                     status=AgentRunStatus.COMPLETED.value,
-                    prompt_tokens=cost.prompt_tokens,
-                    completion_tokens=cost.completion_tokens,
                     total_tokens=cost.total_tokens,
                     cost_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
                     output_snapshot=output_snapshot,

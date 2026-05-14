@@ -15,22 +15,16 @@ class ResearchSourcesRepository:
 
     async def create(
         self,
-        user_id: int,
         blog_session_id: int,
-        title: str,
-        url: str,
-        content: str | None = None,
-        score: float = 0.0,
-        topic: str | None = None,
+        url: str | None = None,
+        title: str | None = None,
+        snippet: str | None = None,
     ) -> ResearchSource:
         source = ResearchSource(
-            user_id=user_id,
             blog_session_id=blog_session_id,
-            title=title,
             url=url,
-            content=content,
-            score=score,
-            topic=topic,
+            title=title,
+            snippet=snippet,
         )
         self.session.add(source)
         await self.session.flush()
@@ -38,20 +32,16 @@ class ResearchSourcesRepository:
 
     async def create_many(
         self,
-        user_id: int,
         blog_session_id: int,
         sources: list[dict],
     ) -> list[ResearchSource]:
         created = []
         for src in sources:
             source = ResearchSource(
-                user_id=user_id,
                 blog_session_id=blog_session_id,
-                title=src.get("title", ""),
-                url=src.get("url", ""),
-                content=src.get("content"),
-                score=src.get("score", 0.0),
-                topic=src.get("topic"),
+                url=src.get("url"),
+                title=src.get("title"),
+                snippet=src.get("snippet") or src.get("content"),
             )
             self.session.add(source)
             created.append(source)
@@ -60,9 +50,7 @@ class ResearchSourcesRepository:
 
     async def get_for_session(self, blog_session_id: int) -> list[ResearchSource]:
         result = await self.session.execute(
-            select(ResearchSource)
-            .where(ResearchSource.blog_session_id == blog_session_id)
-            .order_by(ResearchSource.score.desc())
+            select(ResearchSource).where(ResearchSource.blog_session_id == blog_session_id)
         )
         return list(result.scalars().all())
 

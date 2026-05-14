@@ -52,6 +52,12 @@ class AgentRunStatus(str, enum.Enum):
     FAILED = "FAILED"
 
 
+class ReservationStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    COMMITTED = "COMMITTED"
+    RELEASED = "RELEASED"
+
+
 class AuthUser(Base):
     __tablename__ = "auth_users"
 
@@ -121,16 +127,12 @@ class AgentRun(Base):
     blog_session_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("blog_sessions.id"), nullable=False
     )
-    stage_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    agent_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    model_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    stage_name: Mapped[str] = mapped_column("stage", String(100), nullable=False)
     status: Mapped[str] = mapped_column(
         Enum(AgentRunStatus, values_callable=lambda e: [x.value for x in e], native_enum=False),
         nullable=False,
         default=AgentRunStatus.STARTED,
     )
-    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False, default=Decimal("0"))
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -139,10 +141,7 @@ class AgentRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (
-        UniqueConstraint("blog_session_id", "stage_name", name="uq_agent_runs_session_stage"),
-        Index("ix_agent_runs_session", "blog_session_id"),
-    )
+    __table_args__ = (Index("ix_agent_runs_session", "blog_session_id"),)
 
 
 class BudgetLedger(Base):
@@ -177,10 +176,10 @@ class BudgetAccount(Base):
     """Single source-of-truth balance per user.
 
     One row per user. Updated atomically at every terminal budget event:
-      GRANT   → balance_usd += amount, total_granted_usd += amount
-      RESERVE → reserved_usd += amount  (via SessionReservation; row not touched here)
-      COMMIT  → reserved_usd -= reserved_amount; balance_usd -= actual_usd; total_spent_usd += actual_usd
-      RELEASE → reserved_usd -= excess_usd  (balance_usd unchanged for excess release)
+      GRANT   -> balance_usd += amount, total_granted_usd += amount
+      RESERVE -> reserved_usd += amount  (via SessionReservation; row not touched here)
+      COMMIT  -> reserved_usd -= reserved_amount; balance_usd -= actual_usd; total_spent_usd += actual_usd
+      RELEASE -> reserved_usd -= excess_usd  (balance_usd unchanged for excess release)
 
     available_usd = balance_usd - reserved_usd
     """
@@ -211,12 +210,6 @@ class BudgetAccount(Base):
     __table_args__ = (Index("ix_budget_accounts_user_id", "user_id"),)
 
 
-class ReservationStatus(str, enum.Enum):
-    ACTIVE = "ACTIVE"
-    COMMITTED = "COMMITTED"
-    RELEASED = "RELEASED"
-
-
 class SessionReservation(Base):
     """Per-session budget reservation record.
 
@@ -228,30 +221,15 @@ class SessionReservation(Base):
     __tablename__ = "session_reservations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False)
     blog_session_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("blog_sessions.id"), nullable=False, unique=True
     )
     reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False)
     reserved_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    actual_usd: Mapped[Decimal] = mapped_column(
-        Numeric(12, 8), nullable=False, default=Decimal("0")
-    )
-    actual_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    status: Mapped[str] = mapped_column(
-        Enum(ReservationStatus, values_callable=lambda e: [x.value for x in e], native_enum=False),
-        nullable=False,
-        default=ReservationStatus.ACTIVE,
-    )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_now, onupdate=_now
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (
-        Index("ix_session_reservations_user", "user_id"),
-        Index("ix_session_reservations_session", "blog_session_id"),
-    )
+    __table_args__ = (Index("ix_session_reservations_session", "blog_session_id"),)
 
 
 class ResearchSource(Base):
@@ -260,21 +238,15 @@ class ResearchSource(Base):
     __tablename__ = "research_sources"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("auth_users.id"), nullable=False)
     blog_session_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("blog_sessions.id"), nullable=False
     )
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    url: Mapped[str] = mapped_column(String(2048), nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=True)
-    score: Mapped[float] = mapped_column(Numeric(5, 4), nullable=False, default=0.0)
-    topic: Mapped[str] = mapped_column(String(500), nullable=True)
-    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
-    __table_args__ = (
-        Index("ix_research_sources_session", "blog_session_id"),
-        Index("ix_research_sources_user", "user_id"),
-    )
+    __table_args__ = (Index("ix_research_sources_session", "blog_session_id"),)
 
 
 class LeaseEventType:
