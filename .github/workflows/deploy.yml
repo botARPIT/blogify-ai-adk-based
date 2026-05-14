@@ -131,19 +131,22 @@ jobs:
             echo "==> [4/6] Pulling new image..."
             docker pull "${IMAGE}"
 
-            # ── Step 4.5: Stamp alembic_version to base ───────────────────────
-            # Clears any stale revision (e.g. 107 from old migration chain) so
-            # upgrade head always runs from a known-clean state.
-            # On a fresh DB with no alembic_version table this is a no-op.
-            echo "==> [4.5/6] Stamping alembic version to base..."
+            # ── Step 4.5: Align alembic_version with consolidated baseline ──
+            # After migration consolidation, the DB schema already matches
+            # the single baseline revision. Stamp directly to head so alembic
+            # knows the schema is current — no DDL is executed.
+            # On a fresh DB, upgrade head (Step 5) creates everything from scratch.
+            echo "==> [4.5/6] Stamping alembic version to head..."
             docker run --rm \
               --env-file "${SECRETS_DIR}/.env" \
               --network blogifyai_backend \
               "${IMAGE}" \
-              alembic stamp base
-            echo "  alembic_version cleared."
+              alembic stamp head
+            echo "  alembic_version set to head."
 
-            # ── Step 5: Run Alembic migrations ────────────────────────────────
+            # ── Step 5: Run Alembic migrations (no-op if already at head) ─────
+            # Idempotent: if stamp set us to head, this detects nothing to do.
+            # For future migrations added after the baseline, this applies them.
             echo "==> [5/6] Running Alembic migrations..."
             docker run --rm \
               --env-file "${SECRETS_DIR}/.env" \
