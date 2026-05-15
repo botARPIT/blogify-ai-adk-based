@@ -1,5 +1,6 @@
 """SessionReservationRepository — per-session reservation tracking."""
 
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -44,5 +45,6 @@ class SessionReservationRepository:
     async def mark_released(self, blog_session_id: int) -> SessionReservation | None:
         reservation = await self.get_by_session(blog_session_id)
         if reservation:
+            reservation.released_at = datetime.now(timezone.utc)
             await self._session.flush()
         return reservation
