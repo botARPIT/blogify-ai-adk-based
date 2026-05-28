@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 MAX_REAP_COUNT = 3
 REAP_INTERVAL_SECONDS = 60
-STALE_THRESHOLD_MINUTES = 10
+STALE_THRESHOLD_MINUTES = 2
 
 
 class Reaper:
