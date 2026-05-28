@@ -113,6 +113,7 @@ class SessionLeaseRepository:
             .where(
                 SessionLease.ended_at.is_(None),
                 SessionLease.lease_expires_at < threshold,
+                BlogSession.status == BlogSessionStatus.PROCESSING
             )
             .order_by(SessionLease.blog_session_id)
         )
