@@ -117,10 +117,14 @@ class BudgetService:
         reserved_usd = reservation.reserved_usd
         reserved_tokens = reservation.reserved_tokens
 
+        # get actual spends from blog_sessions
+        session = await self._session_repo.get_by_id(blog_session_id)
+        actual_usd = session.budget_spent_usd if session else Decimal("0")
+        actual_tokens = session.budget_spent_tokens if session else 0
         await self._account_repo.apply_commit(
             user_id=user_id,
             reserved_usd=reserved_usd,
-            actual_usd=Decimal("0"),
+            actual_usd=actual_usd,
         )
 
         await self._reservation_repo.mark_committed(blog_session_id)
@@ -130,8 +134,8 @@ class BudgetService:
             blog_session_id=blog_session_id,
             agent_run_id=None,
             entry_type=BudgetEntryType.RELEASE,
-            tokens=reserved_tokens,
-            amount_usd=reserved_usd,
+            tokens=actual_tokens,
+            amount_usd=actual_usd,
             note="Excess budget released after successful generation",
         )
 
