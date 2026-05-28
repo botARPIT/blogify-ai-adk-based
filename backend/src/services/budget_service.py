@@ -115,7 +115,6 @@ class BudgetService:
             return
 
         reserved_usd = reservation.reserved_usd
-        reserved_tokens = reservation.reserved_tokens
 
         # get actual spends from blog_sessions
         session = await self._session_repo.get_by_id(blog_session_id)
