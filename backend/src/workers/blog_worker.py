@@ -73,6 +73,7 @@ class BlogWorker:
                 finally:
                     heartbeat_task.cancel()
                     await lease_repo.release_lease(job.session_id, WORKER_ID)
+                    await session.commit()
 
     async def _job_heartbeat(self, session_id: int, lease_repo: SessionLeaseRepository) -> None:
         while True:
