@@ -10,10 +10,12 @@ from src.models.orm_models import BlogSession, BlogSessionStatus
 
 class BlogSessionRepository:
     def __init__(self, session: AsyncSession) -> None:
+        print("BlogSessionRepository initialized!, this call is from blog session repository", flush=True)
         self._session = session
 
     @property
     def session(self) -> AsyncSession:
+        print("Getting session!, this call is from blog session repository", flush=True)
         return self._session
 
     async def create(
@@ -26,6 +28,7 @@ class BlogSessionRepository:
         adk_session_id: str,
         idempotency_key: str | None = None,
     ) -> BlogSession:
+        print("Creating blog session!, this call is from blog session repository", flush=True)
         blog_session = BlogSession(
             user_id=user_id,
             topic=topic,
@@ -40,12 +43,14 @@ class BlogSessionRepository:
         return blog_session
 
     async def get_by_id(self, session_id: int) -> BlogSession | None:
+        print("Getting blog session by id!, this call is from blog session repository", flush=True)
         result = await self._session.execute(
             select(BlogSession).where(BlogSession.id == session_id)
         )
         return result.scalar_one_or_none()
 
     async def get_by_idempotency_key(self, user_id: int, key: str) -> BlogSession | None:
+        print("Getting blog session by idempotency key!, this call is from blog session repository", flush=True)
         result = await self._session.execute(
             select(BlogSession).where(
                 BlogSession.user_id == user_id,
@@ -55,6 +60,7 @@ class BlogSessionRepository:
         return result.scalar_one_or_none()
 
     async def get_for_user(self, user_id: int, limit: int = 20) -> list[BlogSession]:
+        print("Getting blog sessions for user!, this call is from blog session repository", flush=True)
         result = await self._session.execute(
             select(BlogSession)
             .where(BlogSession.user_id == user_id)
@@ -64,6 +70,7 @@ class BlogSessionRepository:
         return list(result.scalars().all())
 
     async def count_active_for_user(self, user_id: int) -> int:
+        print("Counting active sessions for user!, this call is from blog session repository", flush=True)
         result = await self._session.execute(
             select(BlogSession).where(
                 BlogSession.user_id == user_id,
@@ -85,6 +92,7 @@ class BlogSessionRepository:
         status: BlogSessionStatus,
         current_stage: str | None = None,
     ) -> None:
+        print("Updating blog session status!, this call is from blog session repository", flush=True)
         blog_session = await self.get_by_id(session_id)
         if blog_session:
             blog_session.status = status
@@ -100,13 +108,20 @@ class BlogSessionRepository:
         invocation_id: str,
         confirmation_request_id: str,
     ) -> None:
+        print("Saving outline!, this call is from blog session repository", flush=True)
         blog_session = await self.get_by_id(session_id)
+        print("Outline saved!, this call is from blog session repository", flush=True)
         if blog_session:
             blog_session.outline_data = outline_data
+            print("Outline data saved!, this call is from blog session repository", flush=True)
             blog_session.invocation_id = invocation_id
+            print("Invocation id saved!, this call is from blog session repository", flush=True)
             blog_session.confirmation_request_id = confirmation_request_id
+            print("Confirmation request id saved!, this call is from blog session repository", flush=True)
             blog_session.updated_at = datetime.now(timezone.utc)
+            print("Updated at saved!, this call is from blog session repository", flush=True)
             await self._session.flush()
+            print("Flush completed!, this call is from blog session repository", flush=True)
 
     async def save_final_content(self, session_id: int, content: str) -> None:
         blog_session = await self.get_by_id(session_id)

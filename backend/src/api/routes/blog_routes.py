@@ -41,7 +41,9 @@ router = APIRouter(prefix="/blogs", tags=["blogs"])
 
 def get_authenticated_user_id(current_user: AuthenticatedUser) -> int:
     if not current_user:
+        print("Authentication failed!, this call is from blog_routes", flush=True)
         raise HTTPException(status_code=401, detail="Authentication required")
+    print("Authentication passed!, this call is from blog_routes", flush=True)
     return int(current_user.user_id)
 
 
@@ -58,19 +60,28 @@ async def generate_blog(
     is_valid, error_msg = input_guard.validate(body.topic, body.audience, body.tone)
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
-
+    print("Input validation passed!, this call is from blog_routes")
     effective_idempotency_key = idempotency_key or body.idempotency_key
-
+    print("Effective idempotency key!, this call is from blog_routes")
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    print("Session repo created!, this call is from blog_routes")
     budget_repo = BudgetRepository(session)
+    print("Budget repo created!, this call is from blog_routes")
     account_repo = BudgetAccountRepository(session)
+    print("Account repo created!, this call is from blog_routes")
     reservation_repo = SessionReservationRepository(session)
+    print("Reservation repo created!, this call is from blog_routes")
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
+    print("Budget service created!, this call is from blog_routes")
     redis_client = await get_redis_client()
+    print("Redis client created!, this call is from blog_routes")
     blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
+    print("Blog service created!, this call is from blog_routes")
+    print("Before try blog service create generation!, this call is from blog_routes")
 
     try:
+        print("Inside try blog service create generation!, this call is from blog_routes")
         result = await blog_service.create_generation(
             user_id=user_id,
             topic=body.topic,
@@ -78,6 +89,7 @@ async def generate_blog(
             tone=body.tone,
             idempotency_key=effective_idempotency_key,
         )
+        print("After try blog service create generation!, this call is from blog_routes")
         return GenerateResponse(
             session_id=result.id,
             status=result.status,
