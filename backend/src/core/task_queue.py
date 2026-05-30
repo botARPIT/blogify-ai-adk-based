@@ -39,21 +39,25 @@ class TaskQueue:
     """
 
     def __init__(self):
+        print("DEBUG [task_queue.py:41] TaskQueue.__init__ called", flush=True)
         self._dequeue_script_sha: str | None = None
 
     async def _get_script_sha(self) -> str:
+        print("DEBUG [task_queue.py:44] TaskQueue._get_script_sha called", flush=True)
         if self._dequeue_script_sha is None:
             client = await get_redis_client()
             self._dequeue_script_sha = await client.script_load(self.DEQUEUE_SCRIPT)
         return self._dequeue_script_sha
 
     async def enqueue(self, job: BlogJob) -> None:
+        print(f"DEBUG [task_queue.py:50] TaskQueue.enqueue called with job session_id={job.session_id}, phase={job.phase}", flush=True)
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
         await client.lpush(self.QUEUE_KEY, job_json)
         logger.info("job_enqueued", session_id=job.session_id, phase=job.phase)
 
     async def dequeue(self, timeout: int = 5) -> BlogJob | None:
+        print(f"DEBUG [task_queue.py:56] TaskQueue.dequeue called with timeout={timeout}", flush=True)
         client = await get_redis_client()
 
         deadline = datetime.now(timezone.utc).timestamp() + self.VISIBILITY_TIMEOUT_SECONDS
@@ -84,12 +88,14 @@ class TaskQueue:
         return BlogJob(**job_data)
 
     async def acknowledge(self, job: BlogJob) -> None:
+        print(f"DEBUG [task_queue.py:86] TaskQueue.acknowledge called with job session_id={job.session_id}", flush=True)
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
         await client.zrem(self.PROCESSING_KEY, job_json)
         logger.info("job_acknowledged", session_id=job.session_id)
 
     async def reclaim_stale(self) -> int:
+        print("DEBUG [task_queue.py:92] TaskQueue.reclaim_stale called", flush=True)
         client = await get_redis_client()
         now = datetime.now(timezone.utc).timestamp()
 
@@ -110,7 +116,24 @@ class TaskQueue:
 
         return reclaimed
 
+    async def get_stale_processing_entries(self) -> list[str]:
+        client = await get_redis_client()
+        now = datetime.now(timezone.utc).timestamp()
+        return list(
+            await client.zrangebyscore(
+                self.PROCESSING_KEY,
+                "-inf",
+                now,
+            )
+        )
+
+    async def remove_processing_entry(self, job_json: str) -> bool:
+        client = await get_redis_client()
+        removed = await client.zrem(self.PROCESSING_KEY, job_json)
+        return bool(removed)
+
     async def extend_visibility(self, job: BlogJob, additional_seconds: int = 60) -> None:
+        print(f"DEBUG [task_queue.py:113] TaskQueue.extend_visibility called with job session_id={job.session_id}, additional_seconds={additional_seconds}", flush=True)
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
         new_deadline = datetime.now(timezone.utc).timestamp() + additional_seconds
