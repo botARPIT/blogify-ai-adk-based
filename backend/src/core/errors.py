@@ -43,6 +43,7 @@ class ErrorCode(str, Enum):
     BLOG_GENERATION_FAILED = "BLOG_GENERATION_FAILED"
     RESEARCH_FAILED = "RESEARCH_FAILED"
     APPROVAL_REQUIRED = "APPROVAL_REQUIRED"
+    INVALID_STATE_TRANSITION = "INVALID_STATE_TRANSITION"
 
 
 class ErrorResponse(BaseModel):
@@ -156,6 +157,18 @@ class PipelineError(BlogifyError):
             error_code=ErrorCode.PIPELINE_ERROR,
             status_code=500,
             details={"stage": stage, **(details or {})},
+        )
+
+
+class InvalidStateTransition(BlogifyError):
+    """Raised when a status transition violates the state machine."""
+
+    def __init__(self, from_status: str, to_status: str):
+        super().__init__(
+            message=f"Invalid state transition: {from_status} → {to_status}",
+            error_code=ErrorCode.INVALID_STATE_TRANSITION,
+            status_code=409,
+            details={"from_status": from_status, "to_status": to_status},
         )
 
 
