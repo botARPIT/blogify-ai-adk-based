@@ -49,7 +49,7 @@ class BlogSessionStatus(StrEnum):
     # ── State machine constants ────────────────────────────────────
 
     @classmethod
-    def _valid_transitions(cls) -> dict["BlogSessionStatus", set["BlogSessionStatus"]]:
+    def _valid_transitions(cls) -> dict[BlogSessionStatus, set[BlogSessionStatus]]:
         return {
             cls.QUEUED: {cls.PROCESSING, cls.FAILED, cls.CANCELLED},
             cls.PROCESSING: {
@@ -73,15 +73,15 @@ class BlogSessionStatus(StrEnum):
         }
 
     @classmethod
-    def hitl_states(cls) -> frozenset["BlogSessionStatus"]:
+    def hitl_states(cls) -> frozenset[BlogSessionStatus]:
         return frozenset({cls.AWAITING_OUTLINE_REVIEW, cls.AWAITING_FINAL_REVIEW})
 
     @classmethod
-    def terminal_states(cls) -> frozenset["BlogSessionStatus"]:
+    def terminal_states(cls) -> frozenset[BlogSessionStatus]:
         return frozenset({cls.COMPLETED, cls.FAILED, cls.REJECTED, cls.CANCELLED})
 
     @classmethod
-    def active_states(cls) -> frozenset["BlogSessionStatus"]:
+    def active_states(cls) -> frozenset[BlogSessionStatus]:
         return frozenset({
             cls.QUEUED,
             cls.PROCESSING,
@@ -91,7 +91,7 @@ class BlogSessionStatus(StrEnum):
 
     @classmethod
     def validate_transition(
-        cls, from_status: "BlogSessionStatus", to_status: "BlogSessionStatus"
+        cls, from_status: BlogSessionStatus, to_status: BlogSessionStatus
     ) -> None:
         """Raise InvalidStateTransition if the move is illegal."""
         if from_status == to_status:

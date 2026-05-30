@@ -6,6 +6,7 @@ from google.adk.models.google_llm import Gemini
 from src.config import INTENT_MODEL, create_retry_config
 from src.models.schemas import IntentSchema
 
+
 def create_intent_agent() -> Agent:
     return Agent(
         name="intent_classifier",

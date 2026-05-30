@@ -6,6 +6,7 @@ from google.adk.models.google_llm import Gemini
 from src.config import RESEARCH_MODEL, create_retry_config
 from src.tools.tavily_research import research_topic
 
+
 def create_research_agent() -> Agent:
     return Agent(
         name="research_agent",

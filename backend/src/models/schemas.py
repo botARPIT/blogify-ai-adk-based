@@ -1,8 +1,7 @@
 """Pydantic schemas for V1 API contract and agent I/O."""
 
 from datetime import datetime
-from typing import Literal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
 

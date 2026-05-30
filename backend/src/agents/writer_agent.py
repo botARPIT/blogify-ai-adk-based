@@ -5,6 +5,7 @@ from google.adk.models.google_llm import Gemini
 
 from src.config import WRITER_MODEL, create_retry_config
 
+
 def create_writer_agent() -> Agent:
     return Agent(
         name="writer_agent",

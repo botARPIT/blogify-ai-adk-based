@@ -160,7 +160,7 @@ class PipelineError(BlogifyError):
         )
 
 
-class InvalidStateTransition(BlogifyError):
+class InvalidStateTransitionError(BlogifyError):
     """Raised when a status transition violates the state machine."""
 
     def __init__(self, from_status: str, to_status: str):
@@ -170,6 +170,9 @@ class InvalidStateTransition(BlogifyError):
             status_code=409,
             details={"from_status": from_status, "to_status": to_status},
         )
+
+
+InvalidStateTransition = InvalidStateTransitionError
 
 
 # Environment-aware error formatting

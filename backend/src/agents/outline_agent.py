@@ -6,6 +6,7 @@ from google.adk.models.google_llm import Gemini
 from src.config import OUTLINE_MODEL, create_retry_config
 from src.models.schemas import OutlineSchema
 
+
 def create_outline_agent() -> Agent:
     return Agent(
         name="outline_agent",

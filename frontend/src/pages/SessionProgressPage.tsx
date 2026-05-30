@@ -20,12 +20,13 @@ const SessionProgressPage = () => {
   }
 
   const currentSession = session!;
-  const isFailureState = ['failed', 'cancelled'].includes(currentSession.status);
+  const isFailureState = ['failed', 'rejected', 'cancelled'].includes(currentSession.status);
   const statusMessage: Record<string, string> = {
     queued: 'The request is accepted and waiting for a worker slot.',
     processing: 'Agents are actively moving through the current drafting stage.',
     revision_requested: 'A revision loop was requested and the drafting process is resuming.',
     failed: 'This session hit an execution error and needs operator attention.',
+    rejected: 'This session was explicitly rejected by the reviewer and will not resume.',
     cancelled: 'This session was cancelled before completion.',
   };
 

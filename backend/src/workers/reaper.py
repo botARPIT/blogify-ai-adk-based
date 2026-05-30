@@ -13,9 +13,9 @@ import json
 from src.config.logging_config import get_logger
 from src.core.database import AsyncSessionFactory
 from src.core.task_queue import BlogJob, TaskQueue
-from src.models.orm_models import BlogJobPhase, BlogSessionStatus
-from src.models.repositories.blog_version_repository import BlogVersionRepository
+from src.models.orm_models import BlogJobPhase
 from src.models.repositories.blog_session_repository import BlogSessionRepository
+from src.models.repositories.blog_version_repository import BlogVersionRepository
 from src.models.repositories.session_lease_repository import SessionLeaseRepository
 
 logger = get_logger(__name__)

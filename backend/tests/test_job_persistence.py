@@ -44,7 +44,7 @@ class TestJobPersistence:
             topic="Test Topic",
             audience="test",
             tone="professional",
-            phase="start",
+            phase="fresh_generation",
         )
 
         await queue.enqueue(job)
@@ -156,7 +156,7 @@ class TestJobEnqueueDetails:
             topic="Python Best Practices",
             audience="developers",
             tone="professional",
-            phase="start",
+            phase="fresh_generation",
         )
 
         await queue.enqueue(job)
@@ -189,7 +189,7 @@ class TestJobEnqueueDetails:
             topic="Topic 1",
             audience="a1",
             tone="t1",
-            phase="start",
+            phase="fresh_generation",
         )
         job2 = BlogJob(
             session_id=2,
@@ -198,7 +198,7 @@ class TestJobEnqueueDetails:
             topic="Topic 2",
             audience="a2",
             tone="t2",
-            phase="start",
+            phase="fresh_generation",
         )
 
         await queue.enqueue(job1)
