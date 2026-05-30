@@ -9,6 +9,7 @@ from src.core.redis_pool import get_redis_client
 from src.core.task_queue import task_queue
 from src.guards.input_guard import InputGuard
 from src.models.repositories.blog_session_repository import BlogSessionRepository
+from src.models.repositories.blog_version_repository import BlogVersionRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.research_sources_repository import ResearchSourcesRepository
@@ -76,7 +77,8 @@ async def generate_blog(
     print("Budget service created!, this call is from blog_routes")
     redis_client = await get_redis_client()
     print("Redis client created!, this call is from blog_routes")
-    blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
+    version_repo = BlogVersionRepository(session)
+    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
     print("Blog service created!, this call is from blog_routes")
     print("Before try blog service create generation!, this call is from blog_routes")
 
@@ -120,12 +122,13 @@ async def list_blogs(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    version_repo = BlogVersionRepository(session)
     budget_repo = BudgetRepository(session)
     account_repo = BudgetAccountRepository(session)
     reservation_repo = SessionReservationRepository(session)
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
-    blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
+    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
 
     sessions = await blog_service.get_user_sessions(user_id)
     return [
@@ -151,12 +154,19 @@ async def get_outline(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    version_repo = BlogVersionRepository(session)
 
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if not blog_session.outline_data:
+    active_version = await version_repo.get_active_for_session(session_id)
+    outline = None
+    if active_version:
+        outline = active_version.approved_outline or active_version.outline_data
+    if not outline:
+        outline = blog_session.outline_data
+    if not outline:
         raise HTTPException(status_code=404, detail="No outline available")
 
     return OutlineReviewView(
@@ -166,7 +176,7 @@ async def get_outline(
         topic=blog_session.topic,
         audience=blog_session.audience,
         feedback_text=None,
-        outline=blog_session.outline_data,
+        outline=outline,
     )
 
 
@@ -184,7 +194,8 @@ async def submit_outline_review_frontend(
     reservation_repo = SessionReservationRepository(session)
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
-    blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
+    version_repo = BlogVersionRepository(session)
+    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
 
     if body.action == "revise" and body.edited_outline:
         approved_outline = body.edited_outline
@@ -286,6 +297,7 @@ async def get_session_detail(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    version_repo = BlogVersionRepository(session)
     sources_repo = ResearchSourcesRepository(session)
 
     blog_session = await session_repo.get_by_id(session_id)
@@ -299,26 +311,30 @@ async def get_session_detail(
     result = await session.execute(select(AgentRun).where(AgentRun.blog_session_id == session_id))
     agent_runs = result.scalars().all()
 
+    latest_version_row = await version_repo.get_latest_for_session(session_id)
+    latest_content = (
+        latest_version_row.final_content if latest_version_row and latest_version_row.final_content else blog_session.final_content
+    )
     total_tokens = sum(ar.total_tokens for ar in agent_runs)
-    total_words = len(blog_session.final_content.split()) if blog_session.final_content else 0
+    total_words = len(latest_content.split()) if latest_content else 0
     sources_count = await sources_repo.count_for_session(session_id)
 
     latest_version = None
-    if blog_session.final_content:
+    if latest_content:
         latest_version = BlogVersionMetrics(
-            version_id=1,
-            version_number=1,
-            title=blog_session.topic,
-            content_markdown=blog_session.final_content,
+            version_id=latest_version_row.id if latest_version_row else 1,
+            version_number=latest_version_row.version_number if latest_version_row else 1,
+            title=(latest_version_row.title if latest_version_row else None) or blog_session.topic,
+            content_markdown=latest_content,
             word_count=total_words,
             sources_count=sources_count,
             editor_status="completed",
             created_by="system",
-            created_at=blog_session.updated_at,
+            created_at=latest_version_row.updated_at if latest_version_row else blog_session.updated_at,
         )
 
     # Determine if content is available (completed status)
-    has_content = blog_session.status == "COMPLETED" and bool(blog_session.final_content)
+    has_content = blog_session.status == "COMPLETED" and bool(latest_content)
 
     return BlogSessionMetrics(
         session=SessionInfo(
@@ -336,12 +352,12 @@ async def get_session_detail(
             requires_human_review=blog_session.status
             in ("AWAITING_OUTLINE_REVIEW", "AWAITING_FINAL_REVIEW"),
             remaining_revision_iterations=0,
-            current_version_number=1 if has_content else None,
+            current_version_number=latest_version_row.version_number if has_content and latest_version_row else (1 if has_content else None),
         ),
         total_cost_usd=float(blog_session.budget_spent_usd),
         total_tokens=total_tokens,
         total_words=total_words,
-        outline=blog_session.outline_data,
+        outline=(latest_version_row.approved_outline if latest_version_row else None) or blog_session.outline_data,
         latest_version=latest_version,
         agent_runs=[
             AgentRunMetrics(
@@ -369,12 +385,14 @@ async def get_blog(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    version_repo = BlogVersionRepository(session)
     budget_repo = BudgetRepository(session)
     account_repo = BudgetAccountRepository(session)
     reservation_repo = SessionReservationRepository(session)
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
-    blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
+    version_repo = BlogVersionRepository(session)
+    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
 
     try:
         s = await blog_service.get_session(user_id, session_id)
@@ -392,6 +410,7 @@ async def get_blog(
 
     result = await session.execute(select(AgentRun).where(AgentRun.blog_session_id == session_id))
     agent_runs = result.scalars().all()
+    latest_version = await version_repo.get_latest_for_session(session_id)
 
     return BlogSessionDetail(
         session_id=s.id,
@@ -400,8 +419,8 @@ async def get_blog(
         tone=s.tone,
         status=s.status,
         current_stage=s.current_stage,
-        outline_data=s.outline_data,
-        final_content=s.final_content,
+        outline_data=(latest_version.approved_outline if latest_version else None) or s.outline_data,
+        final_content=(latest_version.final_content if latest_version else None) or s.final_content,
         budget_reserved_usd=float(s.budget_reserved_usd),
         budget_spent_usd=float(s.budget_spent_usd),
         agent_runs=[
@@ -432,7 +451,8 @@ async def submit_outline_review(
     reservation_repo = SessionReservationRepository(session)
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
-    blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
+    version_repo = BlogVersionRepository(session)
+    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
 
     try:
         result = await blog_service.submit_outline_review(
@@ -460,13 +480,14 @@ async def submit_final_review(
     reservation_repo = SessionReservationRepository(session)
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
     redis_client = await get_redis_client()
-    blog_service = BlogService(session_repo, budget_service, task_queue, redis_client)
+    version_repo = BlogVersionRepository(session)
+    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
 
     try:
         result = await blog_service.submit_final_review(
             user_id=user_id,
             session_id=session_id,
-            approved=body.approved,
+            action=body.action,
             feedback_text=body.feedback_text,
         )
         return {"session_id": result.id, "status": result.status}
@@ -482,26 +503,28 @@ async def get_content(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    version_repo = BlogVersionRepository(session)
     sources_repo = ResearchSourcesRepository(session)
 
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if not blog_session.final_content:
+    latest_version = await version_repo.get_latest_for_session(session_id)
+    content = (latest_version.final_content if latest_version else None) or blog_session.final_content
+    if not content:
         raise HTTPException(
             status_code=404,
             detail="Final blog content is not available for this session",
         )
 
-    content = blog_session.final_content
     word_count = len(content.split()) if content else 0
     sources_count = await sources_repo.count_for_session(session_id)
 
     return BlogContentView(
         session_id=blog_session.id,
-        version_id=1,
-        title=blog_session.topic,
+        version_id=latest_version.id if latest_version else 1,
+        title=(latest_version.title if latest_version else None) or blog_session.topic,
         content_markdown=content,
         word_count=word_count,
         sources_count=sources_count,
@@ -519,13 +542,15 @@ async def get_latest_version(
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
+    version_repo = BlogVersionRepository(session)
     sources_repo = ResearchSourcesRepository(session)
 
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if not blog_session.final_content:
+    latest_version = await version_repo.get_latest_for_session(session_id)
+    if latest_version is None or not latest_version.final_content:
         raise HTTPException(
             status_code=404,
             detail="No blog version found",
@@ -534,15 +559,15 @@ async def get_latest_version(
     sources_count = await sources_repo.count_for_session(session_id)
 
     return BlogVersionView(
-        version_id=1,
+        version_id=latest_version.id,
         session_id=blog_session.id,
-        version_number=1,
+        version_number=latest_version.version_number,
         source_type="final",
-        title=blog_session.topic,
-        content_markdown=blog_session.final_content,
-        word_count=len(blog_session.final_content.split()),
+        title=latest_version.title or blog_session.topic,
+        content_markdown=latest_version.final_content,
+        word_count=len(latest_version.final_content.split()),
         sources_count=sources_count,
         editor_status="completed",
         created_by="system",
-        created_at=blog_session.updated_at,
+        created_at=latest_version.updated_at,
     )
