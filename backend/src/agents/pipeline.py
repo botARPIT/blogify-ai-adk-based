@@ -12,11 +12,11 @@ from google.adk.runners import Runner
 from google.adk.tools import ToolContext
 from google.genai import types
 
-from src.agents.editor_agent import editor_agent
-from src.agents.intent_agent import intent_agent
-from src.agents.outline_agent import outline_agent
-from src.agents.research_agent import research_agent
-from src.agents.writer_agent import writer_agent
+from src.agents.editor_agent import create_editor_agent
+from src.agents.intent_agent import create_intent_agent
+from src.agents.outline_agent import create_outline_agent
+from src.agents.research_agent import create_research_agent
+from src.agents.writer_agent import create_writer_agent
 from src.config.logging_config import get_logger
 from src.core.sanitization import sanitize_audience, sanitize_topic
 from src.core.session_store import redis_session_service
@@ -107,55 +107,58 @@ async def review_generated_outline(tool_context: ToolContext) -> dict[str, Any]:
     }
 
 
-outline_review_agent = Agent(
-    name="outline_review_agent",
-    model=writer_agent.model,
-    instruction=(
-        "You are only an outline approval checkpoint. "
-        "The generated outline is in {blog_outline}. "
-        "If outline_review_result is empty, you must call the review_generated_outline "
-        "tool exactly once so a human can approve or edit the outline. "
-        "After the tool responds with status='awaiting_outline_review', stop immediately. "
-        "After the tool responds with status='outline_approved', respond with a single short "
-        "handoff sentence confirming the outline is approved. "
-        "Do not perform research. Do not write content. Do not call any tool other than "
-        "review_generated_outline. Never call web_search, research_sections, "
-        "generate_blog_post_section, or any other tool."
-    ),
-    tools=[review_generated_outline],
-    output_key="outline_review_result",
-)
+def _create_outline_review_agent(writer_agent: Agent) -> Agent:
+    return Agent(
+        name="outline_review_agent",
+        model=writer_agent.model,
+        instruction=(
+            "You are only an outline approval checkpoint. "
+            "The generated outline is in {blog_outline}. "
+            "If outline_review_result is empty, you must call the review_generated_outline "
+            "tool exactly once so a human can approve or edit the outline. "
+            "After the tool responds with status='awaiting_outline_review', stop immediately. "
+            "After the tool responds with status='outline_approved', respond with a single short "
+            "handoff sentence confirming the outline is approved. "
+            "Do not perform research. Do not write content. Do not call any tool other than "
+            "review_generated_outline. Never call web_search, research_sections, "
+            "generate_blog_post_section, or any other tool."
+        ),
+        tools=[review_generated_outline],
+        output_key="outline_review_result",
+    )
 
 
-refinement_loop = LoopAgent(
-    name="refinement_loop",
-    sub_agents=[writer_agent, editor_agent],
-    max_iterations=2,
-)
+def _create_refinement_loop() -> LoopAgent:
+    return LoopAgent(
+        name="refinement_loop",
+        sub_agents=[create_writer_agent(), create_editor_agent()],
+        max_iterations=2,
+    )
 
-blog_pipeline = SequentialAgent(
-    name="blog_pipeline",
-    sub_agents=[
-        intent_agent,
-        outline_agent,
-        outline_review_agent,
-        research_agent,
-        refinement_loop,
-    ],
-)
+
+def _build_blog_pipeline() -> SequentialAgent:
+    writer_agent = create_writer_agent()
+    return SequentialAgent(
+        name="blog_pipeline",
+        sub_agents=[
+            create_intent_agent(),
+            create_outline_agent(),
+            _create_outline_review_agent(writer_agent),
+            create_research_agent(),
+            LoopAgent(
+                name="refinement_loop",
+                sub_agents=[writer_agent, create_editor_agent()],
+                max_iterations=2,
+            ),
+        ],
+    )
 
 APP_NAME = "blogify"
 APP = App(
     name=APP_NAME,
-    root_agent=blog_pipeline,
+    root_agent=_build_blog_pipeline(),
     resumability_config=ResumabilityConfig(is_resumable=True),
 )
-
-PHASE_AGENTS = {
-    "research_phase": [research_agent, refinement_loop],
-    "writer_phase": [refinement_loop],
-    "editor_phase": [editor_agent],
-}
 
 STAGE_BY_AUTHOR = {
     "intent_classifier": "intent",
@@ -236,6 +239,38 @@ def _populate_result_from_state(result: PipelineResult, state: dict[str, Any]) -
     result.editor_review = state.get("editor_review")
 
 
+async def _sync_session_state(
+    *,
+    svc: Any,
+    user_id: str,
+    session_id: str,
+    state_snapshot: dict[str, Any] | None,
+) -> None:
+    if not state_snapshot:
+        return
+
+    existing = await svc.get_session(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+    )
+    if existing is None:
+        await svc.create_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+            state=state_snapshot,
+        )
+        return
+
+    await svc.update_session_state(
+        app_name=APP_NAME,
+        user_id=user_id,
+        session_id=session_id,
+        state=state_snapshot,
+    )
+
+
 async def _ensure_session(
     *,
     svc: Any,
@@ -269,8 +304,13 @@ def _build_runner(session_service: Any) -> Runner:
 
 
 def _build_phase_runner(session_service: Any, phase: str) -> Runner:
-    agents = PHASE_AGENTS.get(phase)
-    if not agents:
+    if phase == "research_phase":
+        agents = [create_research_agent(), _create_refinement_loop()]
+    elif phase == "writer_phase":
+        agents = [_create_refinement_loop()]
+    elif phase == "editor_phase":
+        agents = [create_editor_agent()]
+    else:
         raise ValueError(f"Unsupported pipeline phase: {phase}")
 
     phase_pipeline = SequentialAgent(
@@ -426,6 +466,7 @@ async def run_pipeline(
     user_id: str = "anonymous",
     session_id: str | None = None,
     session_service: Any | None = None,
+    state_snapshot: dict[str, Any] | None = None,
 ) -> PipelineResult:
     session_id = session_id or str(uuid.uuid4())
     svc = session_service or redis_session_service
@@ -441,6 +482,12 @@ async def run_pipeline(
                 user_id=user_id,
                 safe_topic=safe_topic,
                 safe_audience=safe_audience,
+            )
+            await _sync_session_state(
+                svc=svc,
+                user_id=user_id,
+                session_id=session_id,
+                state_snapshot=state_snapshot,
             )
             runner = _build_runner(svc)
             events = await _run_runner(
@@ -470,6 +517,7 @@ async def run_pipeline_from_phase(
     user_id: str = "anonymous",
     session_id: str,
     session_service: Any | None = None,
+    state_snapshot: dict[str, Any] | None = None,
 ) -> PipelineResult:
     svc = session_service or redis_session_service
     safe_topic = sanitize_topic(topic)
@@ -487,6 +535,12 @@ async def run_pipeline_from_phase(
                 user_id=user_id,
                 safe_topic=safe_topic,
                 safe_audience=safe_audience,
+            )
+            await _sync_session_state(
+                svc=svc,
+                user_id=user_id,
+                session_id=session_id,
+                state_snapshot=state_snapshot,
             )
             runner = _build_phase_runner(svc, phase)
             events = await _run_runner(
@@ -521,6 +575,7 @@ async def load_pipeline_result_from_state(
     user_id: str = "anonymous",
     session_id: str,
     session_service: Any | None = None,
+    state_snapshot: dict[str, Any] | None = None,
 ) -> PipelineResult:
     svc = session_service or redis_session_service
     safe_topic = sanitize_topic(topic)
@@ -534,6 +589,12 @@ async def load_pipeline_result_from_state(
             user_id=user_id,
             safe_topic=safe_topic,
             safe_audience=safe_audience,
+        )
+        await _sync_session_state(
+            svc=svc,
+            user_id=user_id,
+            session_id=session_id,
+            state_snapshot=state_snapshot,
         )
         return await _finalize_result(
             svc=svc,
@@ -564,6 +625,7 @@ async def resume_pipeline(
     approved_outline: dict[str, Any],
     feedback_text: str | None = None,
     session_service: Any | None = None,
+    state_snapshot: dict[str, Any] | None = None,
 ) -> PipelineResult:
     svc = session_service or redis_session_service
     safe_topic = sanitize_topic(topic)
@@ -580,6 +642,12 @@ async def resume_pipeline(
                 user_id=user_id,
                 safe_topic=safe_topic,
                 safe_audience=safe_audience,
+            )
+            await _sync_session_state(
+                svc=svc,
+                user_id=user_id,
+                session_id=session_id,
+                state_snapshot=state_snapshot,
             )
             runner = _build_runner(svc)
             events = await _run_runner(

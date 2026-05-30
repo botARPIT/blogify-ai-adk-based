@@ -89,7 +89,7 @@ export interface BlogVersionView {
 }
 
 export interface HumanReviewRequest {
-  action: 'approve' | 'request_revision' | 'reject';
+  action: 'approved' | 'revision_requested' | 'rejected';
   feedback_text?: string;
   reviewer_user_id?: string;
 }
@@ -212,18 +212,14 @@ export async function getLatestVersion(sessionId: string): Promise<BlogVersionVi
 
 export async function submitFinalReview(
   sessionId: string,
-  payload: { action: 'approve' | 'request_revision' | 'reject'; feedback_text?: string },
+  payload: { action: 'approved' | 'revision_requested' | 'rejected'; feedback_text?: string },
 ): Promise<{ session_id: number; status: string }> {
-  const approved = payload.action === 'approve';
   return request<{ session_id: number; status: string }>(
     `/api/v1/blogs/${sessionId}/final-review`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        approved,
-        feedback_text: payload.feedback_text,
-      }),
+      body: JSON.stringify(payload),
     },
   );
 }

@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 
 WORKER_ID = f"worker-{socket.gethostname()}-{os.getpid()}"
 MAX_CONCURRENT_JOBS = 3
-HEARTBEAT_INTERVAL = 15
+HEARTBEAT_INTERVAL = 30
 LEASE_SECONDS = 300
 
 
@@ -52,35 +52,59 @@ class BlogWorker:
 
     async def _process_job(self, job) -> None:
         async with self._semaphore:
+            hydrated_job = None
             async with AsyncSessionFactory() as session:
                 lease_repo = SessionLeaseRepository(session)
-                acquired = await lease_repo.acquire_lease(job.session_id, WORKER_ID, LEASE_SECONDS)
-                if not acquired:
+                acquired = await lease_repo.acquire_lease(job, WORKER_ID, LEASE_SECONDS)
+                if not acquired.acquired or acquired.job is None:
+                    await session.rollback()
                     await self._queue.acknowledge(job)
                     return
 
-                heartbeat_task = asyncio.create_task(
-                    self._job_heartbeat(job.session_id, lease_repo)
-                )
+                hydrated_job = acquired.job
                 try:
-                    executor = PipelineExecutor(session)
-                    await executor.execute(job)
                     await session.commit()
-                    await self._queue.acknowledge(job)
-                except Exception as e:
+                except Exception:
                     await session.rollback()
-                    logger.error("job_failed", session_id=job.session_id, error=str(e))
-                finally:
-                    heartbeat_task.cancel()
-                    await lease_repo.release_lease(job.session_id, WORKER_ID)
+                    raise
 
-    async def _job_heartbeat(self, session_id: int, lease_repo: SessionLeaseRepository) -> None:
+            heartbeat_task = asyncio.create_task(self._job_heartbeat(hydrated_job.session_id))
+            try:
+                async with AsyncSessionFactory() as session:
+                    executor = PipelineExecutor(session)
+                    await executor.execute(hydrated_job)
+                    await session.commit()
+                await self._queue.acknowledge(job)
+            except Exception as e:
+                logger.error("job_failed", session_id=job.session_id, error=str(e))
+            finally:
+                heartbeat_task.cancel()
+                await self._release_lease(hydrated_job.session_id if hydrated_job else job.session_id)
+
+    async def _job_heartbeat(self, session_id: int) -> None:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             try:
-                await lease_repo.heartbeat_lease(session_id, WORKER_ID, extend_seconds=60)
+                async with AsyncSessionFactory() as session:
+                    lease_repo = SessionLeaseRepository(session)
+                    extended = await lease_repo.heartbeat_lease(
+                        session_id, WORKER_ID, extend_seconds=90
+                    )
+                    if extended:
+                        await session.commit()
+                    else:
+                        await session.rollback()
             except Exception:
                 pass
+
+    async def _release_lease(self, session_id: int) -> None:
+        try:
+            async with AsyncSessionFactory() as session:
+                lease_repo = SessionLeaseRepository(session)
+                await lease_repo.release_lease(session_id, WORKER_ID)
+                await session.commit()
+        except Exception as exc:
+            logger.error("lease_release_failed", session_id=session_id, error=str(exc))
 
     async def _heartbeat_loop(self) -> None:
         redis = await get_redis_client()

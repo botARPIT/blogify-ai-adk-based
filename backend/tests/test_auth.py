@@ -8,8 +8,10 @@ class TestLogin:
 
     def test_login_valid_credentials_returns_token(self, test_client, mock_db_session):
         """Test user can login with correct email/password and receives JWT token."""
-        import bcrypt as _bcrypt
         from datetime import datetime, timezone
+
+        import bcrypt as _bcrypt
+
         from src.api.main import app
         from src.core.database import get_db_session
 
@@ -148,7 +150,7 @@ class TestAuthenticatedRequests:
 
     def test_authenticated_blogs_list_passes(self, test_client):
         """Test authenticated request to /blogs/ passes."""
-        from src.api.auth import get_current_user, AuthenticatedUser
+        from src.api.auth import AuthenticatedUser, get_current_user
         from src.api.main import app
 
         mock_user = AuthenticatedUser(user_id="1", email="test@example.com")
