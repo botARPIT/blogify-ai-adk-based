@@ -102,12 +102,19 @@ def mock_session_factory(mock_db_session):
 
 @pytest.fixture
 def test_client():
-    """Create test client."""
-    with patch("src.core.database.AsyncSessionFactory"):
-        with patch("src.core.redis_pool.get_redis_client", new_callable=AsyncMock):
-            from src.api.main import app
+    """Create test client.
 
-            return TestClient(app)
+    The autouse ``mock_session_factory`` fixture already patches
+    ``AsyncSessionFactory`` with a proper ``AsyncMock`` that supports
+    ``__aenter__`` / ``__aexit__``.  Do **not** re-patch it here —
+    doing so replaces the working ``AsyncMock`` with a bare ``MagicMock``
+    whose async-context-manager protocol swallows awaits, causing the
+    async generator inside ``get_db_session`` to deadlock and hang.
+    """
+    with patch("src.core.redis_pool.get_redis_client", new_callable=AsyncMock):
+        from src.api.main import app
+
+        return TestClient(app)
 
 
 @pytest.fixture
