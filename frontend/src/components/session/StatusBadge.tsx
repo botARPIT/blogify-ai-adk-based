@@ -12,13 +12,17 @@ const STATUS_LABELS: Record<string, string> = {
   revision_requested: 'Revision Requested',
   completed: 'Completed',
   failed: 'Failed',
+  rejected: 'Rejected',
   cancelled: 'Cancelled',
 };
 
 const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
   const normalizedStatus = status?.toLowerCase() || '';
   const isAttention = normalizedStatus.includes('review') || normalizedStatus === 'revision_requested';
-  const isFailure = normalizedStatus === 'failed' || normalizedStatus === 'cancelled';
+  const isFailure =
+    normalizedStatus === 'failed' ||
+    normalizedStatus === 'cancelled' ||
+    normalizedStatus === 'rejected';
   const color = isFailure
     ? 'var(--error-color)'
     : isAttention

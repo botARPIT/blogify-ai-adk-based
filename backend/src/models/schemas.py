@@ -1,9 +1,9 @@
 """Pydantic schemas for V1 API contract and agent I/O."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Agent I/O schemas (used by ADK agents - NOT part of API contract)
@@ -153,8 +153,17 @@ class OutlineReviewView(BaseModel):
 
 
 class FinalReviewRequest(BaseModel):
-    approved: bool
+    action: Literal["approved", "revision_requested", "rejected"]
     feedback_text: str | None = None
+
+    @model_validator(mode="after")
+    def validate_feedback_text(self) -> "FinalReviewRequest":
+        if self.action == "revision_requested":
+            if not self.feedback_text or not self.feedback_text.strip():
+                raise ValueError("feedback_text is required when action is revision_requested")
+        elif self.feedback_text not in (None, ""):
+            raise ValueError("feedback_text is only allowed when action is revision_requested")
+        return self
 
 
 class AgentRunResponse(BaseModel):

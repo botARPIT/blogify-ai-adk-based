@@ -21,6 +21,7 @@ const FinalReviewPage = () => {
   const [submitting, setSubmitting] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
   const [submitError, setSubmitError] = useState('');
+  const [selectedAction, setSelectedAction] = useState<'revision_requested' | null>(null);
 
   if (loading) {
     return <LoadingState title="Loading final draft..." message="Fetching the latest canonical version for human review." />;
@@ -29,9 +30,9 @@ const FinalReviewPage = () => {
     return <ErrorState title="Draft Unavailable" message={error || 'No draft version was available for review.'} />;
   }
 
-  const handleAction = async (action: 'approve' | 'request_revision' | 'reject') => {
+  const handleAction = async (action: 'approved' | 'revision_requested' | 'rejected') => {
     if (!sessionId) return;
-    if (action === 'request_revision' && !feedback.trim()) {
+    if (action === 'revision_requested' && !feedback.trim()) {
       setSubmitError('Feedback is required when requesting a revision.');
       return;
     }
@@ -40,9 +41,14 @@ const FinalReviewPage = () => {
     try {
       const result = await submitFinalReview(sessionId, {
         action,
-        feedback_text: feedback,
+        ...(action === 'revision_requested' ? { feedback_text: feedback } : {}),
       });
-      const statusLabel = action === 'approve' ? 'Blog approved!' : 'Revision requested';
+      const statusLabel =
+        action === 'approved'
+          ? 'Blog approved!'
+          : action === 'revision_requested'
+            ? 'Revision requested'
+            : 'Blog rejected';
       toast.success(statusLabel, { description: 'The session has been updated.' });
       navigate(getRouteForStatus(sessionId, result.status), { replace: true });
     } catch (err) {
@@ -95,39 +101,61 @@ const FinalReviewPage = () => {
 
         <div className="bento-card">
           <h2 className="section-title">Review Decision</h2>
-          <textarea
-            className="brutalist-input"
-            rows={5}
-            placeholder="Add feedback if you want a revision loop or want to leave final reviewer notes."
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            style={{ width: '100%', fontSize: '1rem' }}
-          />
+          {selectedAction === 'revision_requested' ? (
+            <textarea
+              className="brutalist-input"
+              rows={5}
+              placeholder="Describe the changes needed before the next revision loop."
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              style={{ width: '100%', fontSize: '1rem' }}
+            />
+          ) : null}
           {submitError ? (
             <p style={{ color: 'var(--error-color)', marginBottom: 'var(--spacing-sm)' }}>{submitError}</p>
           ) : null}
           <div style={{ display: 'flex', gap: 'var(--spacing-sm)', flexWrap: 'wrap' }}>
             <button
               className="brutalist-button"
-              onClick={() => handleAction('approve')}
+              onClick={() => {
+                setSelectedAction(null);
+                setSubmitError('');
+                void handleAction('approved');
+              }}
               disabled={submitting}
             >
               Approve Release
             </button>
             <button
               className="brutalist-button secondary"
-              onClick={() => handleAction('request_revision')}
+              onClick={() => {
+                setSelectedAction('revision_requested');
+                setSubmitError('');
+              }}
               disabled={submitting}
             >
               Request Revision
             </button>
             <button
               className="brutalist-button secondary"
-              onClick={() => handleAction('reject')}
+              onClick={() => {
+                setSelectedAction(null);
+                setSubmitError('');
+                void handleAction('rejected');
+              }}
               disabled={submitting}
             >
               Reject
             </button>
+            {selectedAction === 'revision_requested' ? (
+              <button
+                className="brutalist-button"
+                onClick={() => void handleAction('revision_requested')}
+                disabled={submitting}
+              >
+                Submit Revision Request
+              </button>
+            ) : null}
           </div>
         </div>
       </div>

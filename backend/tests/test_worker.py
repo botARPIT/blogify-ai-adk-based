@@ -16,7 +16,7 @@ class TestWorkerJobProcessing:
         queue = TaskQueue()
         queue._dequeue_script_sha = "test"
 
-        test_job_json = '{"session_id": 1, "user_id": 1, "adk_session_id": "test-adk", "topic": "Test", "audience": "test", "tone": "professional", "phase": "start"}'
+        test_job_json = '{"session_id": 1, "user_id": 1, "adk_session_id": "test-adk", "topic": "Test", "audience": "test", "tone": "professional", "phase": "fresh_generation"}'
 
         mock_redis.evalsha = AsyncMock(return_value=test_job_json)
         mock_redis.zadd = AsyncMock(return_value=1)
@@ -54,15 +54,25 @@ class TestWorkerJobProcessing:
         with patch(
             "src.models.repositories.session_lease_repository.SessionLeaseRepository.acquire_lease"
         ) as mock_acquire:
-            mock_acquire.return_value = True
+            mock_acquire.return_value = MagicMock(acquired=True)
 
+            from src.core.task_queue import BlogJob
             from src.models.repositories.session_lease_repository import SessionLeaseRepository
 
             repo = SessionLeaseRepository(mock_db_session)
+            job = BlogJob(
+                session_id=1,
+                user_id=1,
+                adk_session_id="test-adk",
+                topic="Test",
+                audience="test",
+                tone="professional",
+                phase="fresh_generation",
+            )
 
-            result = await repo.acquire_lease(session_id=1, worker_id="worker-1", lease_seconds=300)
+            result = await repo.acquire_lease(job=job, worker_id="worker-1", lease_seconds=300)
 
-            assert result is True
+            assert result.acquired is True
 
     @pytest.mark.asyncio
     async def test_worker_releases_lease_on_completion(self, mock_db_session):
@@ -118,7 +128,7 @@ class TestAgentRunSnapshots:
 
             repo = AgentRunRepository(mock_db_session)
 
-            result = await repo.create(
+            await repo.create(
                 blog_session_id=1,
                 stage_name="intent",
                 status="COMPLETED",

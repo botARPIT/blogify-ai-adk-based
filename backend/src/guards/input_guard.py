@@ -31,8 +31,17 @@ class InputGuard:
         if len(topic_cleaned) > self.TOPIC_MAX_LENGTH:
             return False, f"Topic must not exceed {self.TOPIC_MAX_LENGTH} characters"
 
-        if not topic_cleaned.replace(" ", "").replace("-", "").replace("_", "").isalnum():
-            return False, "Topic contains invalid characters"
+        if "\x00" in topic_cleaned:
+            return False, "Invalid characters are not allowed"
+
+        if "\n" in topic_cleaned:
+            return False, "Newline characters are not allowed"
+
+        if "\r" in topic_cleaned:
+            return False, "Carriage return characters are not allowed"
+
+        if "\t" in topic_cleaned:
+            return False, "Tab characters are not allowed"
 
         if audience is not None:
             if not isinstance(audience, str):
