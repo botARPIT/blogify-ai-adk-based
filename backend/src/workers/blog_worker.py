@@ -33,7 +33,7 @@ WORKER_ID = f"worker-{socket.gethostname()}-{os.getpid()}"
 MAX_CONCURRENT_JOBS = 3
 HEARTBEAT_INTERVAL = 30
 LEASE_SECONDS = 300
-
+EMPTY_QUEUE_BACKOFF_SECONDS = 20
 
 class BlogWorker:
     def __init__(self) -> None:
@@ -47,6 +47,7 @@ class BlogWorker:
         while self._running:
             job = await self._queue.dequeue(timeout=5)
             if job is None:
+                await asyncio.sleep(EMPTY_QUEUE_BACKOFF_SECONDS)
                 continue
             asyncio.create_task(self._process_job(job))
 
