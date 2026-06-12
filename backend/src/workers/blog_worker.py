@@ -47,6 +47,7 @@ class BlogWorker:
         while self._running:
             job = await self._queue.dequeue(timeout=5)
             if job is None:
+                await asyncio.sleep(20)
                 continue
             asyncio.create_task(self._process_job(job))
 
