@@ -44,6 +44,9 @@ Older documentation in this repo that describes a prior edge-oriented design is 
 5. The worker persists stage results, versions, review state, and budget ledger entries in PostgreSQL.
 6. Clients poll or query canonical APIs for state and content.
 
+The pipeline phase/loop naming decision and runtime semantics are documented in:
+- [ADR-2026-06-17-pipeline-phase-and-loop-semantics.md](/home/bot/repos/development/blogify-ai-adk-prod/backend/docs/ADR-2026-06-17-pipeline-phase-and-loop-semantics.md)
+
 ## Request And Execution Flows
 
 ### Standalone Browser Flow
@@ -81,6 +84,55 @@ Older documentation in this repo that describes a prior edge-oriented design is 
    - `EndUser`
 5. The API creates and queues the canonical session.
 6. Internal callers use read APIs under `/internal/ai/blogs/*` and `/internal/ai/budgets/*`.
+
+## Blog Generation Runtime Phases
+
+Redis is queue transport, PostgreSQL is the canonical state store, and ADK session state is
+rehydrated from persisted DB snapshots before resumed execution paths continue.
+
+| Session / job phase | Trigger source | Queue entry phase | Worker executor entrypoint | Pipeline function called | Agent sequence that runs | Next state produced |
+|---|---|---|---|---|---|---|
+| `fresh_generation` | `POST /blogs/generate` | `fresh_generation` | `_execute_fresh_generation` | `run_pipeline()` | `intent_agent` -> `outline_agent` -> `outline_review_agent` -> pause if outline confirmation is requested -> otherwise `research_agent` -> `full_pipeline_draft_refinement_loop` | Usually `AWAITING_OUTLINE_REVIEW`, otherwise `AWAITING_FINAL_REVIEW` |
+| `AWAITING_OUTLINE_REVIEW` | Full pipeline paused at `review_generated_outline` | None while waiting | None while waiting | None while waiting | No worker execution; user review endpoint updates the active version/session and enqueues `resume_outline` | `resume_outline` is enqueued after user approval/edit |
+| `resume_outline` | Outline approval/edit submission | `resume_outline` | `_execute_resume_outline` | `resume_pipeline()` | Resumes the paused full app pipeline at the outline confirmation boundary, then continues into `research_agent` -> `full_pipeline_draft_refinement_loop` | `AWAITING_FINAL_REVIEW` |
+| `research_phase` | Stale-worker recovery after outline approval has already been consumed | `research_phase` | `_execute_research_phase` | `run_pipeline_from_phase("research_phase")` | `research_agent` -> `phase_resume_draft_refinement_loop` | `AWAITING_FINAL_REVIEW` |
+| `revision` | Final review action `revision_requested` | `revision` | `_execute_revision` | `run_pipeline_from_phase("research_phase")` | `research_agent` -> `phase_resume_draft_refinement_loop` | `AWAITING_FINAL_REVIEW` |
+| `AWAITING_FINAL_REVIEW` | Successful completion of research + drafting/editing | None while waiting | None while waiting | None while waiting | No worker execution; user may approve, request revision, or reject | `COMPLETED`, `revision` enqueued, or `REJECTED` |
+
+Clarification for `revision`:
+
+- the persisted job phase is `revision`
+- the execution rerun entrypoint is still the `research_phase` phase runner
+
+## Architecture Diagram Review
+
+The supplied system architecture diagram is broadly directionally correct, but it needs refinement
+to match the current implementation.
+
+### Correct aspects
+
+- FastAPI -> Redis enqueue -> Worker is broadly correct
+- Worker -> PostgreSQL persistence is correct
+- Outline review and final draft review are both human decision points
+- Reaper is a separate recovery component interacting with Redis and PostgreSQL
+
+### Needs refinement
+
+- The diagram should show two distinct writer/editor loops, not one generic path.
+- `resume_outline` is not a fresh start from intent; it resumes a paused full app pipeline at the outline confirmation boundary.
+- `revision` does not resume the full app pipeline; it runs the phase runner from `research_phase`.
+- `research_phase` recovery should appear as a separate recovery entrypoint after outline approval has already been consumed.
+- `AWAITING_OUTLINE_REVIEW` is a persisted wait state, not a continuously running agent node.
+- `AWAITING_FINAL_REVIEW` is an application review state, not an ADK resumable gate.
+- Final review must show three outcomes:
+  - approve
+  - revision requested
+  - reject
+- Reaper should not be labeled as polling only “failed jobs”; it handles:
+  - stale leases
+  - stale Redis processing entries
+  - queued-session reconciliation
+- Redis should be described as transport, not system-of-record state.
 
 ### Admin / Operator Flow
 

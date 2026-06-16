@@ -1,11 +1,11 @@
 """BlogSessionRepository — V1 simplified repository."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.orm_models import BlogSession, BlogSessionStatus
+from src.models.orm_models import BlogSession, BlogSessionStatus, SessionLease
 
 
 class BlogSessionRepository:
@@ -78,6 +78,32 @@ class BlogSessionRepository:
             )
         )
         return len(result.scalars().all())
+
+    async def get_queued_without_active_leases(
+        self,
+        *,
+        older_than_seconds: int = 30,
+        limit: int = 100,
+    ) -> list[BlogSession]:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
+        active_lease_exists = exists(
+            select(SessionLease.id).where(
+                SessionLease.blog_session_id == BlogSession.id,
+                SessionLease.ended_at.is_(None),
+            )
+        )
+
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(
+                BlogSession.status == BlogSessionStatus.QUEUED.value,
+                BlogSession.updated_at < cutoff,
+                ~active_lease_exists,
+            )
+            .order_by(BlogSession.updated_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
 
     async def update_status(
         self,

@@ -1,5 +1,6 @@
 """Tests for worker behavior - job processing and agent snapshots."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,6 +26,47 @@ class TestWorkerJobProcessing:
 
         assert job is not None
         assert job.session_id == 1
+
+    @pytest.mark.asyncio
+    async def test_reclaim_stale_requeues_processing_job(self, mock_redis):
+        from src.core.task_queue import TaskQueue
+
+        queue = TaskQueue()
+        stale_job = json.dumps(
+            {
+                "session_id": 7,
+                "user_id": 1,
+                "adk_session_id": "test-adk",
+                "topic": "Test",
+                "audience": "test",
+                "tone": "professional",
+                "phase": "fresh_generation",
+            }
+        )
+        mock_redis.zrangebyscore = AsyncMock(return_value=[stale_job])
+
+        reclaimed = await queue.reclaim_stale()
+
+        assert reclaimed == 1
+        mock_redis.zrem.assert_called_once_with(queue.PROCESSING_KEY, stale_job)
+        mock_redis.lpush.assert_called_once_with(queue.QUEUE_KEY, stale_job)
+
+    @pytest.mark.asyncio
+    async def test_get_tracked_session_ids_reads_queue_and_processing(self, mock_redis):
+        from src.core.task_queue import TaskQueue
+
+        queue = TaskQueue()
+        mock_redis.lrange = AsyncMock(
+            return_value=[
+                json.dumps({"session_id": 11}),
+                b'{"session_id": 12}',
+            ]
+        )
+        mock_redis.zrange = AsyncMock(return_value=[json.dumps({"session_id": 13})])
+
+        tracked = await queue.get_tracked_session_ids()
+
+        assert tracked == {11, 12, 13}
 
     @pytest.mark.asyncio
     async def test_worker_updates_session_status_to_processing(self, mock_db_session):
@@ -317,3 +359,101 @@ class TestResearchSourcesStorage:
         count = await repo.count_for_session(1)
 
         assert count == 3
+
+
+class TestReaperRecovery:
+    @pytest.mark.asyncio
+    async def test_reap_queue_reclaims_only_orphaned_processing_entries(self):
+        from src.models.orm_models import BlogSessionStatus
+        from src.workers.reaper import Reaper
+
+        queued_session = MagicMock()
+        queued_session.status = BlogSessionStatus.QUEUED.value
+        queued_session.current_stage = None
+
+        queue = AsyncMock()
+        queue.get_stale_processing_entries = AsyncMock(return_value=['{"session_id": 31}'])
+        queue.requeue_processing_entry = AsyncMock(return_value=True)
+        queue.remove_processing_entry = AsyncMock(return_value=False)
+
+        with patch(
+            "src.workers.reaper.BlogSessionRepository.get_by_id",
+            AsyncMock(return_value=queued_session),
+        ), patch(
+            "src.workers.reaper.SessionLeaseRepository.get_current_lease",
+            AsyncMock(return_value=None),
+        ):
+            reaper = Reaper(queue)
+            await reaper._reap_queue()
+
+        queue.requeue_processing_entry.assert_called_once_with('{"session_id": 31}')
+        queue.remove_processing_entry.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_queued_sessions_reenqueues_orphaned_jobs(self):
+        from src.models.orm_models import BlogJobPhase
+        from src.workers.reaper import Reaper
+
+        queued_session = MagicMock()
+        queued_session.id = 21
+        queued_session.user_id = 5
+        queued_session.adk_session_id = "session-adk"
+        queued_session.topic = "Recover me"
+        queued_session.audience = "engineers"
+        queued_session.tone = "professional"
+        queued_session.job_phase = BlogJobPhase.REVISION.value
+
+        active_version = MagicMock()
+        active_version.job_phase = BlogJobPhase.REVISION.value
+        active_version.adk_session_id = "version-adk"
+        active_version.feedback_text = "Tighten the intro"
+
+        queue = AsyncMock()
+        queue.get_tracked_session_ids = AsyncMock(return_value=set())
+        queue.enqueue = AsyncMock()
+
+        with patch(
+            "src.workers.reaper.BlogSessionRepository.get_queued_without_active_leases",
+            AsyncMock(return_value=[queued_session]),
+        ), patch(
+            "src.workers.reaper.BlogVersionRepository.get_active_for_session",
+            AsyncMock(return_value=active_version),
+        ):
+            reaper = Reaper(queue)
+            await reaper._reconcile_queued_sessions()
+
+        queue.enqueue.assert_called_once()
+        enqueued_job = queue.enqueue.call_args.args[0]
+        assert enqueued_job.session_id == 21
+        assert enqueued_job.phase == BlogJobPhase.REVISION.value
+        assert enqueued_job.feedback_text == "Tighten the intro"
+
+    @pytest.mark.asyncio
+    async def test_reconcile_queued_sessions_skips_already_tracked_sessions(self):
+        from src.models.orm_models import BlogJobPhase
+        from src.workers.reaper import Reaper
+
+        queued_session = MagicMock()
+        queued_session.id = 22
+        queued_session.user_id = 5
+        queued_session.adk_session_id = "session-adk"
+        queued_session.topic = "Already queued"
+        queued_session.audience = "engineers"
+        queued_session.tone = "professional"
+        queued_session.job_phase = BlogJobPhase.FRESH_GENERATION.value
+
+        queue = AsyncMock()
+        queue.get_tracked_session_ids = AsyncMock(return_value={22})
+        queue.enqueue = AsyncMock()
+
+        with patch(
+            "src.workers.reaper.BlogSessionRepository.get_queued_without_active_leases",
+            AsyncMock(return_value=[queued_session]),
+        ), patch(
+            "src.workers.reaper.BlogVersionRepository.get_active_for_session",
+            AsyncMock(return_value=None),
+        ):
+            reaper = Reaper(queue)
+            await reaper._reconcile_queued_sessions()
+
+        queue.enqueue.assert_not_called()
