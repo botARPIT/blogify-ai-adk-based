@@ -60,6 +60,16 @@ class PipelineExecutor:
             await self._handle_failure(job, str(e))
 
     async def _execute_fresh_generation(self, job: BlogJob) -> None:
+        """Run ``run_pipeline()`` over the full app pipeline for a brand-new generation.
+
+        Agent sequence:
+        - intent_agent
+        - outline_agent
+        - outline_review_agent
+        - pause for outline confirmation when requested
+        - otherwise research_agent
+        - full_pipeline_draft_refinement_loop
+        """
         active_version = await self._get_active_version(job.session_id)
         result = await run_pipeline(
             topic=job.topic,
@@ -82,6 +92,13 @@ class PipelineExecutor:
         await self._handle_success(job, result)
 
     async def _execute_resume_outline(self, job: BlogJob) -> None:
+        """Run ``resume_pipeline()`` to continue the paused full app pipeline.
+
+        This is a true pause/resume path. The stored outline confirmation metadata is replayed
+        into the paused app pipeline, which then continues with:
+        - research_agent
+        - full_pipeline_draft_refinement_loop
+        """
         active_version = await self._get_active_version(job.session_id)
         result = await resume_pipeline(
             topic=job.topic,
@@ -104,7 +121,13 @@ class PipelineExecutor:
         await self._handle_success(job, result)
 
     async def _execute_revision(self, job: BlogJob) -> None:
-        """Re-enter the pipeline from the research phase for draft revision."""
+        """Run ``run_pipeline_from_phase("research_phase")`` for final-draft revision.
+
+        This is a rerun-from-phase path, not a resume of the paused full app pipeline.
+        Agent sequence:
+        - research_agent
+        - phase_resume_draft_refinement_loop
+        """
         active_version = await self._get_active_version(job.session_id)
         result = await run_pipeline_from_phase(
             phase="research_phase",
@@ -124,7 +147,13 @@ class PipelineExecutor:
         await self._handle_success(job, result)
 
     async def _execute_research_phase(self, job: BlogJob) -> None:
-        """Resume from post-outline-approval research after a stale worker recovery."""
+        """Run ``run_pipeline_from_phase("research_phase")`` after stale-worker recovery.
+
+        This is a rerun-from-phase path used after outline approval has already been consumed.
+        Agent sequence:
+        - research_agent
+        - phase_resume_draft_refinement_loop
+        """
         active_version = await self._get_active_version(job.session_id)
         result = await run_pipeline_from_phase(
             phase="research_phase",

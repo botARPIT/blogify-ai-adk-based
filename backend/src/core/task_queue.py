@@ -39,25 +39,21 @@ class TaskQueue:
     """
 
     def __init__(self):
-        print("DEBUG [task_queue.py:41] TaskQueue.__init__ called", flush=True)
         self._dequeue_script_sha: str | None = None
 
     async def _get_script_sha(self) -> str:
-        print("DEBUG [task_queue.py:44] TaskQueue._get_script_sha called", flush=True)
         if self._dequeue_script_sha is None:
             client = await get_redis_client()
             self._dequeue_script_sha = await client.script_load(self.DEQUEUE_SCRIPT)
         return self._dequeue_script_sha
 
     async def enqueue(self, job: BlogJob) -> None:
-        print(f"DEBUG [task_queue.py:50] TaskQueue.enqueue called with job session_id={job.session_id}, phase={job.phase}", flush=True)
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
         await client.lpush(self.QUEUE_KEY, job_json)
         logger.info("job_enqueued", session_id=job.session_id, phase=job.phase)
 
     async def dequeue(self, timeout: int = 5) -> BlogJob | None:
-        print(f"DEBUG [task_queue.py:56] TaskQueue.dequeue called with timeout={timeout}", flush=True)
         client = await get_redis_client()
 
         deadline = datetime.now(timezone.utc).timestamp() + self.VISIBILITY_TIMEOUT_SECONDS
@@ -88,14 +84,12 @@ class TaskQueue:
         return BlogJob(**job_data)
 
     async def acknowledge(self, job: BlogJob) -> None:
-        print(f"DEBUG [task_queue.py:86] TaskQueue.acknowledge called with job session_id={job.session_id}", flush=True)
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
         await client.zrem(self.PROCESSING_KEY, job_json)
         logger.info("job_acknowledged", session_id=job.session_id)
 
     async def reclaim_stale(self) -> int:
-        print("DEBUG [task_queue.py:92] TaskQueue.reclaim_stale called", flush=True)
         client = await get_redis_client()
         now = datetime.now(timezone.utc).timestamp()
 
@@ -116,6 +110,21 @@ class TaskQueue:
 
         return reclaimed
 
+    async def get_tracked_session_ids(self) -> set[int]:
+        """Return session IDs currently present in the queue or processing set."""
+        client = await get_redis_client()
+        queued_jobs = await client.lrange(self.QUEUE_KEY, 0, -1)
+        processing_jobs = await client.zrange(self.PROCESSING_KEY, 0, -1)
+
+        session_ids: set[int] = set()
+        for raw_job in [*queued_jobs, *processing_jobs]:
+            payload = self._decode_job_payload(raw_job)
+            session_id = payload.get("session_id")
+            if isinstance(session_id, int):
+                session_ids.add(session_id)
+
+        return session_ids
+
     async def get_stale_processing_entries(self) -> list[str]:
         client = await get_redis_client()
         now = datetime.now(timezone.utc).timestamp()
@@ -132,13 +141,32 @@ class TaskQueue:
         removed = await client.zrem(self.PROCESSING_KEY, job_json)
         return bool(removed)
 
+    async def requeue_processing_entry(self, job_json: str) -> bool:
+        client = await get_redis_client()
+        removed = await client.zrem(self.PROCESSING_KEY, job_json)
+        if not removed:
+            return False
+
+        await client.lpush(self.QUEUE_KEY, job_json)
+        return True
+
     async def extend_visibility(self, job: BlogJob, additional_seconds: int = 60) -> None:
-        print(f"DEBUG [task_queue.py:113] TaskQueue.extend_visibility called with job session_id={job.session_id}, additional_seconds={additional_seconds}", flush=True)
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
         new_deadline = datetime.now(timezone.utc).timestamp() + additional_seconds
         await client.zadd(self.PROCESSING_KEY, {job_json: new_deadline})
         logger.debug("visibility_extended", session_id=job.session_id, seconds=additional_seconds)
+
+    def _decode_job_payload(self, raw_job: str | bytes) -> dict:
+        if isinstance(raw_job, bytes):
+            raw_job = raw_job.decode("utf-8")
+
+        try:
+            payload = json.loads(raw_job)
+        except Exception:
+            return {}
+
+        return payload if isinstance(payload, dict) else {}
 
 
 task_queue = TaskQueue()

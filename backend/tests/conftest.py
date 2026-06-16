@@ -59,6 +59,8 @@ def mock_redis():
     redis.zadd = AsyncMock(return_value=1)
     redis.zrem = AsyncMock(return_value=1)
     redis.zrangebyscore = AsyncMock(return_value=[])
+    redis.zrange = AsyncMock(return_value=[])
+    redis.lrange = AsyncMock(return_value=[])
     redis.evalsha = AsyncMock(return_value=None)
     redis.eval = AsyncMock(return_value=None)
     redis.script_load = AsyncMock(return_value="test_sha")

@@ -1,4 +1,12 @@
-"""ADK-native blog pipeline with a resumable outline review gate."""
+"""ADK-native blog pipeline with a resumable outline review gate.
+
+Execution model:
+- ``run_pipeline()`` runs the full app pipeline: intent -> outline -> outline review gate ->
+  research -> full-pipeline draft refinement loop.
+- ``resume_pipeline()`` resumes that same paused full app pipeline after outline approval.
+- ``run_pipeline_from_phase("research_phase")`` runs the phase-resume pipeline:
+  research -> phase-resume draft refinement loop.
+"""
 
 from __future__ import annotations
 
@@ -128,15 +136,24 @@ def _create_outline_review_agent(writer_agent: Agent) -> Agent:
     )
 
 
-def _create_refinement_loop() -> LoopAgent:
+def _create_phase_resume_draft_refinement_loop() -> LoopAgent:
     return LoopAgent(
-        name="refinement_loop",
+        name="phase_resume_draft_refinement_loop",
         sub_agents=[create_writer_agent(), create_editor_agent()],
         max_iterations=2,
     )
 
 
+def _create_full_pipeline_draft_refinement_loop(writer_agent: Agent) -> LoopAgent:
+    return LoopAgent(
+        name="full_pipeline_draft_refinement_loop",
+        sub_agents=[writer_agent, create_editor_agent()],
+        max_iterations=2,
+    )
+
+
 def _build_blog_pipeline() -> SequentialAgent:
+    """Build the full app pipeline used by ``run_pipeline()`` and ``resume_pipeline()``."""
     writer_agent = create_writer_agent()
     return SequentialAgent(
         name="blog_pipeline",
@@ -145,11 +162,7 @@ def _build_blog_pipeline() -> SequentialAgent:
             create_outline_agent(),
             _create_outline_review_agent(writer_agent),
             create_research_agent(),
-            LoopAgent(
-                name="refinement_loop",
-                sub_agents=[writer_agent, create_editor_agent()],
-                max_iterations=2,
-            ),
+            _create_full_pipeline_draft_refinement_loop(writer_agent),
         ],
     )
 
@@ -304,10 +317,11 @@ def _build_runner(session_service: Any) -> Runner:
 
 
 def _build_phase_runner(session_service: Any, phase: str) -> Runner:
+    """Build the phase-resume runner used for post-outline recovery and revision reruns."""
     if phase == "research_phase":
-        agents = [create_research_agent(), _create_refinement_loop()]
+        agents = [create_research_agent(), _create_phase_resume_draft_refinement_loop()]
     elif phase == "writer_phase":
-        agents = [_create_refinement_loop()]
+        agents = [_create_phase_resume_draft_refinement_loop()]
     elif phase == "editor_phase":
         agents = [create_editor_agent()]
     else:
