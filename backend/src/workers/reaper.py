@@ -13,7 +13,7 @@ import json
 from src.config.logging_config import get_logger
 from src.core.database import AsyncSessionFactory
 from src.core.task_queue import BlogJob, TaskQueue
-from src.models.orm_models import BlogJobPhase
+from src.models.orm_models import BlogJobPhase, BlogSessionStatus
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.blog_version_repository import BlogVersionRepository
 from src.models.repositories.session_lease_repository import SessionLeaseRepository
@@ -34,6 +34,7 @@ class Reaper:
             try:
                 await self._reap_stale_leases()
                 await self._reap_queue()
+                await self._reconcile_queued_sessions()
             except Exception as e:
                 logger.error("reaper_cycle_failed", error=str(e))
             await asyncio.sleep(REAP_INTERVAL_SECONDS)
@@ -112,22 +113,103 @@ class Reaper:
 
     async def _reap_queue(self) -> None:
         stale_entries = await self._queue.get_stale_processing_entries()
-        cleaned = 0
-        for job_json in stale_entries:
-            session_id = None
+        if not stale_entries:
+            return
+
+        async with AsyncSessionFactory() as session:
+            session_repo = BlogSessionRepository(session)
+            lease_repo = SessionLeaseRepository(session)
+            reclaimed = 0
+            cleaned = 0
+
+            for job_json in stale_entries:
+                session_id = None
+                try:
+                    payload = json.loads(job_json)
+                    session_id = payload.get("session_id")
+                except Exception:
+                    pass
+
+                session_model = (
+                    await session_repo.get_by_id(session_id) if isinstance(session_id, int) else None
+                )
+                active_lease = (
+                    await lease_repo.get_current_lease(session_id)
+                    if isinstance(session_id, int)
+                    else None
+                )
+
+                should_requeue = (
+                    session_model is not None
+                    and session_model.status == BlogSessionStatus.QUEUED.value
+                    and session_model.current_stage != "requeued_by_reaper"
+                    and active_lease is None
+                )
+
+                if should_requeue:
+                    moved = await self._queue.requeue_processing_entry(job_json)
+                    if moved:
+                        reclaimed += 1
+                        logger.warning("queue_processing_entry_requeued", session_id=session_id)
+                    continue
+
+                removed = await self._queue.remove_processing_entry(job_json)
+                if removed:
+                    cleaned += 1
+                    logger.info("queue_processing_entry_cleaned", session_id=session_id)
+
+            if reclaimed > 0:
+                logger.info("queue_reclaimed", count=reclaimed)
+            if cleaned > 0:
+                logger.info("queue_cleaned", count=cleaned)
+
+    async def _reconcile_queued_sessions(self) -> None:
+        async with AsyncSessionFactory() as session:
             try:
-                payload = json.loads(job_json)
-                session_id = payload.get("session_id")
-            except Exception:
-                pass
+                session_repo = BlogSessionRepository(session)
+                version_repo = BlogVersionRepository(session)
+                tracked_session_ids = await self._queue.get_tracked_session_ids()
+                queued_sessions = await session_repo.get_queued_without_active_leases()
 
-            removed = await self._queue.remove_processing_entry(job_json)
-            if removed:
-                cleaned += 1
-                logger.info("queue_processing_entry_cleaned", session_id=session_id)
+                requeued = 0
+                for session_model in queued_sessions:
+                    if session_model.id in tracked_session_ids:
+                        continue
 
-        if cleaned > 0:
-            logger.info("queue_cleaned", count=cleaned)
+                    active_version = await version_repo.get_active_for_session(session_model.id)
+                    phase = (
+                        session_model.job_phase
+                        or (active_version.job_phase if active_version else None)
+                        or BlogJobPhase.FRESH_GENERATION.value
+                    )
+                    job = BlogJob(
+                        session_id=session_model.id,
+                        user_id=session_model.user_id,
+                        adk_session_id=(
+                            (active_version.adk_session_id if active_version else None)
+                            or session_model.adk_session_id
+                        ),
+                        topic=session_model.topic,
+                        audience=session_model.audience,
+                        tone=session_model.tone,
+                        phase=phase,
+                        feedback_text=active_version.feedback_text if active_version else None,
+                    )
+                    await self._queue.enqueue(job)
+                    tracked_session_ids.add(session_model.id)
+                    requeued += 1
+                    logger.warning(
+                        "queued_session_reconciled",
+                        session_id=session_model.id,
+                        phase=phase,
+                    )
+
+                await session.commit()
+                if requeued > 0:
+                    logger.info("queued_session_reconciliation_completed", count=requeued)
+            except Exception as e:
+                await session.rollback()
+                logger.error("queued_session_reconciliation_failed", error=str(e))
 
     def _recovery_phase_for_session(
         self,

@@ -51,12 +51,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app, required: bool = False):
         super().__init__(app)
-        print("Auth Middleware initialized!, this call is from auth middleware", flush=True)
         self.required = required
         self.local_auth = LocalAuthService()
 
     async def dispatch(self, request: Request, call_next: Callable):
-        print("Auth Middleware dispatch called!, this call is from auth middleware", flush=True)
         request.state.user_id = None
         request.state.user_email = None
         request.state.user_display_name = None
@@ -64,14 +62,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.authenticated = False
 
         if self._is_public_route(request.url.path):
-            print("Public route!, this call is from auth middleware", flush=True)
             return await call_next(request)
         if request.url.path.startswith("/internal/ai"):
-            print("Internal route!, this call is from auth middleware", flush=True)
             return await call_next(request)
 
         token = self._extract_token(request)
-        print("Token extracted!, this call is from auth middleware", flush=True)
         if token:
             try:
                 payload = self.local_auth.decode_token(token)
@@ -84,19 +79,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 logger.warning("auth_token_invalid", path=request.url.path, error=str(exc))
 
         if self.required and not request.state.authenticated:
-            print("Authentication required!, this call is from auth middleware", flush=True)
             raise HTTPException(status_code=401, detail="Authentication required")
-        print("Authentication passed!, this call is from auth middleware", flush=True)
         return await call_next(request)
 
     def _extract_token(self, request: Request) -> str | None:
-        print("Extracting token!, this call is from auth middleware", flush=True)
         cookie_token = request.cookies.get(AUTH_COOKIE_NAME)
-        print("Cookie token extracted!, this call is from auth middleware", flush=True)
         if cookie_token:
             return cookie_token
         auth_header = request.headers.get("Authorization")
-        print("Auth header extracted!, this call is from auth middleware", flush=True)
         if auth_header and auth_header.startswith("Bearer "):
             return auth_header.split(" ", 1)[1]
         return None
@@ -114,13 +104,9 @@ class OptionalAuthMiddleware(AuthMiddleware):
 
 
 def get_current_user(request: Request) -> AuthenticatedUser | None:
-    print("Getting current user!, this call is from auth middleware", flush=True)
     user_id = getattr(request.state, "user_id", None)
-    print("User id extracted!, this call is from auth middleware", flush=True)
     if not user_id:
-        print("No user id found!, this call is from auth middleware", flush=True)
         return None
-    print("User id found!, this call is from auth middleware", flush=True)
     return AuthenticatedUser(
         user_id=str(user_id),
         email=getattr(request.state, "user_email", None),

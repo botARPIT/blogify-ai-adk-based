@@ -145,6 +145,7 @@ class SessionLeaseRepository:
         result = await self._session.execute(
             select(SessionLease)
             .where(
+                
                 SessionLease.ended_at.is_(None),
                 SessionLease.lease_expires_at < threshold,
                 BlogSession.status == BlogSessionStatus.PROCESSING
