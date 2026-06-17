@@ -19,6 +19,7 @@ from src.api.routes.blog_routes import router as blog_router
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
 from src.core.errors import register_exception_handlers
+from src.monitoring import metrics_endpoint
 
 setup_logging(
     config.log_level,
@@ -64,6 +65,7 @@ app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(health.router, prefix=API_PREFIX, tags=["Health"])
 app.include_router(auth_router, prefix=API_PREFIX, tags=["Auth"])
 app.include_router(blog_router, prefix=API_PREFIX, tags=["Blogs"])
+app.get("/metrics", tags=["Metrics"])(metrics_endpoint)
 
 
 @app.get("/", tags=["Root"])
