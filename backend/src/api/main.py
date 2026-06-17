@@ -20,6 +20,7 @@ from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
 from src.core.errors import register_exception_handlers
 from src.monitoring import metrics_endpoint
+
 setup_logging(
     config.log_level,
     log_format=config.log_format,
