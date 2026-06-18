@@ -24,6 +24,7 @@ from src.models.repositories.budget_account_repository import BudgetAccountRepos
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.research_sources_repository import ResearchSourcesRepository
 from src.models.repositories.session_reservation_repository import SessionReservationRepository
+from src.monitoring.tracing import trace_span
 from src.services.budget_service import BudgetService
 
 
@@ -45,19 +46,25 @@ class PipelineExecutor:
         self._sources_repo = ResearchSourcesRepository(session)
 
     async def execute(self, job: BlogJob) -> None:
-        try:
-            if job.phase == BlogJobPhase.FRESH_GENERATION.value:
-                await self._execute_fresh_generation(job)
-            elif job.phase == BlogJobPhase.RESUME_OUTLINE.value:
-                await self._execute_resume_outline(job)
-            elif job.phase == BlogJobPhase.RESEARCH_PHASE.value:
-                await self._execute_research_phase(job)
-            elif job.phase == BlogJobPhase.REVISION.value:
-                await self._execute_revision(job)
-            else:
-                raise ValueError(f"Unknown job phase: {job.phase}")
-        except Exception as e:
-            await self._handle_failure(job, str(e))
+        with trace_span("pipeline_executor.execute", {
+            "job_phase": job.phase,
+            "adk_session_id": str(job.adk_session_id),
+            "user_id": str(job.user_id),
+        }) as span:
+            try:
+                if job.phase == BlogJobPhase.FRESH_GENERATION.value:
+                    await self._execute_fresh_generation(job)
+                elif job.phase == BlogJobPhase.RESUME_OUTLINE.value:
+                    await self._execute_resume_outline(job)
+                elif job.phase == BlogJobPhase.RESEARCH_PHASE.value:
+                    await self._execute_research_phase(job)
+                elif job.phase == BlogJobPhase.REVISION.value:
+                    await self._execute_revision(job)
+                else:
+                    raise ValueError(f"Unknown job phase: {job.phase}")
+            except Exception as e:
+                span.record_exception(e)
+                await self._handle_failure(job, str(e))
 
     async def _execute_fresh_generation(self, job: BlogJob) -> None:
         """Run ``run_pipeline()`` over the full app pipeline for a brand-new generation.

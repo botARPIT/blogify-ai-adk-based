@@ -18,6 +18,7 @@ from src.core.database import AsyncSessionFactory
 from src.core.redis_pool import get_redis_client
 from src.core.task_queue import TaskQueue
 from src.models.repositories.session_lease_repository import SessionLeaseRepository
+from src.monitoring.tracing import init_tracing
 from src.workers.executor import PipelineExecutor
 
 # Reaper is a separate standalone process — do not import here.
@@ -27,6 +28,7 @@ setup_logging(
     log_format=config.log_format,
     mask_secrets=config.mask_secrets_in_logs,
 )
+init_tracing(service_name="blogify-worker")
 logger = get_logger(__name__)
 
 WORKER_ID = f"worker-{socket.gethostname()}-{os.getpid()}"
