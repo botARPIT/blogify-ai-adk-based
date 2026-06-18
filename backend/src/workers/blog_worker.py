@@ -14,11 +14,11 @@ from datetime import datetime, timezone
 
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
-from src.monitoring.tracing import init_tracing
 from src.core.database import AsyncSessionFactory
 from src.core.redis_pool import get_redis_client
 from src.core.task_queue import TaskQueue
 from src.models.repositories.session_lease_repository import SessionLeaseRepository
+from src.monitoring.tracing import init_tracing
 from src.workers.executor import PipelineExecutor
 
 # Reaper is a separate standalone process — do not import here.
