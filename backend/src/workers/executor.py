@@ -24,8 +24,9 @@ from src.models.repositories.budget_account_repository import BudgetAccountRepos
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.research_sources_repository import ResearchSourcesRepository
 from src.models.repositories.session_reservation_repository import SessionReservationRepository
-from src.services.budget_service import BudgetService
 from src.monitoring.tracing import trace_span
+from src.services.budget_service import BudgetService
+
 
 class PipelineExecutor:
     def __init__(self, session: AsyncSession) -> None:
