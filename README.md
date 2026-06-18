@@ -272,9 +272,28 @@ Provisioned dashboards:
 
 ### Distributed Tracing (Tempo)
 
-OTLP traces exported to Tempo at `http://localhost:4317`.
-Integrated via `OTEL_EXPORTER_OTLP_ENDPOINT`.
-SQLAlchemy and FastAPI instrumentation are active when OTEL dependencies are present.
+OTLP traces exported to Tempo at `http://localhost:4317` via `OTEL_EXPORTER_OTLP_ENDPOINT`.
+Each blog generation job creates a root span (`pipeline_executor.execute`) that captures
+`job_phase`, `user_id`, and `adk_session_id`. All Google ADK agent invocations are
+automatically recorded as child spans — providing full end-to-end visibility into the
+multi-agent pipeline without per-agent instrumentation.
+
+Query all worker traces in Grafana Explore (TraceQL):
+```
+{resource.service.name="blogify-worker"}
+```
+
+**Trace list + span waterfall for a complete blog generation (14 ADK agent spans):**
+
+![Trace list and span waterfall in Grafana Tempo](backend/docs/images/tracing-trace-list-waterfall.png)
+
+**Full agent hierarchy for a 55s blog generation — 26 auto-instrumented ADK spans:**
+
+![26-span ADK agent waterfall](backend/docs/images/tracing-agent-waterfall-26spans.png)
+
+**Error tracking: failed agent spans captured with full stack trace and status ERROR:**
+
+![Error span detail showing RESOURCE_EXHAUSTED on invoke_agent](backend/docs/images/tracing-error-span-detail.png)
 
 ## Environment Profiles
 
