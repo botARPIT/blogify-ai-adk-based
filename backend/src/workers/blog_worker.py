@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
+from src.monitoring.tracing import init_tracing
 from src.core.database import AsyncSessionFactory
 from src.core.redis_pool import get_redis_client
 from src.core.task_queue import TaskQueue
@@ -27,6 +28,7 @@ setup_logging(
     log_format=config.log_format,
     mask_secrets=config.mask_secrets_in_logs,
 )
+init_tracing(service_name="blogify-worker")
 logger = get_logger(__name__)
 
 WORKER_ID = f"worker-{socket.gethostname()}-{os.getpid()}"

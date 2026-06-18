@@ -25,7 +25,7 @@ Production-grade, multi-agent blog generation system built on **Google ADK**, **
 | API | FastAPI (Python 3.11+) |
 | AI Orchestration | Google ADK |
 | Background Worker | Custom async worker (`src.workers.blog_worker`) |
-| Queue | Redis (List/Sorted Set) |
+| Queue | Redis (List/Stream) |
 | Database | PostgreSQL 16 (SQLAlchemy + asyncpg + Alembic) |
 | Frontend | React 19 + TypeScript + Vite |
 | Observability | Prometheus · Grafana · Tempo (OTLP) |
@@ -203,11 +203,6 @@ curl http://localhost:8000/api/v1/blogs/{session_id}/content
 ### Get Budget
 ```bash
 curl http://localhost:8000/api/v1/blogs/budget
-```
-
-### Prometheus Metrics
-```bash
-curl http://localhost:8000/metrics
 ```
 
 ## Project Structure
