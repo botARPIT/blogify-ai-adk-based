@@ -40,11 +40,6 @@ const BudgetPage: React.FC = () => {
           <p className="text-secondary">{budget.balance_tokens?.toLocaleString() ?? 0} tokens available</p>
         </div>
 
-        <div className="bento-card panel-card">
-          <span className="eyebrow-label">Daily Blog Limit Left</span>
-          <h3 className="stat-number">{budget.daily_blog_limit_left ?? 0}</h3>
-          <p className="text-secondary">Sessions remaining today</p>
-        </div>
       </div>
 
       <div className="bento-card panel-card">

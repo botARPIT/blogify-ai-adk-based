@@ -1,5 +1,7 @@
 """Schema-based input validation for blog generation requests."""
 
+from src.models.schemas import Tone
+
 
 class InputGuard:
     """Validates blog generation input using schema rules (not keyword matching)."""
@@ -50,10 +52,13 @@ class InputGuard:
                 return False, f"Audience must not exceed {self.AUDIENCE_MAX_LENGTH} characters"
 
         if tone is not None:
-            if not isinstance(tone, str):
-                return False, "Tone must be a string"
-            if len(tone.strip()) > self.TONE_MAX_LENGTH:
-                return False, f"Tone must not exceed {self.TONE_MAX_LENGTH} characters"
+            if isinstance(tone, str):
+                tone = tone.strip().lower()
+            try:
+                Tone(tone)
+            except (ValueError, TypeError):
+                valid = ", ".join(t.value for t in Tone)
+                return False, f"Tone must be one of: {valid}"
 
         return True, ""
 

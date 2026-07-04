@@ -11,6 +11,7 @@ import { getRouteForStatus } from '../lib/session-routing';
 import StatusBadge from '../components/session/StatusBadge';
 import LoadingState from '../components/state/LoadingState';
 import { useBudgetPolling } from '../hooks/useBudgetPolling';
+import ToneSelect from '../components/ToneSelect';
 
 interface SessionItem {
   session_id: number;
@@ -26,7 +27,7 @@ interface SessionItem {
 const DashboardPage: React.FC = () => {
   const [topic, setTopic] = useState('');
   const [audience, setAudience] = useState('');
-  const [tone, setTone] = useState('Practical');
+  const [tone, setTone] = useState('professional');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [recentSessions, setRecentSessions] = useState<SessionItem[]>([]);
@@ -191,12 +192,19 @@ const DashboardPage: React.FC = () => {
 
             <div className="mb-md">
               <label className="eyebrow-label">Tone Direction</label>
-              <input
-                className="brutalist-input"
-                type="text"
+              <ToneSelect
                 value={tone}
-                onChange={(e) => setTone(e.target.value)}
-                placeholder="e.g. practical, executive, technical"
+                onChange={setTone}
+                options={[
+                  { value: 'professional', label: 'Professional' },
+                  { value: 'practical', label: 'Practical' },
+                  { value: 'technical', label: 'Technical' },
+                  { value: 'executive', label: 'Executive' },
+                  { value: 'casual', label: 'Casual' },
+                  { value: 'inspirational', label: 'Inspirational' },
+                  { value: 'persuasive', label: 'Persuasive' },
+                  { value: 'authoritative', label: 'Authoritative' },
+                ]}
               />
             </div>
             
@@ -237,11 +245,8 @@ const DashboardPage: React.FC = () => {
                   maxHeight: '400px', 
                   overflowY: 'auto', 
                   scrollSnapType: 'y mandatory',
-                  scrollbarWidth: 'none',
-                  msOverflowStyle: 'none'
                 }}
               >
-                <style>{`.session-list::-webkit-scrollbar { display: none; }`}</style>
                 {recentSessions.map((session) => (
                   <li 
                     key={session.session_id} 
@@ -283,20 +288,8 @@ const DashboardPage: React.FC = () => {
             <p className="text-secondary">{budgetError}</p>
           ) : budget ? (
             <div className="stat-stack">
-              <div className="meta-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
-                  <span className="eyebrow-label" style={{ margin: 0 }}>Daily Blogs Remaining</span>
-                  <span className="meta-value">{budget.daily_blog_limit_left || 0} / 100</span>
-                </div>
-                <div className="progress-bar-container">
-                  <div 
-                    className="progress-bar-fill" 
-                    style={{ width: `${Math.max(0, Math.min(100, ((budget.daily_blog_limit_left || 0) / 100) * 100))}%` }} 
-                  />
-                </div>
-              </div>
               <div className="meta-row">
-                <span className="eyebrow-label" style={{ margin: 0 }}>Remaining Credits</span>
+                <span className="eyebrow-label" style={{ margin: 0 }}>Remaining Tokens</span>
                 <span className="meta-value">{(budget.balance_tokens || 0).toLocaleString()}</span>
               </div>
               <div className="meta-row">

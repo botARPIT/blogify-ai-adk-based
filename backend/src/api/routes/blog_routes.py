@@ -36,6 +36,7 @@ from src.models.schemas import (
 from src.services.blog_service import BlogService
 from src.services.budget_service import BudgetService
 from src.services.exceptions import InsufficientBudgetError, SessionTerminalError
+from src.services.rate_limiter import blog_generation_limit
 
 router = APIRouter(prefix="/blogs", tags=["blogs"])
 
@@ -54,6 +55,7 @@ async def generate_blog(
     body: GenerateRequest,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     current_user: AuthenticatedUser = Depends(get_current_user),
+    _: None = Depends(blog_generation_limit),
     session: AsyncSession = Depends(get_db_session),
 ):
     is_valid, error_msg = input_guard.validate(body.topic, body.audience, body.tone)
@@ -220,6 +222,8 @@ async def get_budget(
 
     snapshot = await account_repo.get_snapshot(user_id)
 
+    max_tokens_per_user = 4_000_000
+
     # Derive token balance as: total_allocated_tokens - total_spent_tokens.
     # We convert both figures from USD using the same Gemini Flash rate so the
     # arithmetic is consistent. Using available_usd alone would re-derive the
@@ -228,7 +232,7 @@ async def get_budget(
     if price_per_token > 0:
         total_granted_tokens = int(float(snapshot["total_granted_usd"]) / price_per_token)
         total_spent_tokens = int(float(snapshot["total_spent_usd"]) / price_per_token)
-        balance_tokens = max(0, total_granted_tokens - total_spent_tokens)
+        balance_tokens = max(0, min(max_tokens_per_user, total_granted_tokens - total_spent_tokens))
     else:
         balance_tokens = 0
 
@@ -268,9 +272,7 @@ async def get_session_status(
     )
     latest_agent_run = result.scalar_one_or_none()
 
-    current_agent = None
-    if latest_agent_run and latest_agent_run.status == "RUNNING":
-        current_agent = latest_agent_run.stage_name
+    current_agent = latest_agent_run.stage_name if latest_agent_run else None
 
     return SessionStatusResponse(
         session_id=blog_session.id,
