@@ -220,10 +220,17 @@ async def get_budget(
 
     snapshot = await account_repo.get_snapshot(user_id)
 
-    # Derive token equivalent from available USD at Gemini Flash rate
+    # Derive token balance as: total_allocated_tokens - total_spent_tokens.
+    # We convert both figures from USD using the same Gemini Flash rate so the
+    # arithmetic is consistent. Using available_usd alone would re-derive the
+    # USD balance in token units (not subtracting spent tokens correctly).
     price_per_token = MODEL_PRICING["gemini-2.5-flash"] / 1000  # USD per token
-    available_usd = float(snapshot["available_usd"])
-    balance_tokens = int(available_usd / price_per_token) if price_per_token > 0 else 0
+    if price_per_token > 0:
+        total_granted_tokens = int(float(snapshot["total_granted_usd"]) / price_per_token)
+        total_spent_tokens = int(float(snapshot["total_spent_usd"]) / price_per_token)
+        balance_tokens = max(0, total_granted_tokens - total_spent_tokens)
+    else:
+        balance_tokens = 0
 
     active_count = await session_repo.count_active_for_user(user_id)
     daily_limit = 1

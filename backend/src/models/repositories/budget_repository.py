@@ -65,3 +65,17 @@ class BudgetRepository:
             )
         )
         return result.scalar() or Decimal("0")
+
+    async def get_committed_tokens_for_session(self, blog_session_id: int) -> int:
+        """Sum tokens across all COMMIT entries for the session.
+
+        COMMIT entries store tokens as negative integers; the caller should
+        take abs() to convert to a positive count.
+        """
+        result = await self._session.execute(
+            select(func.coalesce(func.sum(BudgetLedger.tokens), 0)).where(
+                BudgetLedger.blog_session_id == blog_session_id,
+                BudgetLedger.entry_type == BudgetEntryType.COMMIT,
+            )
+        )
+        return int(result.scalar() or 0)

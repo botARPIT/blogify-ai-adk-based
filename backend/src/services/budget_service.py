@@ -3,11 +3,14 @@
 from decimal import Decimal
 
 from src.config.budget_config import ESTIMATED_TOKENS_PER_BLOG
+from src.config.logging_config import get_logger
 from src.models.orm_models import BudgetEntryType
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.session_reservation_repository import SessionReservationRepository
+
+logger = get_logger(__name__)
 
 
 class BudgetService:
@@ -108,18 +111,32 @@ class BudgetService:
     async def release_excess(self, *, user_id: int, blog_session_id: int) -> None:
         """Release the unspent portion of the reservation after a successful run.
 
-        Reads reserved_usd from session_reservations to avoid stale-session bugs.
+        Reads actual cost from the budget_ledger (summing COMMIT entries) rather
+        than blog_sessions.budget_spent_usd. The session column is a denormalized
+        cache that may not reflect in-flight flush state when this method is called
+        within the same SQLAlchemy transaction as commit_stage — causing a stale
+        read and a zero deduction. The ledger is always consistent because
+        commit_stage writes COMMIT entries via flush() in the same session/tx.
         """
         reservation = await self._reservation_repo.get_by_session(blog_session_id)
         if not reservation:
+            logger.warning(
+                "release_excess_no_active_reservation",
+                blog_session_id=blog_session_id,
+                user_id=user_id,
+            )
             return
 
         reserved_usd = reservation.reserved_usd
 
-        # get actual spends from blog_sessions
-        session = await self._session_repo.get_by_id(blog_session_id)
-        actual_usd = session.budget_spent_usd if session else Decimal("0")
-        actual_tokens = session.budget_spent_tokens if session else 0
+        # Read actual cost from the authoritative ledger, not the derived session column.
+        # COMMIT entries are stored as negative values; abs() converts to deductible amount.
+        committed_usd = await self._budget_repo.get_committed_for_session(blog_session_id)
+        actual_usd = abs(committed_usd)
+
+        committed_tokens = await self._budget_repo.get_committed_tokens_for_session(blog_session_id)
+        actual_tokens = abs(committed_tokens)
+
         await self._account_repo.apply_commit(
             user_id=user_id,
             reserved_usd=reserved_usd,
@@ -136,6 +153,15 @@ class BudgetService:
             tokens=actual_tokens,
             amount_usd=actual_usd,
             note="Excess budget released after successful generation",
+        )
+
+        logger.info(
+            "release_excess_committed",
+            blog_session_id=blog_session_id,
+            user_id=user_id,
+            reserved_usd=str(reserved_usd),
+            actual_usd=str(actual_usd),
+            actual_tokens=actual_tokens,
         )
 
     async def release_all(self, *, user_id: int, blog_session_id: int) -> None:
