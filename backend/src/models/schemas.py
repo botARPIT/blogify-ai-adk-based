@@ -1,9 +1,10 @@
 """Pydantic schemas for V1 API contract and agent I/O."""
 
+import re
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Agent I/O schemas (used by ADK agents - NOT part of API contract)
@@ -80,10 +81,37 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=8)
     display_name: str | None = None
 
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower()
+
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not re.search(r"\d", v):
+            raise ValueError("Password must contain at least one digit")
+        return v
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, v: str | None) -> str | None:
+        if v is not None:
+            v = v.strip()
+            if len(v) < 1:
+                raise ValueError("Display name cannot be empty")
+            if len(v) > 100:
+                raise ValueError("Display name must be 100 characters or fewer")
+        return v
+
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1)
 
 
 class TokenResponse(BaseModel):

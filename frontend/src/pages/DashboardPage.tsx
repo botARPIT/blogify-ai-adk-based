@@ -301,7 +301,7 @@ const DashboardPage: React.FC = () => {
               </div>
               <div className="meta-row">
                 <span className="eyebrow-label" style={{ margin: 0 }}>Balance USD</span>
-                <span className="meta-value" style={{ color: 'var(--accent-color)' }}>${(budget.balance_usd || 0).toFixed(2)}</span>
+                <span className="meta-value" style={{ color: 'var(--accent-color)' }}>${(Math.floor((budget.balance_usd || 0) * 100) / 100).toFixed(2)}</span>
               </div>
               <button className="brutalist-button secondary" type="button" onClick={() => navigate('/budget')} style={{ marginTop: '1rem' }}>
                 Open Budget View

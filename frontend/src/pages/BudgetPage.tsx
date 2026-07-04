@@ -36,7 +36,7 @@ const BudgetPage: React.FC = () => {
 
         <div className="bento-card panel-card">
           <span className="eyebrow-label">Balance</span>
-          <h3 className="stat-number text-accent">${(budget.balance_usd ?? 0).toFixed(2)}</h3>
+          <h3 className="stat-number text-accent">${(Math.floor((budget.balance_usd ?? 0) * 100) / 100).toFixed(2)}</h3>
           <p className="text-secondary">{budget.balance_tokens?.toLocaleString() ?? 0} tokens available</p>
         </div>
 

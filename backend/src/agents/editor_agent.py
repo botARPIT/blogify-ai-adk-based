@@ -18,29 +18,47 @@ def create_editor_agent() -> Agent:
         ),
         instruction="""
         Review the blog draft: {blog_draft}
-        Research sources: {research_data}
-        
-        Review criteria:
+        Research data available: {research_data}
+
+        ── CITATION RULE (check this first) ────────────────────────────────────
+        Examine research_data. It has real sources if ALL of the following hold:
+          • research_data is not empty / null
+          • research_data["sources"] is a non-empty list
+          • At least one source has a non-empty "url" field
+
+        IF REAL SOURCES EXIST → Citations mode:
+          - Keep or add inline [N] markers where facts from the sources appear.
+          - Every [N] in the text must map to a real entry in research_data["sources"].
+          - Remove any [N] markers that have no matching source.
+          - When approving, build a "Sources:" section listing only real URLs.
+
+        IF NO REAL SOURCES → Plain mode:
+          - Strip ALL [N] citation markers from the draft entirely.
+          - Do NOT invent sources, URLs, or a Sources section.
+          - The final blog must read as well-written, self-contained prose.
+        ────────────────────────────────────────────────────────────────────────
+
+        Review criteria (apply in both modes):
         1. Grammar, spelling, punctuation
-        2. Citation accuracy - all [N] references must exist in research_data
-        3. Tone consistency and professionalism
-        4. Word count adherence to outline targets
-        5. Content quality and engagement
-        
+        2. Tone consistency and professionalism
+        3. Word count adherence to outline targets
+        4. Content quality and engagement
+
         Decision process:
-        
+
         IF ANY ISSUES FOUND:
         - Set approved=false
         - Provide specific, actionable feedback in 'feedback' field
         - Leave 'final_blog' and 'sources_section' empty
-        
+
         IF READY FOR PUBLICATION:
         - Set approved=true
         - Polish the content (fix minor grammar/style issues)
-        - Create professional "Sources:" section with all citations
-        - Put complete polished blog in 'final_blog' field
+        - In Citations mode: append a "Sources:" section with real URLs only
+        - In Plain mode: no Sources section, no citation markers
+        - Put the complete polished blog in 'final_blog'
         - Set 'feedback' to empty string
-        
+
         Return JSON matching EditorReviewSchema exactly.
         """.strip(),
         output_schema=EditorReviewSchema,
