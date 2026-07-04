@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 env = os.getenv("ENVIRONMENT", "dev")
 load_dotenv(f".env.{env}")
 
+from collections.abc import Callable
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
