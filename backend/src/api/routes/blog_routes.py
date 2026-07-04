@@ -8,7 +8,6 @@ from src.core.database import get_db_session
 from src.core.redis_pool import get_redis_client
 from src.core.task_queue import task_queue
 from src.guards.input_guard import InputGuard
-from src.services.rate_limiter import blog_generation_limit
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.blog_version_repository import BlogVersionRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
@@ -37,6 +36,7 @@ from src.models.schemas import (
 from src.services.blog_service import BlogService
 from src.services.budget_service import BudgetService
 from src.services.exceptions import InsufficientBudgetError, SessionTerminalError
+from src.services.rate_limiter import blog_generation_limit
 
 router = APIRouter(prefix="/blogs", tags=["blogs"])
 
@@ -222,7 +222,7 @@ async def get_budget(
 
     snapshot = await account_repo.get_snapshot(user_id)
 
-    MAX_TOKENS_PER_USER = 4_000_000
+    max_tokens_per_user = 4_000_000
 
     # Derive token balance as: total_allocated_tokens - total_spent_tokens.
     # We convert both figures from USD using the same Gemini Flash rate so the
@@ -232,7 +232,7 @@ async def get_budget(
     if price_per_token > 0:
         total_granted_tokens = int(float(snapshot["total_granted_usd"]) / price_per_token)
         total_spent_tokens = int(float(snapshot["total_spent_usd"]) / price_per_token)
-        balance_tokens = max(0, min(MAX_TOKENS_PER_USER, total_granted_tokens - total_spent_tokens))
+        balance_tokens = max(0, min(max_tokens_per_user, total_granted_tokens - total_spent_tokens))
     else:
         balance_tokens = 0
 
