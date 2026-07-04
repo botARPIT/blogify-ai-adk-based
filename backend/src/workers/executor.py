@@ -24,6 +24,13 @@ from src.models.repositories.budget_account_repository import BudgetAccountRepos
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.research_sources_repository import ResearchSourcesRepository
 from src.models.repositories.session_reservation_repository import SessionReservationRepository
+from src.monitoring.metrics import (
+    agent_cost_usd,
+    agent_invocations_total,
+    agent_token_usage,
+    blog_generation_duration_seconds,
+    blog_generations_total,
+)
 from src.monitoring.tracing import trace_span
 from src.services.budget_service import BudgetService
 
@@ -269,6 +276,7 @@ class PipelineExecutor:
         )
 
     async def _handle_failure(self, job: BlogJob, error: str) -> None:
+        blog_generations_total.labels(status="failed").inc()
         active_version = await self._get_active_version(job.session_id)
         if active_version:
             await self._version_repo.update_version_state(
@@ -329,6 +337,16 @@ class PipelineExecutor:
                     output_snapshot=output_snapshot,
                 )
                 agent_run_id = agent_run.id
+
+            # --- Prometheus metrics ---
+            cost_usd_value = float(get_model_cost(cost.model, cost.total_tokens))
+            agent_invocations_total.labels(agent_name=cost.stage, success="true").inc()
+            agent_token_usage.labels(agent_name=cost.stage).observe(cost.total_tokens)
+            agent_cost_usd.labels(agent_name=cost.stage).observe(cost_usd_value)
+            if latency_ms is not None:
+                blog_generation_duration_seconds.labels(stage=cost.stage).observe(
+                    latency_ms / 1000
+                )
 
             await self._budget_service.commit_stage(
                 user_id=job.user_id,

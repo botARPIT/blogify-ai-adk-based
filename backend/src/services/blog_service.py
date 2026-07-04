@@ -13,6 +13,7 @@ from src.models.orm_models import (
 )
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.blog_version_repository import BlogVersionRepository
+from src.monitoring.metrics import blog_generations_total
 from src.services.budget_service import BudgetService
 from src.services.exceptions import SessionTerminalError
 
@@ -57,6 +58,7 @@ class BlogService:
 
         active_count = await self._session_repo.count_active_for_user(user_id)
         if active_count >= self.MAX_ACTIVE_SESSIONS_PER_USER:
+            blog_generations_total.labels(status="failed").inc()
             raise ValueError("User already has an active generation")
 
         adk_session_id = str(uuid.uuid4())
@@ -104,6 +106,7 @@ class BlogService:
             phase=BlogJobPhase.FRESH_GENERATION.value,
         )
         await self._task_queue.enqueue(job)
+        blog_generations_total.labels(status="initiated").inc()
 
         return session
 
@@ -187,6 +190,7 @@ class BlogService:
             session.status = BlogSessionStatus.COMPLETED.value
             session.completed_at = datetime.now(timezone.utc)
             session.updated_at = datetime.now(timezone.utc)
+            blog_generations_total.labels(status="completed").inc()
             if active_version:
                 await self._version_repo.update_version_state(
                     active_version.id,

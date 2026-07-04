@@ -1,16 +1,20 @@
 """FastAPI main application for Blogify V1."""
 
 import os
+import time
 
 from dotenv import load_dotenv
 
 env = os.getenv("ENVIRONMENT", "dev")
 load_dotenv(f".env.{env}")
 
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Match
 
 from src.api.auth import AuthMiddleware
 from src.api.routes import health
@@ -20,6 +24,8 @@ from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
 from src.core.errors import register_exception_handlers
 from src.monitoring import metrics_endpoint
+from src.monitoring.metrics import http_request_duration_seconds, http_requests_total
+from src.monitoring.tracing import init_tracing, instrument_app
 
 setup_logging(
     config.log_level,
@@ -29,8 +35,40 @@ setup_logging(
 logger = get_logger(__name__)
 
 
+class PrometheusMiddleware(BaseHTTPMiddleware):
+    """Record http_requests_total and http_request_duration_seconds for every request."""
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        start = time.perf_counter()
+        response = await call_next(request)
+        elapsed = time.perf_counter() - start
+
+        # Resolve route template (e.g. /api/v1/blogs/{session_id}) to avoid
+        # high-cardinality metric labels from raw path IDs.
+        endpoint = request.url.path
+        for route in request.app.routes:
+            match, _ = route.matches(request.scope)
+            if match == Match.FULL:
+                endpoint = getattr(route, "path", endpoint)
+                break
+
+        method = request.method
+        status_code = str(response.status_code)
+
+        http_requests_total.labels(
+            method=method, endpoint=endpoint, status_code=status_code
+        ).inc()
+        http_request_duration_seconds.labels(
+            method=method, endpoint=endpoint
+        ).observe(elapsed)
+
+        return response
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_tracing(service_name="blogify-api")
+    instrument_app(app)
     logger.info("application_startup", environment=config.environment)
     yield
     logger.info("application_shutdown")
@@ -49,6 +87,8 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+# PrometheusMiddleware must be outermost (added last = executed first in Starlette)
+app.add_middleware(PrometheusMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins,
