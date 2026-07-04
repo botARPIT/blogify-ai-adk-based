@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Any
 
 from src.config.logging_config import get_logger
+from src.monitoring.metrics import circuit_breaker_failures_total, circuit_breaker_state
 
 logger = get_logger(__name__)
 
@@ -39,6 +40,7 @@ class CircuitBreaker:
             if time.time() - self._last_failure_time >= self.recovery_timeout:
                 self._state = CircuitState.HALF_OPEN
                 self._half_open_calls = 0
+                circuit_breaker_state.labels(circuit_name=self.name).set(2)  # 2 = half_open
                 logger.info("circuit_breaker_half_open", name=self.name)
         return self._state
 
@@ -49,6 +51,7 @@ class CircuitBreaker:
             if self._half_open_calls >= self.half_open_max_calls:
                 self._state = CircuitState.CLOSED
                 self._failure_count = 0
+                circuit_breaker_state.labels(circuit_name=self.name).set(0)  # 0 = closed
                 logger.info("circuit_breaker_closed", name=self.name)
         elif self._state == CircuitState.CLOSED:
             self._failure_count = 0
@@ -57,14 +60,17 @@ class CircuitBreaker:
         """Record a failed call."""
         self._failure_count += 1
         self._last_failure_time = time.time()
+        circuit_breaker_failures_total.labels(circuit_name=self.name).inc()
 
         if self._state == CircuitState.HALF_OPEN:
             self._state = CircuitState.OPEN
+            circuit_breaker_state.labels(circuit_name=self.name).set(1)  # 1 = open
             logger.warning(
                 "circuit_breaker_reopened", name=self.name, failure_count=self._failure_count
             )
         elif self._state == CircuitState.CLOSED and self._failure_count >= self.failure_threshold:
             self._state = CircuitState.OPEN
+            circuit_breaker_state.labels(circuit_name=self.name).set(1)  # 1 = open
             logger.warning(
                 "circuit_breaker_opened", name=self.name, failure_count=self._failure_count
             )

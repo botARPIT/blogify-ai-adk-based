@@ -9,6 +9,7 @@ from src.models.repositories.blog_session_repository import BlogSessionRepositor
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.session_reservation_repository import SessionReservationRepository
+from src.monitoring.metrics import budget_exceeded_total
 
 logger = get_logger(__name__)
 
@@ -46,7 +47,11 @@ class BudgetService:
         estimated_usd = Decimal(str(ESTIMATED_TOKENS_PER_BLOG)) * Decimal("0.00002")
         estimated_tokens = ESTIMATED_TOKENS_PER_BLOG
 
-        await self._account_repo.apply_reserve(user_id=user_id, amount_usd=estimated_usd)
+        try:
+            await self._account_repo.apply_reserve(user_id=user_id, amount_usd=estimated_usd)
+        except Exception:
+            budget_exceeded_total.labels(budget_type="per_user").inc()
+            raise
 
         await self._budget_repo.write_entry(
             user_id=user_id,
