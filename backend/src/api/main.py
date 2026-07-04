@@ -17,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Match
 
 from src.api.auth import AuthMiddleware
+from src.api.middleware.rate_limit import RateLimitMiddleware
 from src.api.routes import health
 from src.api.routes.auth_routes import router as auth_router
 from src.api.routes.blog_routes import router as blog_router
@@ -98,6 +99,7 @@ app.add_middleware(
 )
 
 app.add_middleware(AuthMiddleware, required=False)
+app.add_middleware(RateLimitMiddleware)
 
 register_exception_handlers(app)
 

@@ -2,6 +2,7 @@
 
 import re
 from datetime import datetime
+from enum import Enum
 from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
@@ -130,10 +131,21 @@ class UserResponse(BaseModel):
     last_login_at: datetime | None
 
 
+class Tone(str, Enum):
+    PROFESSIONAL = "professional"
+    PRACTICAL = "practical"
+    TECHNICAL = "technical"
+    EXECUTIVE = "executive"
+    CASUAL = "casual"
+    INSPIRATIONAL = "inspirational"
+    PERSUASIVE = "persuasive"
+    AUTHORITATIVE = "authoritative"
+
+
 class GenerateRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=500)
     audience: str = Field(default="general readers", max_length=255)
-    tone: str = Field(default="professional", max_length=100)
+    tone: Tone = Tone.PROFESSIONAL
     idempotency_key: str | None = Field(default=None, max_length=255)
 
 

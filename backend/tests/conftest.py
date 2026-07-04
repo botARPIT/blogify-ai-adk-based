@@ -61,7 +61,7 @@ def mock_redis():
     redis.zrangebyscore = AsyncMock(return_value=[])
     redis.zrange = AsyncMock(return_value=[])
     redis.lrange = AsyncMock(return_value=[])
-    redis.evalsha = AsyncMock(return_value=None)
+    redis.evalsha = AsyncMock(return_value=[1, 999, 9999999999])
     redis.eval = AsyncMock(return_value=None)
     redis.script_load = AsyncMock(return_value="test_sha")
     redis.keys = AsyncMock(return_value=[])
@@ -75,6 +75,8 @@ def mock_redis():
     patchers = [
         patch('src.core.redis_pool.get_redis_client', side_effect=mock_get_redis_client),
         patch('src.core.task_queue.get_redis_client', side_effect=mock_get_redis_client),
+        patch('src.services.rate_limiter.get_redis_client', side_effect=mock_get_redis_client),
+        patch('src.api.routes.blog_routes.get_redis_client', side_effect=mock_get_redis_client),
     ]
     for p in patchers:
         p.start()
@@ -106,17 +108,16 @@ def mock_session_factory(mock_db_session):
 def test_client():
     """Create test client.
 
-    The autouse ``mock_session_factory`` fixture already patches
-    ``AsyncSessionFactory`` with a proper ``AsyncMock`` that supports
-    ``__aenter__`` / ``__aexit__``.  Do **not** re-patch it here —
+    The autouse ``mock_redis`` and ``mock_session_factory`` fixtures already
+    patch ``get_redis_client`` (in every module that imports it) and
+    ``AsyncSessionFactory``.  Do **not** re-patch either of these here —
     doing so replaces the working ``AsyncMock`` with a bare ``MagicMock``
     whose async-context-manager protocol swallows awaits, causing the
     async generator inside ``get_db_session`` to deadlock and hang.
     """
-    with patch("src.core.redis_pool.get_redis_client", new_callable=AsyncMock):
-        from src.api.main import app
+    from src.api.main import app
 
-        return TestClient(app)
+    return TestClient(app)
 
 
 @pytest.fixture
