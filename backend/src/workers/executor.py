@@ -15,6 +15,7 @@ from src.agents.pipeline import (
 )
 from src.config.agent_config import agent_delay
 from src.config.budget_config import get_model_cost
+from src.config.logging_config import get_logger
 from src.core.task_queue import BlogJob
 from src.models.orm_models import AgentRunStatus, BlogJobPhase, BlogSessionStatus
 from src.models.repositories.agent_run_repository import AgentRunRepository
@@ -33,6 +34,8 @@ from src.monitoring.metrics import (
 )
 from src.monitoring.tracing import trace_span
 from src.services.budget_service import BudgetService
+
+logger = get_logger(__name__)
 
 
 class PipelineExecutor:
@@ -53,6 +56,14 @@ class PipelineExecutor:
         self._sources_repo = ResearchSourcesRepository(session)
 
     async def execute(self, job: BlogJob) -> None:
+        logger.info(
+            "executor_start",
+            phase=job.phase,
+            session_id=job.session_id,
+            user_id=str(job.user_id),
+            adk_session_id=str(job.adk_session_id),
+            topic=job.topic,
+        )
         with trace_span("pipeline_executor.execute", {
             "job_phase": job.phase,
             "adk_session_id": str(job.adk_session_id),
@@ -84,6 +95,12 @@ class PipelineExecutor:
         - otherwise research_agent
         - full_pipeline_draft_refinement_loop
         """
+        logger.info(
+            "executor_fresh_generation_start",
+            session_id=job.session_id,
+            topic=job.topic,
+            audience=job.audience,
+        )
         active_version = await self._get_active_version(job.session_id)
         result = await run_pipeline(
             topic=job.topic,
@@ -113,6 +130,12 @@ class PipelineExecutor:
         - research_agent
         - full_pipeline_draft_refinement_loop
         """
+        logger.info(
+            "executor_resume_outline_start",
+            session_id=job.session_id,
+            invocation_id=job.invocation_id,
+            has_feedback=bool(job.feedback_text),
+        )
         active_version = await self._get_active_version(job.session_id)
         result = await resume_pipeline(
             topic=job.topic,
@@ -142,6 +165,7 @@ class PipelineExecutor:
         - research_agent
         - phase_resume_draft_refinement_loop
         """
+        logger.info("executor_revision_start", session_id=job.session_id)
         active_version = await self._get_active_version(job.session_id)
         result = await run_pipeline_from_phase(
             phase="research_phase",
@@ -168,6 +192,7 @@ class PipelineExecutor:
         - research_agent
         - phase_resume_draft_refinement_loop
         """
+        logger.info("executor_research_phase_start", session_id=job.session_id)
         active_version = await self._get_active_version(job.session_id)
         result = await run_pipeline_from_phase(
             phase="research_phase",
@@ -187,6 +212,12 @@ class PipelineExecutor:
         await self._handle_success(job, result)
 
     async def _handle_outline_pause(self, job: BlogJob, result: PipelineResult) -> None:
+        logger.info(
+            "executor_outline_pause",
+            session_id=job.session_id,
+            confirmation_request_id=result.confirmation_request_id,
+            invocation_id=result.invocation_id,
+        )
         await self._commit_costs(job, result.costs)
         active_version = await self._get_active_version(job.session_id)
         normalized_research = self._normalize_research_data(result.research)
@@ -226,6 +257,20 @@ class PipelineExecutor:
         )
 
     async def _handle_success(self, job: BlogJob, result: PipelineResult) -> None:
+        total_tokens = sum(c.total_tokens for c in result.costs)
+        total_cost = sum(
+            float(get_model_cost(c.model, c.total_tokens)) for c in result.costs if c.total_tokens > 0
+        )
+        logger.info(
+            "executor_success",
+            session_id=job.session_id,
+            phase=job.phase,
+            total_tokens=total_tokens,
+            total_cost_usd=round(total_cost, 6),
+            stage_count=len(result.costs),
+            paused_for_confirmation=result.paused_for_confirmation,
+            has_final_content=bool(result.final_content),
+        )
         normalized_research = self._normalize_research_data(result.research)
         await self._commit_costs(job, result.costs, normalized_research)
         active_version = await self._get_active_version(job.session_id)
@@ -276,6 +321,12 @@ class PipelineExecutor:
         )
 
     async def _handle_failure(self, job: BlogJob, error: str) -> None:
+        logger.error(
+            "executor_failure",
+            session_id=job.session_id,
+            phase=job.phase,
+            error=error,
+        )
         blog_generations_total.labels(status="failed").inc()
         active_version = await self._get_active_version(job.session_id)
         if active_version:
@@ -310,10 +361,11 @@ class PipelineExecutor:
             if existing and existing.status == AgentRunStatus.COMPLETED:
                 continue
 
+            cost_usd = float(get_model_cost(cost.model, cost.total_tokens))
             output_snapshot: dict | None = {"stage": cost.stage, "costs": cost.__dict__.copy()}
 
+            latency_ms = None
             if existing:
-                latency_ms = None
                 if existing.started_at:
                     latency_ms = int(
                         (datetime.now(timezone.utc) - existing.started_at).total_seconds() * 1000
@@ -321,7 +373,7 @@ class PipelineExecutor:
                 await self._run_repo.update(
                     existing.id,
                     total_tokens=cost.total_tokens,
-                    cost_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
+                    cost_usd=Decimal(str(cost_usd)),
                     status=AgentRunStatus.COMPLETED,
                     latency_ms=latency_ms,
                     output_snapshot=output_snapshot,
@@ -347,6 +399,16 @@ class PipelineExecutor:
                 blog_generation_duration_seconds.labels(stage=cost.stage).observe(
                     latency_ms / 1000
                 )
+
+            logger.info(
+                "executor_stage_cost_committed",
+                session_id=job.session_id,
+                stage=cost.stage,
+                model=cost.model,
+                tokens=cost.total_tokens,
+                cost_usd=round(cost_usd_value, 6),
+                action="updated" if existing else "created",
+            )
 
             await self._budget_service.commit_stage(
                 user_id=job.user_id,
