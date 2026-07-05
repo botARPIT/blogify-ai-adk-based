@@ -214,15 +214,13 @@ async def get_budget(
     current_user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
-    from src.config.budget_config import MODEL_PRICING
+    from src.config.budget_config import MAX_TOKENS_PER_USER, MODEL_PRICING
 
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
     account_repo = BudgetAccountRepository(session)
 
     snapshot = await account_repo.get_snapshot(user_id)
-
-    max_tokens_per_user = 4_000_000
 
     # Derive token balance as: total_allocated_tokens - total_spent_tokens.
     # We convert both figures from USD using the same Gemini Flash rate so the
@@ -232,7 +230,7 @@ async def get_budget(
     if price_per_token > 0:
         total_granted_tokens = int(float(snapshot["total_granted_usd"]) / price_per_token)
         total_spent_tokens = int(float(snapshot["total_spent_usd"]) / price_per_token)
-        balance_tokens = max(0, min(max_tokens_per_user, total_granted_tokens - total_spent_tokens))
+        balance_tokens = max(0, min(MAX_TOKENS_PER_USER, total_granted_tokens - total_spent_tokens))
     else:
         balance_tokens = 0
 
@@ -272,7 +270,19 @@ async def get_session_status(
     )
     latest_agent_run = result.scalar_one_or_none()
 
-    current_agent = latest_agent_run.stage_name if latest_agent_run else None
+    current_agent = None
+    if blog_session.current_stage:
+        agent_by_stage = {
+            "intent": "intent_classifier",
+            "outline": "outline_agent",
+            "outline_review": "outline_review_agent",
+            "research": "research_agent",
+            "writer": "writer_agent",
+            "editor": "editor_agent",
+        }
+        current_agent = agent_by_stage.get(blog_session.current_stage)
+    if not current_agent and latest_agent_run:
+        current_agent = latest_agent_run.stage_name
 
     return SessionStatusResponse(
         session_id=blog_session.id,
