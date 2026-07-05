@@ -2,7 +2,6 @@
 
 from google.adk.agents import Agent
 from google.adk.models.google_llm import Gemini
-from google.adk.tools import google_search
 
 from src.config import RESEARCH_MODEL, create_retry_config
 from src.tools.tavily_research import research_topic
