@@ -71,6 +71,14 @@ class BlogWorker:
                     await session.rollback()
                     raise
 
+            logger.info(
+                "job_started",
+                session_id=hydrated_job.session_id,
+                phase=hydrated_job.phase,
+                topic=hydrated_job.topic,
+                worker_id=WORKER_ID,
+                invocation_id=hydrated_job.invocation_id,
+            )
             heartbeat_task = asyncio.create_task(self._job_heartbeat(hydrated_job.session_id))
             try:
                 async with AsyncSessionFactory() as session:
@@ -78,8 +86,19 @@ class BlogWorker:
                     await executor.execute(hydrated_job)
                     await session.commit()
                 await self._queue.acknowledge(job)
+                logger.info(
+                    "job_completed",
+                    session_id=hydrated_job.session_id,
+                    phase=hydrated_job.phase,
+                    worker_id=WORKER_ID,
+                )
             except Exception as e:
-                logger.error("job_failed", session_id=job.session_id, error=str(e))
+                logger.error(
+                    "job_failed",
+                    session_id=job.session_id,
+                    phase=hydrated_job.phase if hydrated_job else None,
+                    error=str(e),
+                )
             finally:
                 heartbeat_task.cancel()
                 await self._release_lease(hydrated_job.session_id if hydrated_job else job.session_id)

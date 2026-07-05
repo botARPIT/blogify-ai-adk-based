@@ -13,6 +13,11 @@ MODEL_PRICING: Final[dict[str, float]] = {
 # Used by check_and_reserve() to hold budget before the pipeline runs.
 ESTIMATED_TOKENS_PER_BLOG = 50_000
 
+# Hard upper bound on the token balance returned to the frontend.
+# Prevents displaying an unrealistically large balance for users with
+# generous grants. Adjust when pricing or grant amounts change.
+MAX_TOKENS_PER_USER: Final[int] = 4_000_000
+
 
 def get_model_cost(model: str, tokens: int) -> float:
     """Calculate cost for given model and token count."""

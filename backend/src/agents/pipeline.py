@@ -419,6 +419,12 @@ async def _run_runner(
     invocation_id: str | None = None,
 ) -> list[Any]:
     events: list[Any] = []
+    logger.info(
+        "runner_start",
+        session_id=session_id,
+        invocation_id=invocation_id,
+        has_new_message=new_message is not None,
+    )
     async for event in runner.run_async(
         user_id=user_id,
         session_id=session_id,
@@ -431,6 +437,11 @@ async def _run_runner(
             author=getattr(event, "author", "?"),
             invocation_id=getattr(event, "invocation_id", None),
         )
+    logger.info(
+        "runner_completed",
+        session_id=session_id,
+        event_count=len(events),
+    )
     return events
 
 
@@ -464,10 +475,21 @@ async def _finalize_result(
         result.confirmation_payload,
     ) = _extract_pause_metadata(events)
 
+    total_tokens = sum(cost.total_tokens for cost in result.costs)
+    breakdown = {
+        cost.stage: {
+            "tokens": cost.total_tokens,
+            "prompt": cost.prompt_tokens,
+            "completion": cost.completion_tokens,
+        }
+        for cost in result.costs
+    }
     logger.info(
         "pipeline_completed",
         session_id=session_id,
-        total_tokens=sum(cost.total_tokens for cost in result.costs),
+        total_tokens=total_tokens,
+        stage_count=len(result.costs),
+        stage_breakdown=breakdown,
         paused_for_confirmation=result.paused_for_confirmation,
         has_final_content=bool(result.final_content),
     )
@@ -484,10 +506,18 @@ async def run_pipeline(
 ) -> PipelineResult:
     session_id = session_id or str(uuid.uuid4())
     svc = session_service or redis_session_service
-    safe_topic = sanitize_topic(topic)
+    _, safe_topic, _ = sanitize_topic(topic)
     safe_audience = sanitize_audience(audience)
+    logger.info("audience_trace", raw=audience, safe=safe_audience)
     result = PipelineResult(session_id=session_id)
 
+    logger.info(
+        "pipeline_start",
+        session_id=session_id,
+        topic=safe_topic,
+        audience=safe_audience,
+        user_id=user_id,
+    )
     with trace_span("pipeline_v2.start", attributes={"user_id": user_id, "session_id": session_id}):
         try:
             await _ensure_session(
@@ -534,10 +564,16 @@ async def run_pipeline_from_phase(
     state_snapshot: dict[str, Any] | None = None,
 ) -> PipelineResult:
     svc = session_service or redis_session_service
-    safe_topic = sanitize_topic(topic)
+    _, safe_topic, _ = sanitize_topic(topic)
     safe_audience = sanitize_audience(audience)
     result = PipelineResult(session_id=session_id)
 
+    logger.info(
+        "pipeline_phase_resume_start",
+        session_id=session_id,
+        phase=phase,
+        topic=safe_topic,
+    )
     with trace_span(
         "pipeline_v2.resume_phase",
         attributes={"user_id": user_id, "session_id": session_id, "phase": phase},
@@ -592,10 +628,11 @@ async def load_pipeline_result_from_state(
     state_snapshot: dict[str, Any] | None = None,
 ) -> PipelineResult:
     svc = session_service or redis_session_service
-    safe_topic = sanitize_topic(topic)
+    _, safe_topic, _ = sanitize_topic(topic)
     safe_audience = sanitize_audience(audience)
     result = PipelineResult(session_id=session_id)
 
+    logger.info("pipeline_state_load_start", session_id=session_id)
     try:
         await _ensure_session(
             svc=svc,
@@ -642,10 +679,17 @@ async def resume_pipeline(
     state_snapshot: dict[str, Any] | None = None,
 ) -> PipelineResult:
     svc = session_service or redis_session_service
-    safe_topic = sanitize_topic(topic)
+    _, safe_topic, _ = sanitize_topic(topic)
     safe_audience = sanitize_audience(audience)
     result = PipelineResult(session_id=session_id)
 
+    logger.info(
+        "pipeline_resume_start",
+        session_id=session_id,
+        invocation_id=invocation_id,
+        has_approved_outline=bool(approved_outline),
+        has_feedback=bool(feedback_text),
+    )
     with trace_span(
         "pipeline_v2.resume", attributes={"user_id": user_id, "session_id": session_id}
     ):
