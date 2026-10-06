@@ -114,13 +114,9 @@ class OptionalAuthMiddleware(AuthMiddleware):
 
 
 def get_current_user(request: Request) -> AuthenticatedUser | None:
-    print("Getting current user!, this call is from auth middleware", flush=True)
     user_id = getattr(request.state, "user_id", None)
-    print("User id extracted!, this call is from auth middleware", flush=True)
     if not user_id:
-        print("No user id found!, this call is from auth middleware", flush=True)
         return None
-    print("User id found!, this call is from auth middleware", flush=True)
     return AuthenticatedUser(
         user_id=str(user_id),
         email=getattr(request.state, "user_email", None),
