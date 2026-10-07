@@ -1,6 +1,7 @@
 """Redis task queue with atomic dequeue using Lua script."""
 
 import json
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -29,7 +30,9 @@ class BlogJob:
 class TaskQueue:
     QUEUE_KEY = "blogify:tasks"
     PROCESSING_KEY = "blogify:processing"
+    NOTIFY_CHANNEL = "blogify:notify"
     VISIBILITY_TIMEOUT_SECONDS = 300
+    
 
     DEQUEUE_SCRIPT = """
     local job = redis.call('RPOP', KEYS[1])
@@ -54,6 +57,7 @@ class TaskQueue:
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
         await client.lpush(self.QUEUE_KEY, job_json)
+        await client.publish(self.NOTIFY_CHANNEL, "new_job")
         logger.info("job_enqueued", session_id=job.session_id, phase=job.phase)
 
     async def dequeue(self, timeout: int = 5) -> BlogJob | None:
@@ -140,5 +144,23 @@ class TaskQueue:
         await client.zadd(self.PROCESSING_KEY, {job_json: new_deadline})
         logger.debug("visibility_extended", session_id=job.session_id, seconds=additional_seconds)
 
+    async def wait_for_job_signal(self, timeout:int = 30) -> None:
+        """Subscribe to Redis Pub/Sub channel until a message arrives or timeout expires"""
+        client = await get_redis_client()
+        pubsub = client.pubsub()
+
+        #Subscribe to channel
+        await pubsub.subscribe(self.NOTIFY_CHANNEL)
+
+        try:
+            async with asyncio.timeout(timeout):
+                async for message in pubsub.listen():
+                    if message["type"] == "message":
+                        break
+        except TimeoutError:
+            pass
+        finally:
+            await pubsub.unsubscribe(self.NOTIFY_CHANNEL)
+            await pubsub.close()
 
 task_queue = TaskQueue()
