@@ -21,7 +21,7 @@ from src.models.repositories.session_lease_repository import SessionLeaseReposit
 logger = get_logger(__name__)
 
 MAX_REAP_COUNT = 3
-REAP_INTERVAL_SECONDS = 60
+REAP_INTERVAL_SECONDS = 180
 STALE_THRESHOLD_MINUTES = 2
 
 
@@ -29,7 +29,7 @@ class Reaper:
     def __init__(self, task_queue: TaskQueue) -> None:
         self._queue = task_queue
 
-    async def run_forever(self) -> None:
+    async def run_forever(self) -> None:    
         while True:
             try:
                 await self._reap_stale_leases()
