@@ -462,13 +462,15 @@ async def _finalize_result(
 
 async def run_pipeline(
     topic: str,
+    session_id: str,
     audience: str = "general readers",
     user_id: str = "anonymous",
-    session_id: str | None = None,
     session_service: Any | None = None,
     state_snapshot: dict[str, Any] | None = None,
 ) -> PipelineResult:
-    session_id = session_id or str(uuid.uuid4())
+    if not session_id or not session_id.strip():
+        raise ValueError("session_id is required for pipeline execution.")
+        
     svc = session_service or redis_session_service
     safe_topic = sanitize_topic(topic)
     safe_audience = sanitize_audience(audience)
