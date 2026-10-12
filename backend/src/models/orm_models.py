@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -256,6 +257,37 @@ class BlogVersion(Base):
     )
 
 
+class WorkflowOutboxEvent(Base):
+    """Durable work notification committed with its lifecycle state change."""
+
+    __tablename__ = "workflow_outbox_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    aggregate_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    locked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_workflow_outbox_claim", "status", "available_at", "locked_until", "id"),
+        Index(
+            "uq_workflow_outbox_one_active_per_blog",
+            "aggregate_id",
+            unique=True,
+            postgresql_where=text("status IN ('PENDING', 'PROCESSING')"),
+            sqlite_where=text("status IN ('PENDING', 'PROCESSING')"),
+        ),
+    )
+
+
 class AgentRun(Base):
     __tablename__ = "agent_runs"
 
@@ -274,6 +306,31 @@ class AgentRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_agent_runs_session", "blog_session_id"),)
+
+
+class BlogReviewEvent(Base):
+    """Audit record for a human outline or final-content decision."""
+
+    __tablename__ = "blog_review_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    blog_session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("blog_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    blog_version_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("blog_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewer_user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    feedback_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        Index("ix_blog_review_events_session_created", "blog_session_id", "created_at"),
+        Index("ix_blog_review_events_version", "blog_version_id"),
+    )
 
 
 class BudgetLedger(Base):

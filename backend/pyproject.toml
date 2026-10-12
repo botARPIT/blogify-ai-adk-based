@@ -74,6 +74,10 @@ disallow_untyped_defs = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Several test files intentionally share a basename across sibling trees
+# (e.g. worker/test_worker_shutdown.py and lifecycle/test_worker_shutdown.py),
+# so collect by fully-qualified path rather than by module basename.
+addopts = "--import-mode=importlib"
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 markers = [

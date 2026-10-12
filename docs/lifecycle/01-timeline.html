@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset:"utf-8">
+<meta name="viewport" content:"width=device-width, initial-scale=1">
+<title>01 · Timeline — Blogify Lifecycle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="grain"></div>
+<div class="wrap">
+
+<header class="top">
+  <div class="brand"><span class="dot"></span><b>Blogify</b><span class="tag amber">01 · TIMELINE</span></div>
+  <nav class="tabs">
+    <a href="index.html">Index</a>
+    <a href="01-timeline.html" aria-current:"page">01 · Timeline</a>
+    <a href="02-lineage.html">02 · Lineage</a>
+    <a href="03-orm.html">03 · ORM</a>
+    <a href="04-findings.html">04 · Findings</a>
+  </nav>
+</header>
+
+<main>
+
+<section>
+  <div class="meta" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.2rem">
+    <span class="tag amber">GENERATE</span><span class="tag cyan">RESUME_OUTLINE</span>
+    <span class="tag violet">RESEARCH_PHASE</span><span class="tag rust">REVISION</span>
+  </div>
+  <h1 class="display" style="font-size:clamp(2rem,5vw,3.6rem)">Swimlane <em>timeline</em>.</h1>
+  <p class="lede" style="margin-top:1rem">
+    Left to right, one request to terminal state. Hover a node to preview, click to open the exact
+    Postgres and Redis operations. Vertical rules are <strong>beats</strong> — the moments where
+    something durable happens. Bars are not to scale: the 30–90 s of LLM time is compressed.
+  </p>
+</section>
+
+<section>
+  <header>
+    <h3 class="sub">Diagram</h3>
+    <h2 class="sec" style="margin-top:.4rem">Eight lanes</h2>
+    <div class="controls" style="margin-top:1.1rem" id="laneToggles">
+      <span class="lbl">Lanes</span>
+    </div>
+  </header>
+
+  <div class="panel">
+    <div class="cap">
+      <span class="t">Swimlane · one blog, four phases</span>
+      <span class="mono" style="font-size:.62rem;color:var(--paper-faint)">
+        <span style="color:var(--cyan)">━</span> Postgres &nbsp;
+        <span style="color:var(--violet)">━</span> Redis &nbsp;
+        <span style="color:var(--amber)">━</span> mutation / LLM &nbsp;
+        <span style="color:var(--rust)">━</span> discard / failure
+      </span>
+    </div>
+    <div class="body" style="padding:0">
+      <div style="position:relative" id="timelineRoot">
+        <div id="beats" class="beats" style="position:absolute;left:132px;right:0;top:0;bottom:0;z-index:1"></div>
+        <div id="lanes"></div>
+        <div class="axis">
+          <div style="border-right:var(--rule-soft);background:var(--ink-800)"></div>
+          <div class="ticks" id="ticks"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="detailWrap">
+  <header><h3 class="sub">Selected node</h3><h2 class="sec" style="margin-top:.4rem">Operations at this instant</h2></header>
+  <div class="detail" id="detail">
+    <div class="dh"><span class="ttl">Nothing selected</span><span class="tag">Click a node above</span></div>
+    <div class="db"><p style="color:var(--paper-dim);margin:0">Every node in the diagram carries the ORM statements, Redis commands, and object mutations that occur inside it — plus what is silently thrown away.</p></div>
+  </div>
+</section>
+
+<section>
+  <header><h3 class="sub">Phase boundaries</h3><h2 class="sec" style="margin-top:.4rem">Four entrypoints, one runner</h2></header>
+  <div class="panel">
+    <div class="cap"><span class="t">Dispatch table — <code>executor.py:75-84</code></span></div>
+    <div class="scroll">
+      <table class="grid">
+        <thead><tr><th>Phase</th><th>Trigger</th><th>Entrypoint</th><th>Agent graph built</th><th>Ends in</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="strong"><code>fresh_generation</code></td>
+            <td class="m"><code>POST /blogs/generate</code></td>
+            <td class="m"><code>_execute_fresh_generation</code><br><span style="color:var(--ink-500)">executor.py:89</span></td>
+            <td class="m">Full <code>blog_pipeline</code>:<br>intent → outline → review gate → research → loop(writer, editor)</td>
+            <td><span class="tag amber">AWAITING_OUTLINE_REVIEW</span></td>
+          </tr>
+          <tr>
+            <td class="strong"><code>resume_outline</code></td>
+            <td class="m">User approves/edits outline</td>
+            <td class="m"><code>_execute_resume_outline</code><br><span style="color:var(--ink-500)">executor.py:127</span></td>
+            <td class="m">Same <code>APP</code>, resumed via <code>invocation_id</code> + <code>FunctionResponse</code></td>
+            <td><span class="tag cyan">AWAITING_FINAL_REVIEW</span></td>
+          </tr>
+          <tr>
+            <td class="strong"><code>research_phase</code></td>
+            <td class="m">Reaper, after outline already consumed</td>
+            <td class="m"><code>_execute_research_phase</code><br><span style="color:var(--ink-500)">executor.py:189</span></td>
+            <td class="m">Fresh <code>blog_research_phase</code>:<br>research → loop(writer, editor)</td>
+            <td><span class="tag cyan">AWAITING_FINAL_REVIEW</span></td>
+          </tr>
+          <tr>
+            <td class="strong"><code>revision</code></td>
+            <td class="m">Final review → <code>revision_requested</code></td>
+            <td class="m"><code>_execute_revision</code><br><span style="color:var(--ink-500)">executor.py:162</span></td>
+            <td class="m">Identical to <code>research_phase</code> — byte-identical bodies</td>
+            <td><span class="tag cyan">AWAITING_FINAL_REVIEW</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="note">
+    <b>Why two graphs?</b> <code class="mono">resume_outline</code> replays the real ADK app so the paused
+    tool call can be answered. <code class="mono">research_phase</code> and <code class="mono">revision</code>
+    build a <em>new</em> <code class="mono">App</code> against restored state
+    (<code class="mono">pipeline.py:319-343</code>) — that is a restart, not a resume. ADK's own resume
+    becomes unreliable once the holding process dies, but the <em>state</em> is reliably restorable from
+    Postgres, so the system degrades from "resume" to "rerun".
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <p style="margin:0">Part 1 of 4 · full narrative at <a href="../blog-generation-lifecycle.md">docs/blog-generation-lifecycle.md</a> §4–§12</p>
+</footer>
+
+</div>
+
+<script>
+/* ────────────────────────────────────────────────────────────
+   LANES
+   ──────────────────────────────────────────────────────────── */
+const LANES = [
+  { id:"browser", name:"Browser",   tone:"cyan"   },
+  { id:"api",     name:"API",       tone:"amber"  },
+  { id:"redis",   name:"Redis",     tone:"violet" },
+  { id:"postgres",name:"Postgres",  tone:"cyan"   },
+  { id:"worker",  name:"Worker",    tone:"amber"  },
+  { id:"adk",     name:"ADK",       tone:"lime"   },
+  { id:"gemini",  name:"LLM / Tavily", tone:"rust" },
+  { id:"user",    name:"Human",     tone:"violet" },
+];
+
+/* ────────────────────────────────────────────────────────────
+   BEATS — durable moments
+   ──────────────────────────────────────────────────────────── */
+const BEATS = [
+  [ 2, "REQ"],  [ 5, "GUARD"], [ 8, "QUOTA"], [11, "ROW"],  [14, "v1"],
+  [17, "RESERVE"], [20, "ENQUEUE"], [22, "COMMIT A"], [24, "DEQUEUE"],
+  [26, "LEASE"], [30, "RUN"], [40, "PAUSE"], [42, "COMMIT B"],
+  [46, "USER"], [51, "APPROVE"], [53, "DEQUEUE 2"], [55, "RESUME"],
+  [62, "DRAFT"], [66, "COMMIT C"], [69, "REVIEW"], [73, "DECIDE"], [75, "DONE"],
+];
+
+/* ────────────────────────────────────────────────────────────
+   NODES  s = start %, w = width %
+   ──────────────────────────────────────────────────────────── */
+const NODES = [
+/* ── browser ───────────────────────────────────────────── */
+{ id:"br1", lane:"browser", s:0, w:2.2, k:"F", tone:"amber", t:"POST /blogs/generate",
+  where:"frontend/src/pages/DashboardPage.tsx:85-147",
+  ops:[
+    ["mut","<b>Body</b> — <code>{topic, audience, tone}</code>; <code>Idempotency-Key</code> minted as a header and <b>reused across retries</b> (ref reset only on success)"],
+    ["mut","<b>Optimistic row</b> prepended to the dashboard list with <code>user_session_number: null</code> before the server replies"],
+    ["mut","<code>adk_session_id</code> in the response is <b>never read</b> by the client"],
+    ["drop","<b>Dropped</b> — the <code>message</code> and <code>budget_reserved_usd</code> fields the TS type declares are not returned by the backend; <code>created_at</code> is returned but unused"],
+  ],
+  kv:[["Trigger","user clicks Generate"],["Auth","httpOnly cookie, no Authorization header"],["Guard","client-side topic ≥ 10 chars"]] },
+
+{ id:"br2", lane:"browser", s:22, w:2, k:"F", tone:"amber", t:"202 Accepted {session_id}",
+  where:"backend/src/api/routes/blog_routes.py:96-101",
+  ops:[
+    ["mut","Response is shaped from the in-Python <code>BlogSession</code> ORM object — <code>id</code>, <code>status</code>, <code>adk_session_id</code>, <code>created_at</code>"],
+    ["mut","<b>Sent only after TX-A commits</b> — the <code>get_db_session</code> generator finalises before the response leaves, so a failed COMMIT yields 500, never a lying 202"],
+    ["mut","Client routes on status: <code>QUEUED → /sessions/{id}/progress</code>"],
+  ],
+  kv:[["Status","QUEUED"],["Route","session-routing.ts:7-13"],["Note","never a lie about persistence"]] },
+
+{ id:"br3", lane:"browser", s:24, w:21, k:"F", tone:"cyan", t:"poll GET /{id}/status · every 3000 ms",
+  where:"frontend/src/hooks/useSessionStatus.ts:25-104",
+  ops:[
+    ["mut","Polls <code>GET /api/v1/blogs/{id}/status</code> on a single <code>setInterval</code>"],
+    ["mut","Auto-redirect on every tick (<code>autoRedirect=true</code> on progress / outline / final pages)"],
+    ["mut","<code>AWAITING_OUTLINE_REVIEW → /outline-review</code> is the <b>only</b> fork into a review screen"],
+    ["drop","<b>Stops polling</b> for paused <em>and</em> terminal states; <code>dequeue(timeout=5)</code>-style optimism not present — but <code>isPaused</code>/<code>isTerminal</code> are exported and unused"],
+    ["drop","<b>Broken branches</b> — <code>409 SESSION_TERMINAL</code> and <code>402 QUOTA_EXHAUSTED</code> tests read <code>err.body.error_code</code>, but <code>ApiError</code> exposes <code>errorCode</code> and has no <code>body</code>. Both are dead code (F-22)"],
+  ],
+  kv:[["Interval","3000 ms"],["Budget poll","40000 ms"],["Active set","queued, processing, revision_requested"]] },
+
+{ id:"br4", lane:"browser", s:51, w:1.4, k:"F", tone:"violet", t:"POST /outline/review",
+  where:"frontend/src/pages/OutlineReviewPage.tsx:64-67",
+  ops:[
+    ["mut","Sends <code>{action, edited_outline, feedback_text}</code> — <b>both fields on both actions</b>"],
+    ["mut","Client blocks submit unless: title non-empty · 3–7 sections · each has id+heading+goal · <code>target_words</code> ∈ [80,300] · <code>estimated_total_words == Σ target_words</code>"],
+    ["mut","Mirrors <code>OutlineSchema</code> so a rejection round-trip never happens"],
+  ],
+  kv:[["Actions","approve | revise"],["Reviewer id","declared in TS, never sent"]] },
+
+{ id:"br5", lane:"browser", s:73, w:1.4, k:"F", tone:"violet", t:"POST /final-review",
+  where:"frontend/src/pages/FinalReviewPage.tsx:42-45",
+  ops:[
+    ["mut","<code>approved</code> — payload is just the action; no feedback permitted"],
+    ["mut","<code>revision_requested</code> — <b>requires non-empty feedback</b>; two-step UI reveals the textarea"],
+    ["mut","<code>rejected</code> — no feedback"],
+    ["mut","Navigates using the status returned by the POST, not a refetch"],
+  ],
+  kv:[["Schema guard","schemas.py:199-206"],["Redirect","getRouteForStatus(result.status)"]] },
+
+{ id:"br6", lane:"browser", s:75, w:1.6, k:"F", tone:"cyan", t:"GET /content → /output",
+  where:"backend/src/api/routes/blog_routes.py:515-551",
+  ops:[
+    ["mut","Reads <b>latest version's</b> <code>final_content</code>, falling back to the session column"],
+    ["mut","<code>sources_count</code> = <code>COUNT(*)</code> over <code>research_sources</code> — inflates across revisions (F-19)"],
+  ],
+  kv:[["Word count","len(content.split())"],["Fallback","version → session column"]] },
+
+/* ── api ───────────────────────────────────────────────── */
+{ id:"ap1", lane:"api", s:0, w:5, k:"A", tone:"amber", t:"middleware gauntlet",
+  where:"backend/src/api/main.py:90-99",
+  ops:[
+    ["mut","<b>PrometheusMiddleware</b> — records against the <b>route template</b>, not the raw path, so <code>/blogs/{id}</code> doesn't explode label cardinality"],
+    ["mut","<b>CORSMiddleware</b> — origins from config"],
+    ["mut","<b>AuthMiddleware</b> — HS256 cookie decoded into <code>request.state.user_id</code>"],
+    ["mut","<b>RateLimitMiddleware</b> — global + per-identity"],
+    ["mut","<code>Depends(blog_generation_limit)</code> — Redis sliding window over 24 h; breach → <b>429</b> + <code>Retry-After</code>"],
+    ["mut","<code>Depends(get_db_session)</code> — <b>opens TX-A</b>"],
+  ],
+  kv:[["Order","outermost added last"],["Route shape","/api/v1/blogs/…"]] },
+
+{ id:"ap2", lane:"api", s:5, w:3, k:"A", tone:"amber", t:"validation · quota gate",
+  where:"guards/input_guard.py:20-63 · blog_routes.py:77-86",
+  ops:[
+    ["pg","<b>INSERT user_blog_quotas</b> if absent — <code>get_or_create</code>, <code>blogs_used=0</code>, <code>blogs_limit=10</code>. This is the first write of the request."],
+    ["mut","<code>InputGuard.validate</code>: topic 3–500 with no <code>\\x00 \\n \\r \\t</code> · audience ≤255 · tone must parse as the <code>Tone</code> enum"],
+    ["drop","<b>Two floors disagree.</b> Pydantic and InputGuard accept 3 chars; <code>sanitize_topic</code> demands 10. The browser enforces 10 client-side, masking the gap for UI traffic only (F-01)"],
+    ["drop","<code>remaining &lt;= 0</code> → <b>402 QUOTA_EXHAUSTED</b>, raised before any budget is touched"],
+  ],
+  kv:[["Quota limit","10"],["Budget limit","separate, stricter"]] },
+
+{ id:"ap3", lane:"api", s:11, w:6, k:"A", tone:"amber", t:"BlogService.create_generation",
+  where:"backend/src/services/blog_service.py:38-111",
+  ops:[
+    ["pg","<b>SELECT</b> blog_sessions by <code>(user_id, idempotency_key)</code> — terminal → <b>409 SESSION_TERMINAL</b>; non-terminal → return the existing row, no new work"],
+    ["pg","<b>SELECT COUNT</b> where status ∈ {QUEUED, PROCESSING, AWAITING_*} — ≥1 → <b>409</b>. <code>MAX_ACTIVE_SESSIONS_PER_USER = 1</code>"],
+    ["mut","<code>adk_session_id = str(uuid.uuid4())</code> — generated here, never by ADK"],
+    ["pg","<b>INSERT blog_sessions</b> — <code>status=QUEUED</code>, id assigned at flush"],
+    ["pg","<b>INSERT blog_versions</b> v1 + <b>UPDATE blog_sessions</b> <code>active_blog_version_id=v1.id, job_phase='fresh_generation'</code>"],
+    ["drop","<code>tone</code> is written to the row and then never referenced again — no agent receives it (F-04)"],
+  ],
+  kv:[["Idempotency","uq(user_id, idempotency_key)"],["Concurrency","1 active session per user"]] },
+
+{ id:"ap4", lane:"api", s:17, w:3, k:"A", tone:"rust", t:"check_and_reserve — 1000× too big",
+  where:"backend/src/services/budget_service.py:39-76",
+  ops:[
+    ["mut","<code>estimated_usd = 50_000 × 0.00002 = <b>$1.00</b></code>"],
+    ["drop","<b>Missing <code>/1000</code>.</b> <code>get_model_cost</code> returns <code>(tokens/1000) × price_per_1k</code> = <b>$0.001</b> for the same 50k tokens. The reservation is 1000× the risk (F-11)"],
+    ["pg","<b>UPDATE budget_accounts</b> <code>reserved_usd += 1.00</code>; raise <code>InsufficientBudgetError</code> if <code>balance − reserved &lt; 1.00</code>"],
+    ["pg","<b>INSERT budget_ledger</b> (RESERVE, −50000, −1.00)"],
+    ["pg","<b>INSERT session_reservations</b> (1.00, 50000)"],
+    ["pg","<b>UPDATE blog_sessions</b> <code>budget_reserved_*</code>"],
+    ["mut","Guarded by <code>budget_lock:{user_id}</code> — but acquired at <code>:90</code>, i.e. <em>after</em> the session row is already written"],
+  ],
+  kv:[["Grant","$5.00 at registration"],["Blogs before block","5, not 10"],["Rebalance","on success only"]] },
+
+{ id:"ap5", lane:"api", s:20, w:2, k:"A", tone:"violet", t:"build BlogJob · LPUSH · COMMIT",
+  where:"core/task_queue.py:50-54 · core/database.py:22",
+  ops:[
+    ["mut","<code>BlogJob</code> is a <b>dataclass</b> — pure memory, no DB row of its own"],
+    ["rd","<b>LPUSH blogify:tasks</b> the JSON serialisation"],
+    ["mut","<code>blog_generations_total{status=\"initiated\"}.inc()</code> — incremented <b>before</b> the commit"],
+    ["drop","<b>Ordering hazard.</b> LPUSH happens inside TX-A, before COMMIT. A worker can RPOP before the row is visible and block on <code>SELECT … FOR UPDATE</code>. If COMMIT fails the job is orphaned: the worker's lease acquire returns false and it is acked and dropped, unlogged"],
+  ],
+  kv:[["Queue key","blogify:tasks (list)"],["In-flight","blogify:processing (zset)"]] },
+
+/* ── redis ─────────────────────────────────────────────── */
+{ id:"rd1", lane:"redis", s:16, w:1.4, k:"R", tone:"violet", t:"budget_lock NX EX 10",
+  where:"services/blog_service.py:90-97",
+  ops:[
+    ["rd","<code>SET budget_lock:{user_id} 1 NX EX 10</code> — fail → <b>409 \"Rate limit exceeded\"</b> and the whole TX rolls back"],
+    ["mut","Deleted in a <code>finally</code>, so a reserve failure cannot wedge the user"],
+  ],
+  kv:[["Scope","serialises reserve only"],["Not held","during the pipeline"]] },
+
+{ id:"rd2", lane:"redis", s:30.5, w:34, k:"R", tone:"lime", t:"adk:session:{adk_session_id} — 24h TTL",
+  where:"core/session_store.py:32-33, 42-122",
+  ops:[
+    ["rd","<code>SET adk:session:{id} {state, events[]} EX 86400</code>"],
+    ["mut","State = the <b>10-key contract</b>: topic, audience, intent_result, blog_outline, approved_outline, outline_feedback, outline_review_result, research_data, blog_draft, editor_review"],
+    ["mut","<code>update_session_state</code> <b>merges</b> shallowly — <code>session[\"state\"] = {**old, **new}</code>"],
+    ["mut","<code>append_event</code> grows <code>events[]</code> on every turn; the whole list is re-serialised on each write"],
+    ["drop","<b>Never deleted.</b> <code>delete_session</code> has zero call sites. The 24 h TTL is the only cleanup (F-… see §3)"],
+    ["drop","Ownership is checked in <code>get_session</code>: a mismatched <code>user_id</code> or <code>app_name</code> returns <code>None</code>, it does not raise"],
+  ],
+  kv:[["Reads","get_session, update_session_state"],["Writes","append_event per ADK turn"],["Retention","86400 s"]] },
+
+{ id:"rd3", lane:"redis", s:24, w:2, k:"R", tone:"violet", t:"RPOP + ZADD (single Lua)",
+  where:"core/task_queue.py:34-39",
+  ops:[
+    ["rd","<code>RPOP blogify:tasks</code> then <code>ZADD blogify:processing &lt;deadline&gt; &lt;job&gt;</code> — <b>atomic in one script</b>"],
+    ["mut","Without this, a job could be popped but untracked, and the reaper would double-process it"],
+    ["mut","Fallback path: <code>evalsha</code> failure → full <code>eval</code> (script cache cold after a Redis restart)"],
+    ["drop","<code>timeout=5</code> is <b>dead</b> — <code>evalsha</code> is non-blocking. The loop really backs off 20 s (F-25)"],
+  ],
+  kv:[["Visibility","300 s"],["Order","LPUSH head + RPOP tail = FIFO"]] },
+
+{ id:"rd4", lane:"redis", s:42.8, w:1.4, k:"R", tone:"lime", t:"ZREM ack (after commit)",
+  where:"workers/blog_worker.py:88",
+  ops:[
+    ["rd","<code>ZREM blogify:processing &lt;job&gt;</code>"],
+    ["mut","<b>Correctly ordered after the DB commit</b> — the ack uses the <em>original</em> payload, whose JSON round-trips byte-identically because both processes import the same dataclass"],
+    ["mut","Contrast with the lease release, which runs in a <em>separate</em> transaction after this"],
+  ],
+  kv:[["Guarantee","at-least-once, not exactly-once"]] },
+
+/* ── postgres ──────────────────────────────────────────── */
+{ id:"pg1", lane:"postgres", s:11.4, w:1.2, k:"P", tone:"cyan", t:"SELECT idempotency · COUNT active",
+  where:"models/repositories/blog_session_repository.py:60-67, 121-129",
+  ops:[
+    ["pg","<code>SELECT … WHERE user_id=? AND idempotency_key=?</code>"],
+    ["pg","<code>SELECT … WHERE status IN (QUEUED, PROCESSING, AWAITING_OUTLINE_REVIEW, AWAITING_FINAL_REVIEW)</code>"],
+    ["mut","<code>active_states()</code> is derived from the enum class, not hard-coded"],
+  ],
+  kv:[["Indexes","ix_blog_sessions_user_id, ix_blog_sessions_status"]] },
+
+{ id:"pg2", lane:"postgres", s:12.4, w:1.2, k:"P", tone:"cyan", t:"INSERT blog_sessions",
+  where:"models/repositories/blog_session_repository.py:25-46",
+  ops:[
+    ["pg","<b>INSERT</b> 23 columns; <code>id</code> from the sequence at <code>flush()</code>"],
+    ["mut","<code>adk_session_id = uuid4</code>, <code>status = QUEUED</code>, budget columns at 0"],
+    ["mut","Timestamps are <b>Python-side</b> defaults (<code>orm_models.py:25-26</code>), not <code>server_default</code>"],
+    ["mut","Unique constraint <code>uq_blog_sessions_idempotency(user_id, idempotency_key)</code> — Postgres treats NULLs as distinct, so a keyless user may generate without dedup"],
+  ],
+  kv:[["Status","QUEUED"],["Job phase","set one line later"]] },
+
+{ id:"pg3", lane:"postgres", s:14.2, w:1.4, k:"P", tone:"cyan", t:"INSERT blog_versions v1 · UPDATE session",
+  where:"models/repositories/blog_version_repository.py:18-41",
+  ops:[
+    ["pg","<b>INSERT</b> blog_versions — <code>version_number=1</code>, <code>created_from='fresh_generation'</code>"],
+    ["pg","<b>UPDATE</b> blog_sessions — <code>active_blog_version_id = v1.id</code>, <code>job_phase='fresh_generation'</code>"],
+    ["mut","<code>title = blog_session.topic</code> — the <em>topic</em> as a placeholder title, replaced at pause by <code>outline[\"title\"]</code>"],
+    ["mut","<code>state_snapshot</code> seeded with the same 10 keys as the ADK state — the Postgres mirror, written before any LLM runs"],
+    ["mut","<b>Circular FK.</b> blog_sessions → blog_versions → blog_sessions. Works only because both inserts flush in one TX. <code>active_blog_version_id</code> is <b>unindexed</b> (F-23)"],
+  ],
+  kv:[["Unique","uq(blog_session_id, version_number)"],["Cascade","ON DELETE CASCADE"]] },
+
+{ id:"pg4", lane:"postgres", s:17.2, w:2.4, k:"P", tone:"cyan", t:"budget_accounts · ledger · reservations",
+  where:"services/budget_service.py:50-76",
+  ops:[
+    ["pg","<b>INSERT/UPDATE budget_accounts</b> — <code>reserved_usd += 1.00</code>"],
+    ["pg","<b>INSERT budget_ledger</b> — RESERVE, −50000 tokens, −1.00 USD"],
+    ["pg","<b>INSERT session_reservations</b> — the single open hold for this session"],
+    ["pg","<b>UPDATE blog_sessions</b> — denormalised <code>budget_reserved_*</code> cache"],
+    ["drop","<code>reserved_usd</code> is now non-zero and will only fall on success. An abandoned outline review <b>leaks it permanently</b> (F-15)"],
+  ],
+  kv:[["Invariant","balance − reserved = available"],["Source of truth","budget_accounts, not the ledger"]] },
+
+{ id:"pg5", lane:"postgres", s:21.6, w:1.2, k:"P", tone:"lime", t:"COMMIT — TX-A",
+  where:"core/database.py:19-24",
+  ops:[
+    ["mut","Generator finalises <b>before</b> the response is sent"],
+    ["mut","On exception: <code>rollback()</code> and re-raise"],
+    ["drop","The Redis LPUSH is <b>not</b> transactional with this commit"],
+  ],
+  kv:[["Durability point","row becomes visible to workers"]] },
+
+{ id:"pg6", lane:"postgres", s:26.2, w:3, k:"P", tone:"cyan", t:"TX-1 · SELECT FOR UPDATE → PROCESSING",
+  where:"models/repositories/session_lease_repository.py:40-100",
+  ops:[
+    ["pg","<b>SELECT … FROM blog_sessions WHERE id=? FOR UPDATE</b> — the row lock is held for the whole TX"],
+    ["pg","<b>SELECT</b> open lease (<code>ended_at IS NULL</code>); held by a different worker → <b>acquired=False</b>, ack, drop"],
+    ["pg","<b>INSERT session_leases</b> — owner <code>worker-{host}-{pid}</code>, expires +300 s, <code>release_reason='ACQUIRED'</code>"],
+    ["pg","<b>UPDATE</b> blog_sessions → <code>PROCESSING</code>, <code>job_phase</code>, <code>current_stage</code> by phase"],
+    ["pg","<b>UPDATE</b> blog_versions → <code>PROCESSING</code>"],
+    ["mut","<b>Admissions control</b> — status must be QUEUED, plus per-phase preconditions: resume needs invocation+confirmation ids; revision needs a draft"],
+    ["mut","Heartbeat every 30 s extends by only <b>90 s</b> — any longer stall loses the lease mid-run (F-17)"],
+  ],
+  kv:[["Lease version","current + 1"],["Append-only","one row per acquisition = audit trail"]] },
+
+{ id:"pg7", lane:"postgres", s:36, w:2.2, k:"P", tone:"cyan", t:"agent_runs · ledger COMMIT · sources",
+  where:"workers/executor.py:363-438",
+  ops:[
+    ["pg","<b>INSERT research_sources × N</b> when research is present — never deduplicated, so re-research inflates <code>sources_count</code> (F-19)"],
+    ["pg","<b>INSERT agent_runs</b> per metered stage — <code>status=COMPLETED</code>, <code>latency_ms=NULL</code>, <code>completed_at=NULL</code>"],
+    ["drop","<code>latency_ms</code> and <code>completed_at</code> are never set on the create path, and the update path is unreachable because the COMPLETED-skip fires first. <code>blog_generation_duration_seconds</code> is therefore <b>never observed</b> (F-08)"],
+    ["pg","<b>INSERT budget_ledger</b> — one COMMIT per agent_run, negative tokens and USD"],
+    ["pg","<b>UPDATE blog_sessions</b> — <code>budget_spent_* +=</code>"],
+    ["drop","<b>SKIP RULE</b> — any stage already COMPLETED for this session is skipped entirely: no agent_run row, no ledger COMMIT, no spend. On a revision, research + writer + editor are all skipped (F-05)"],
+    ["drop","<b><code>outline_review_agent</code> tokens are unmetered</b> — absent from <code>STAGE_BY_AUTHOR</code> (F-03)"],
+  ],
+  kv:[["Stages","intent → outline → research → writer → editor"],["Model pricing","gemini-2.5-flash $0.00002/1k"]] },
+
+{ id:"pg8", lane:"postgres", s:39.4, w:1.6, k:"P", tone:"cyan", t:"version snapshot + settle + status",
+  where:"workers/executor.py:216-259 · services/budget_service.py:116-170",
+  ops:[
+    ["pg","<b>UPDATE blog_versions</b> → <code>AWAITING_OUTLINE_REVIEW</code>, <code>job_phase='resume_outline'</code>, title, content, the 10-key snapshot"],
+    ["pg","<b>UPDATE blog_sessions</b> → outline_data, invocation_id, confirmation_request_id, adk_session_id"],
+    ["pg","<b>UPDATE blog_sessions.status</b> — validated against the state machine"],
+    ["drop","<b>Budget is NOT settled on the pause path.</b> <code>release_excess</code> runs only in <code>_handle_success</code>. The reservation stays open across an unbounded human wait"],
+    ["drop","<code>snapshot[\"approved_outline\"]</code> is populated from <code>result.outline</code> — the <em>generated</em> outline — so it is correct only because the confirm tool already overwrote <code>blog_outline</code> (F-07)"],
+  ],
+  kv:[["current_stage","outline_review"],["Quota","NOT incremented yet"]] },
+
+{ id:"pg9", lane:"postgres", s:64, w:2.2, k:"P", tone:"cyan", t:"success · settle · quota +1",
+  where:"workers/executor.py:261-340 · budget_service.py:116-170",
+  ops:[
+    ["pg","<b>UPDATE blog_versions</b> → <code>AWAITING_FINAL_REVIEW</code>, <code>user_action=NULL</code>, fresh snapshot"],
+    ["pg","<b>UPDATE blog_sessions</b> → <code>final_content</code>, invocation ids"],
+    ["pg","<b>UPDATE budget_accounts</b> — <code>reserved −1.00</code>, <code>balance −actual</code>, <code>spent += actual</code>"],
+    ["pg","<b>UPDATE session_reservations</b> — <code>released_at = now()</code> closes the hold"],
+    ["pg","<b>INSERT budget_ledger</b> — RELEASE"],
+    ["pg","<b>UPDATE user_blog_quotas</b> — <code>blogs_used = blogs_used + 1</code>"],
+    ["drop","<b>RELEASE row records <code>actual</code>, not <code>reserved − actual</code></b> — so <code>sum(ledger) ≠ balance delta</code> (F-16)"],
+    ["drop","<b>Terminal only for the first success.</b> The reservation is <code>released_at IS NULL</code>-gated, so any later revision logs <code>release_excess_no_active_reservation</code> and returns — account balances never see revision spend (F-05)"],
+    ["mut","Quota increment is wrapped in try/except — a failure logs and continues, non-fatal"],
+  ],
+  kv:[["current_stage","final_review"],["Queue slot","freed only on terminal state"]] },
+
+/* ── worker ────────────────────────────────────────────── */
+{ id:"wk1", lane:"worker", s:23.4, w:1.4, k:"W", tone:"amber", t:"dequeue loop",
+  where:"workers/blog_worker.py:46-54",
+  ops:[
+    ["mut","<code>asyncio.create_task(self._process_job(job))</code> — fire and forget"],
+    ["mut","Bounded by <code>asyncio.Semaphore(3)</code>; empty queue → <code>sleep(20)</code>"],
+  ],
+  kv:[["Concurrency","3 per replica"],["Replicas","2"]] },
+
+{ id:"wk2", lane:"worker", s:26, w:3.4, k:"W", tone:"amber", t:"_process_job · TX-1",
+  where:"workers/blog_worker.py:56-104",
+  ops:[
+    ["mut","<b>TX-1</b>: acquire lease, hydrate job, mark PROCESSING, commit"],
+    ["mut","<b>TX-2</b>: a <em>second</em> session opens and stays open for the entire pipeline — including every LLM call"],
+    ["mut","Heartbeat task spawned; cancelled in <code>finally</code>"],
+    ["mut","Finally: <code>_release_lease</code> in its own TX sets <code>ended_at</code>"],
+    ["drop","If <code>_handle_failure</code> itself raises, TX-2 rolls back and the session is stuck in <code>PROCESSING</code> — the reaper needs an <em>open</em> lease or <code>QUEUED</code> status, and neither is true (F-14)"],
+  ],
+  kv:[["Lease","300 s, heartbeat +90 s"],["Pool","pool_size=10, overflow=20"]] },
+
+{ id:"wk3", lane:"worker", s:53, w:3, k:"W", tone:"violet", t:"_process_job · TX-1 (resume)",
+  where:"workers/executor.py:127-160",
+  ops:[
+    ["mut","Same TX-1 shape, different phase"],
+    ["mut","<code>resume_pipeline</code> passes <code>invocation_id</code> so ADK continues the <em>same</em> invocation, and a <code>FunctionResponse</code> bound to <code>confirmation_request_id</code>"],
+    ["mut","Re-validates the user's payload through <code>OutlineSchema.model_validate</code> — a bad outline fails the tool, not the DB"],
+  ],
+  kv:[["Graph","the real APP, resumed"],["Cannot pause twice","→ straight to _handle_success"]] },
+
+{ id:"wk4", lane:"worker", s:63, w:4, k:"W", tone:"amber", t:"_handle_success",
+  where:"workers/executor.py:261-340",
+  ops:[
+    ["mut","<code>final_content = editor_review[\"final_blog\"]</code> if approved, else <code>draft</code>"],
+    ["mut","<code>await agent_delay()</code> — a hard-coded <code>sleep(2)</code> after every phase"],
+    ["mut","No <code>release_excess</code> equivalent on the resume path beyond the first success"],
+  ],
+  kv:[["Metrics","agent_invocations_total, agent_token_usage, agent_cost_usd"],["Latency metric","never observed (F-08)"]] },
+
+/* ── adk ───────────────────────────────────────────────── */
+{ id:"ad1", lane:"adk", s:30.4, w:1.6, k:"D", tone:"lime", t:"_ensure_session · _sync_session_state",
+  where:"agents/pipeline.py:287-308, 255-284",
+  ops:[
+    ["mut","Creates the Redis session with the 10-key seed if absent"],
+    ["mut","<b>Pushes the Postgres <code>state_snapshot</code> into Redis</b>, overwriting it — this is what makes recovery after a Redis flush possible"],
+    ["mut","<code>sanitize_topic</code> then <code>sanitize_audience</code>: injection patterns → audience becomes the literal <code>\"general readers\"</code>; >200 chars truncated"],
+    ["drop","<b><code>sanitize_topic</code>'s validity flag is discarded</b> — a 3–9 char topic becomes the empty string and the LLM is asked to write about nothing (F-01)"],
+  ],
+  kv:[["Runner","Runner(app=APP, app_name='blogify')"],["Root span","pipeline_executor.execute"]] },
+
+{ id:"ad2", lane:"adk", s:33, w:2, k:"D", tone:"lime", t:"intent → outline",
+  where:"agents/intent_agent.py · agents/outline_agent.py",
+  ops:[
+    ["mut","<code>intent_classifier</code> → <code>state.intent_result</code>. <b>Never read after the outline agent</b>, and has no dedicated column — it survives only inside <code>state_snapshot</code>"],
+    ["mut","<code>outline_agent</code> → <code>state.blog_outline</code>, shaped by <code>OutlineSchema</code>: title ≤120, 3–7 sections, 80–300 words each"],
+    ["mut","Every event is appended to an in-memory list — the entire ADK event stream is held in RAM and then discarded"],
+    ["drop","<code>intent_result</code> is invisible in every API response"],
+  ],
+  kv:[["Model","gemini-2.5-flash"],["Retry","3 attempts, 8 s backoff, 429/5xx"]] },
+
+{ id:"ad3", lane:"adk", s:36.4, w:2, k:"D", tone:"rust", t:"outline_review_agent → PAUSE",
+  where:"agents/pipeline.py:70-115",
+  ops:[
+    ["mut","The agent must call <code>review_generated_outline</code> exactly once"],
+    ["mut","<b>First pass:</b> validates <code>{blog_outline}</code> through <code>OutlineSchema</code>, builds a payload, calls <code>tool_context.request_confirmation()</code>, sets <code>skip_summarization = True</code>"],
+    ["mut","<b>Second pass</b> on resume: reads the confirmed payload, re-validates, then <b>overwrites three state keys</b> — <code>blog_outline</code>, <code>approved_outline</code>, <code>outline_feedback</code>"],
+    ["drop","<b>Overwriting <code>blog_outline</code> destroys the pre-approval outline</b> in ADK state — and <code>blog_versions.outline_data</code> is overwritten to match. The original is unrecoverable (F-06)"],
+    ["drop","<code>approved_outline</code> and <code>outline_feedback</code> are written but <b>no agent instruction interpolates them</b> (F-09)"],
+    ["drop","This agent's token usage is never metered (F-03)"],
+  ],
+  kv:[["Pause handle","event.invocation_id + tool-call id"],["Skip summarization","keeps the pause clean"]] },
+
+{ id:"ad4", lane:"adk", s:55, w:1.6, k:"D", tone:"lime", t:"research_agent + Tavily",
+  where:"agents/research_agent.py · tools/tavily_research.py",
+  ops:[
+    ["mut","<code>research_topic</code> tries <code>client.search()</code> first, falls back to <code>client.research()</code> with polling up to <b>120 s</b>, then to an empty result with an <code>error</code> field"],
+    ["mut","Wrapped in a circuit breaker: 5 failures → 60 s recovery"],
+    ["mut","Produces <code>{topic, summary, total_sources, sources[{title,url,content[:500],score}]}</code>"],
+    ["drop","A 120 s deep-research poll can exceed the 90 s heartbeat extension → the lease is lost mid-run (F-17)"],
+    ["drop","On total failure the editor switches to <b>Plain mode</b> and strips all citation markers"],
+  ],
+  kv:[["Sources","persisted to research_sources"],["Summary","kept only inside research_data"]] },
+
+{ id:"ad5", lane:"adk", s:59, w:4, k:"D", tone:"lime", t:"writer ⟷ editor loop (max 2)",
+  where:"agents/pipeline.py:147-153 · writer_agent.py · editor_agent.py",
+  ops:[
+    ["mut","<code>LoopAgent max_iterations=2</code> — writer then editor, twice worst case"],
+    ["mut","The writer reads <b>nothing</b>: its instruction has no <code>{state}</code> variable at all"],
+    ["mut","The editor reads only <code>{blog_draft}</code> and <code>{research_data}</code>"],
+    ["mut","<b>Citation mode</b> if real sources exist; otherwise <b>Plain mode</b> — all <code>[N]</code> markers stripped, no Sources section invented"],
+    ["drop","<b><code>{outline_feedback}</code> is available in state and referenced by nothing</b>. A revision request like \"add more on X\" never reaches the model (F-09)"],
+    ["drop","<code>editor_review.sources_section</code> is never persisted"],
+    ["mut","On the second iteration, writer tokens for the same stage are <b>skipped by the cost recorder</b> (F-05)"],
+  ],
+  kv:[["Draft","blog_versions.draft_content"],["Final","editor_review.final_blog or draft"]] },
+
+/* ── gemini ────────────────────────────────────────────── */
+{ id:"g1", lane:"gemini", s:33.2, w:1, k:"G", tone:"rust", t:"call · intent", tone2:1,
+  where:"google.adk + google.genai",
+  ops:[
+    ["mut","<code>gemini-2.5-flash</code>, temp 0.7, 8192 max tokens"],
+    ["mut","<code>usage_metadata</code> → <code>CostInfo(stage='intent')</code>"],
+  ], kv:[["Cost","(tokens/1000) × $0.00002"]] },
+
+{ id:"g2", lane:"gemini", s:34.8, w:1.2, k:"G", tone:"rust", t:"call · outline",
+  where:"agents/outline_agent.py",
+  ops:[
+    ["mut","Structured output via <code>output_schema=OutlineSchema</code>"],
+    ["mut","usage → <code>CostInfo(stage='outline')</code>"],
+  ], kv:[["Schema enforced","by ADK + Pydantic"]] },
+
+{ id:"g3", lane:"gemini", s:36.7, w:1.3, k:"G", tone:"rust", t:"call · outline_review (UNMETERED)",
+  where:"agents/pipeline.py:118-136",
+  ops:[
+    ["drop","<b>This call's tokens are never attributed to any stage</b> — <code>outline_review_agent</code> is missing from <code>STAGE_BY_AUTHOR</code>, so the cost extractor drops the event silently (F-03)"],
+    ["mut","Its events still trigger <code>request_confirmation</code>"],
+  ], kv:[["Author","outline_review_agent"],["In STAGE_BY_AUTHOR","no"]] },
+
+{ id:"g4", lane:"gemini", s:56.6, w:2, k:"G", tone:"rust", t:"call · research · Tavily",
+  where:"tools/tavily_research.py",
+  ops:[
+    ["mut","One LLM call to plan + compile, plus a Tavily HTTP round trip"],
+    ["mut","<code>CircuitBreaker(name='tavily', failure_threshold=5, recovery_timeout=60)</code>"],
+    ["mut","Content truncated to 500 chars per source"],
+  ], kv:[["Deep research poll","≤120 s"]] },
+
+{ id:"g5", lane:"gemini", s:59.4, w:1.6, k:"G", tone:"rust", t:"call · writer ×1-2",
+  where:"agents/writer_agent.py",
+  ops:[
+    ["mut","16384 max tokens — the largest budget in the graph"],
+    ["mut","Instructed for 800–1200 words, markdown, <code>[N]</code> citations"],
+    ["drop","No <code>{approved_outline}</code>, no <code>{outline_feedback}</code>, no <code>{research_data}</code> interpolated"],
+  ], kv:[["max_output_tokens","16384"]] },
+
+{ id:"g6", lane:"gemini", s:61.2, w:1.6, k:"G", tone:"rust", t:"call · editor ×1-2",
+  where:"agents/editor_agent.py",
+  ops:[
+    ["mut","Returns <code>{approved, feedback, final_blog, sources_section}</code>"],
+    ["mut","Decides final_content: <code>approved ? final_blog : draft</code>"],
+  ], kv:[["max_output_tokens","8192"]] },
+
+/* ── human ─────────────────────────────────────────────── */
+{ id:"u1", lane:"user", s:46, w:5, k:"U", tone:"violet", t:"outline review — unbounded wait",
+  where:"frontend/src/pages/OutlineReviewPage.tsx",
+  ops:[
+    ["mut","Fetches <code>GET /{id}/outline</code>: <code>approved_outline or outline_data</code>, else the session column"],
+    ["mut","Edits title, sections (add / remove / reorder), recomputes <code>estimated_total_words</code>"],
+    ["drop","<b>The pause is open-ended.</b> No timeout, no expiry, no sweeper. The reservation is never released while the session sits here (F-15)"],
+  ],
+  kv:[["Reserve held","$1.00"],["Lease","released — no worker attached"]] },
+
+{ id:"u2", lane:"user", s:51, w:1.6, k:"U", tone:"violet", t:"approve / revise",
+  where:"services/blog_service.py:124-172",
+  ops:[
+    ["pg","Guard: status must be <code>AWAITING_OUTLINE_REVIEW</code> else <b>409</b>"],
+    ["mut","Snapshot rewritten: <code>blog_outline = approved_outline</code>, <code>outline_feedback = feedback</code>"],
+    ["pg","<b>UPDATE blog_versions</b> → QUEUED / resume_outline"],
+    ["mut","In-Python mutation + <code>flush()</code> on the session row"],
+    ["rd","<b>LPUSH</b> a job carrying only <code>{session_id, phase}</code>"],
+    ["drop","<code>invocation_id</code>, <code>confirmation_request_id</code>, <code>approved_outline</code>, <code>feedback_text</code> are <b>not</b> in the payload — safe only because <code>_hydrate_job</code> repopulates all four from the version row"],
+  ],
+  kv:[["TX","TX-C"],["Lease version","increments on acquire"]] },
+
+{ id:"u3", lane:"user", s:69, w:4, k:"U", tone:"violet", t:"final draft review",
+  where:"frontend/src/pages/FinalReviewPage.tsx",
+  ops:[
+    ["mut","Fetches <code>GET /{id}/versions/latest</code> — the <em>latest</em> version, not the active one"],
+    ["mut","Raw / rendered markdown toggle"],
+  ], kv:[["Version","version_number desc limit 1"]] },
+
+{ id:"u4", lane:"user", s:73, w:2.2, k:"U", tone:"lime", t:"decide — 3 outcomes",
+  where:"services/blog_service.py:174-247",
+  ops:[
+    ["mut","<b>approved</b> → session COMPLETED + <code>completed_at</code>, version COMPLETED, <code>user_action='APPROVED'</code>, metric <code>{status=\"completed\"}</code>"],
+    ["mut","<b>revision_requested</b> → session QUEUED / <code>job_phase='revision'</code>, version QUEUED, <code>user_action='REVISION_REQUESTED'</code>, snapshot <code>outline_feedback</code>, LPUSH revision"],
+    ["mut","<b>rejected</b> → session REJECTED, <code>failure_reason='Rejected by user'</code>, <code>job_phase=NULL</code>"],
+    ["drop","<code>failure_reason</code> is overloaded to carry a human rejection and surfaced nowhere (F-27)"],
+    ["drop","The version chain forks at <em>lease acquisition</em>, not here — <code>create_revision_from_active</code> deep-copies v1 into v2"],
+  ],
+  kv:[["Terminal","COMPLETED · REJECTED"],["Slots","freed → a new blog may start"]] },
+];
+
+/* ────────────────────────────────────────────────────────────
+   RENDER
+   ──────────────────────────────────────────────────────────── */
+const root = document.getElementById('lanes');
+const byLane = {};
+LANES.forEach(l => { byLane[l.id] = []; });
+NODES.forEach(n => byLane[n.lane].push(n));
+
+const toggleWrap = document.getElementById('laneToggles');
+
+LANES.forEach((l) => {
+  const name = document.createElement('div');
+  name.className = 'lane-name';
+  name.innerHTML = `<span style="width:7px;height:7px;background:var(--${l.tone});display:inline-block;border-radius:50%"></span>${l.name}`;
+  const track = document.createElement('div');
+  track.className = 'lane-track';
+  track.id = 'track-' + l.id;
+
+  byLane[l.id].forEach(n => {
+    const el = document.createElement('div');
+    el.className = 'node';
+    el.dataset.tone = l.tone;
+    el.dataset.lane = l.id;
+    el.style.left = n.s + '%';
+    el.style.width = `calc(${n.w}% - 3px)`;
+    el.innerHTML = `<span class="k">${n.k}</span>${n.t.replace(/ · /g, '<br>')}`;
+    el.title = n.t;
+    el.addEventListener('click', () => select(n, el));
+    track.appendChild(el);
+    n.el = el;
+  });
+
+  root.appendChild(name);
+  root.appendChild(track);
+
+  const b = document.createElement('button');
+  b.className = 'btn';
+  b.dataset.tone = l.tone;
+  b.setAttribute('aria-pressed', 'true');
+  b.textContent = l.name;
+  b.addEventListener('click', () => {
+    const on = b.getAttribute('aria-pressed') === 'true';
+    b.setAttribute('aria-pressed', String(!on));
+    track.style.display = on ? 'none' : '';
+    name.style.display = on ? 'none' : '';
+  });
+  toggleWrap.appendChild(b);
+});
+
+/* beats + ticks */
+const beats = document.getElementById('beats');
+BEATS.forEach(([p, label]) => {
+  const i = document.createElement('i');
+  i.style.left = p + '%';
+  i.dataset.b = label;
+  i.className = label.startsWith('COMMIT') ? 'hit' : '';
+  beats.appendChild(i);
+});
+const ticks = document.getElementById('ticks');
+[0, 10, 20, 30, 40, 50, 60, 70, 80].forEach(p => {
+  const t = document.createElement('span');
+  t.className = 'tick';
+  t.style.left = p + '%';
+  t.textContent = p + '%';
+  ticks.appendChild(t);
+});
+
+/* ── selection ─────────────────────────────────────────────── */
+let current = null;
+function select(n, el) {
+  if (current) current.classList.remove('sel');
+  el.classList.add('sel');
+  current = el;
+
+  const d = document.getElementById('detail');
+  const ops = n.ops.map(([k, html]) => `<li class="${k}">${html}</li>`).join('');
+  const kv = n.kv.map(([a, b]) => `<div class="it"><dt>${a}</dt><dd>${b}</dd></div>`).join('');
+
+  d.innerHTML = `
+    <div class="dh">
+      <span class="ttl">${n.t.replace(/ · /g, ' <span style="color:var(--ink-500)">·</span> ')}</span>
+      <span style="display:flex;gap:.4rem;flex-wrap:wrap">
+        <span class="tag ${n.tone === 'rust' ? 'rust' : n.tone === 'violet' ? 'violet' : n.tone === 'lime' ? 'lime' : n.tone === 'cyan' ? 'cyan' : 'amber'}">${LANES.find(l => l.id === n.lane).name}</span>
+        <span class="tag">${n.s}% → ${(n.s + n.w).toFixed(1)}%</span>
+      </span>
+    </div>
+    <div class="db">
+      <div class="mono" style="font-size:.7rem;color:var(--cyan);margin-bottom:.9rem">${n.where}</div>
+      <div class="ops">${ops}</div>
+      <div class="kv">${kv}</div>
+      <div class="arrow-chain">
+        <span>${n.ops.filter(o => o[0] === 'pg').length} Postgres</span><i>·</i>
+        <span>${n.ops.filter(o => o[0] === 'rd').length} Redis</span><i>·</i>
+        <span>${n.ops.filter(o => o[0] === 'mut').length} mutation</span><i>·</i>
+        <span style="border-color:var(--rust-dim);color:var(--rust)">${n.ops.filter(o => o[0] === 'drop').length} discard</span>
+      </div>
+    </div>`;
+  document.getElementById('detailWrap').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/* keyboard nav across nodes */
+let idx = 0;
+document.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+  e.preventDefault();
+  const flat = NODES.filter(n => n.el && n.el.offsetParent !== null);
+  if (!flat.length) return;
+  idx = (idx + (e.key === 'ArrowRight' ? 1 : -1) + flat.length) % flat.length;
+  const n = flat[idx];
+  n.el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  select(n, n.el);
+});
+</script>
+</body>
+</html>

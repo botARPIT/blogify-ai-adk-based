@@ -1,7 +1,6 @@
 """Redis task queue with atomic dequeue using Lua script."""
 
 import json
-import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -24,6 +23,7 @@ class BlogJob:
     confirmation_request_id: str | None = None
     approved_outline: dict | None = None
     feedback_text: str | None = None
+    outbox_event_id: int | None = None
     enqueued_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -144,23 +144,34 @@ class TaskQueue:
         await client.zadd(self.PROCESSING_KEY, {job_json: new_deadline})
         logger.debug("visibility_extended", session_id=job.session_id, seconds=additional_seconds)
 
-    async def wait_for_job_signal(self, timeout:int = 30) -> None:
-        """Subscribe to Redis Pub/Sub channel until a message arrives or timeout expires"""
+    async def dequeue_or_wait(self) -> BlogJob:
+        """Wait for a notification and return a queued job without idle polling.
+
+        Subscribe before checking the durable list. This ordering closes the
+        gap where an enqueue could publish between an empty dequeue and the
+        worker subscribing. Pub/Sub is only a wake-up signal; the list remains
+        the source of queued jobs.
+        """
         client = await get_redis_client()
         pubsub = client.pubsub()
 
-        #Subscribe to channel
-        await pubsub.subscribe(self.NOTIFY_CHANNEL)
-
         try:
-            async with asyncio.timeout(timeout):
+            await pubsub.subscribe(self.NOTIFY_CHANNEL)
+            while True:
+                job = await self.dequeue()
+                if job is not None:
+                    return job
+
                 async for message in pubsub.listen():
                     if message["type"] == "message":
                         break
-        except TimeoutError:
-            pass
         finally:
-            await pubsub.unsubscribe(self.NOTIFY_CHANNEL)
-            await pubsub.close()
+            try:
+                await pubsub.unsubscribe(self.NOTIFY_CHANNEL)
+            except Exception:
+                # The connection may already be unavailable during recovery.
+                pass
+            finally:
+                await pubsub.close()
 
 task_queue = TaskQueue()

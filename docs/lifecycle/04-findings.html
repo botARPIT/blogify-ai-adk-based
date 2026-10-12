@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>04 · Findings — Blogify Lifecycle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  .tally { display:flex; gap:.6rem; flex-wrap:wrap; margin:1rem 0 0; }
+  .tally .t { border:var(--rule); padding:.55rem .8rem; background:var(--ink-850); }
+  .tally .t b { display:block; font-family:var(--display); font-size:1.7rem; line-height:1; }
+  .tally .t span { font-family:var(--mono); font-size:.55rem; letter-spacing:.16em; text-transform:uppercase; color:var(--paper-faint); }
+  .tally .t.crit b { color: var(--rust); }
+  .tally .t.high b { color: #ff9b8a; }
+  .tally .t.med  b { color: var(--amber); }
+  .tally .t.low  b { color: var(--paper-dim); }
+  .f-where { font-family:var(--mono); font-size:.66rem; color:var(--cyan); margin-top:.3rem; display:block; }
+</style>
+</head>
+<body>
+<div class="grain"></div>
+<div class="wrap">
+
+<header class="top">
+  <div class="brand"><span class="dot"></span><b>Blogify</b><span class="tag rust">04 · FINDINGS</span></div>
+  <nav class="tabs">
+    <a href="index.html">Index</a>
+    <a href="01-timeline.html">01 · Timeline</a>
+    <a href="02-lineage.html">02 · Lineage</a>
+    <a href="03-orm.html">03 · ORM</a>
+    <a href="04-findings.html" aria-current="page">04 · Findings</a>
+  </nav>
+</header>
+
+<main>
+
+<section>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.2rem">
+    <span class="tag rust">32 FINDINGS</span>
+    <span class="tag">0 COVERED BY TESTS</span>
+    <span class="tag amber">backend/tests: 4 files</span>
+  </div>
+  <h1 class="display" style="font-size:clamp(2rem,5vw,3.6rem)">Everything that <em>doesn't add up</em>.</h1>
+  <p class="lede" style="margin-top:1rem">
+    The architecture is sound. Postgres authoritative, Redis advisory, reaper reconciliation,
+    append-only leases, a state machine enforced in the repository layer. The problem is that
+    <strong>nothing verifies any of it actually ran</strong> — there are four test files and none of
+    them touch budget arithmetic, state transitions, reservation settlement, or cost idempotency.
+    Every finding below lives in code no test reaches.
+  </p>
+  <div class="tally" id="tally"></div>
+</section>
+
+<section>
+  <header>
+    <div class="controls">
+      <button class="btn" data-f="all" aria-pressed="true">All</button>
+      <button class="btn" data-tone="rust" data-f="critical" aria-pressed="false">Critical</button>
+      <button class="btn" data-f="high" aria-pressed="false">High</button>
+      <button class="btn" data-tone="amber" data-f="medium" aria-pressed="false">Medium</button>
+      <button class="btn" data-f="low" aria-pressed="false">Low</button>
+      <span class="lbl" style="margin-left:.6rem">Category</span>
+      <select class="sel" id="cat">
+        <option value="all">all categories</option>
+        <option value="budget">budget</option>
+        <option value="metering">metering</option>
+        <option value="hitl">human-in-the-loop</option>
+        <option value="durability">durability</option>
+        <option value="api">api surface</option>
+        <option value="schema">schema</option>
+        <option value="dead">dead code</option>
+      </select>
+    </div>
+  </header>
+  <div id="list" style="margin-top:1.1rem"></div>
+</section>
+
+<section>
+  <header><h3 class="sub">Remediation</h3><h2 class="sec" style="margin-top:.4rem">Suggested order</h2></header>
+  <div class="panel">
+    <div class="cap"><span class="t">Six steps that would remove every critical and high finding</span></div>
+    <div class="scroll">
+      <table class="grid">
+        <thead><tr><th>#</th><th>Step</th><th>Closes</th><th>Effort</th></tr></thead>
+        <tbody>
+          <tr><td class="strong">1</td><td class="strong">Add the missing <code>/1000</code> to the reservation formula</td><td class="m">F-11</td><td class="m">one line</td></tr>
+          <tr><td class="strong">2</td><td class="strong">Interpolate <code>{outline_feedback}</code> in the writer instruction — <em>after</em> routing feedback through <code>sanitize_feedback</code></td><td class="m">F-09, F-32</td><td class="m">two lines</td></tr>
+          <tr><td class="strong">3</td><td class="strong">Key <code>agent_runs</code> on <code>(blog_session_id, stage_name, version)</code>; record one <code>CostInfo</code> per invocation, not per session; add <code>outline_review_agent</code> to <code>STAGE_BY_AUTHOR</code></td><td class="m">F-05, F-03, F-08, F-21</td><td class="m">~1 day</td></tr>
+          <tr><td class="strong">4</td><td class="strong">Settle the reservation on the pause path and on rejection; add a reaper sweep for <code>AWAITING_*</code> sessions holding a reservation older than N hours</td><td class="m">F-15</td><td class="m">~half day</td></tr>
+          <tr><td class="strong">5</td><td class="strong">Make the failure path idempotent: catch-and-log around <code>_handle_failure</code> so a raise there cannot strand the session in <code>PROCESSING</code></td><td class="m">F-14</td><td class="m">~1 hour</td></tr>
+          <tr><td class="strong">6</td><td class="strong">Honour the <code>sanitize_topic</code> validity flag; fix the <code>err.body</code> → <code>err.errorCode</code> mismatch in the two dead frontend branches</td><td class="m">F-01, F-22</td><td class="m">~1 hour</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="note">
+    <b>Then write the tests.</b> A property test over
+    <code>BlogSessionStatus.validate_transition</code> alone would have caught nothing here — the
+    state machine is fine. What is missing is an integration test that runs one blog end to end
+    against Postgres and asserts: the ledger sums to the balance delta, <code>reserved_usd</code>
+    returns to zero on every terminal path including rejection and failure, and revision spend
+    appears in the ledger. Three assertions; four critical and high findings would have been
+    impossible to ship.
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <p style="margin:0">Part 4 of 4 · narrative at <a href="../blog-generation-lifecycle.md">docs/blog-generation-lifecycle.md</a> §18, §19</p>
+</footer>
+
+</div>
+
+<script>
+const F = [
+/* ═══════════════ CRITICAL ═══════════════ */
+{ id:"F-11", sev:"critical", cat:"budget",
+  t:"Budget reservation is 1000× the real cost of a blog",
+  where:"budget_service.py:47 · budget_config.py:24",
+  ev:`# budget_service.py:47 — the bug
+estimated_usd = Decimal(str(ESTIMATED_TOKENS_PER_BLOG)) * Decimal("0.00002")
+#                = 50000 * 0.00002 = 1.00 USD
+
+# budget_config.py:22-25 — the truth
+def get_model_cost(model, tokens):
+    price_per_1k = MODEL_PRICING.get(model, ...)
+    return (tokens / 1000) * price_per_1k
+#  50000 tokens -> (50000/1000) * 0.00002 = 0.001 USD`,
+  imp:`Tokens are multiplied by a <b>per-1k</b> price. The /1000 is missing. Verified by running the actual functions: the ratio is exactly 1000.0.
+
+Consequences, in order of severity:
+<ul>
+<li>A user with the $5.00 registration grant can start only <b>5</b> blogs, not the 10 that <code>user_blog_quotas.blogs_limit</code> advertises and the dashboard promises.</li>
+<li>While any job is in flight the user is denied <b>20% of their balance</b> to guard a $0.001 risk.</li>
+<li>Combined with F-15, a single abandoned outline review permanently removes 20% of a user's budget.</li>
+</ul>`,
+  fix:`estimated_usd = Decimal(str(ESTIMATED_TOKENS_PER_BLOG)) * Decimal("0.00002") / 1000
+# or, better, reuse the existing function so the two can never diverge:
+from src.config.budget_config import get_model_cost
+estimated_usd = Decimal(str(get_model_cost("gemini-2.5-flash", ESTIMATED_TOKENS_PER_BLOG)))` },
+
+{ id:"F-05", sev:"critical", cat:"metering",
+  t:"Revisions are entirely unbilled — tokens spent, nothing recorded",
+  where:"executor.py:379-381 · blog_service.py:95",
+  ev:`# executor.py:379-381
+existing = await self._run_repo.get_by_session_and_stage(job.session_id, cost.stage)
+if existing and existing.status == AgentRunStatus.COMPLETED:
+    continue        # <- skips the ledger COMMIT *and* the agent_runs write`,
+  imp:`Two independent defects compound here.
+
+<b>1. The skip is per-session, not per-run.</b> After the first successful generation, stages
+<code>research</code>, <code>writer</code> and <code>editor</code> all have a COMPLETED
+<code>agent_runs</code> row for that session. A revision re-runs all three. Every one is skipped:
+no agent_run row, no <code>budget_ledger</code> COMMIT, no <code>budget_spent_tokens</code> increment.
+
+<b>2. No second reservation is ever created.</b> <code>check_and_reserve</code> is called only from
+<code>create_generation</code>. On the revision's <code>_handle_success</code>,
+<code>release_excess</code> finds no open reservation (it was stamped at the first success) and returns
+after logging <code>release_excess_no_active_reservation</code> — so
+<code>budget_accounts.balance_usd</code> never moves either.
+
+Net effect: <b>every byte of revision spend is invisible in all three budget surfaces.</b> A user can
+loop revisions indefinitely at zero accounted cost. The agent graph has no revision cap, so nothing
+else bounds it.`,
+  fix:`# key cost records per invocation, not per session
+# blog_runs UNIQUE (blog_session_id, blog_version_id, stage_name, invocation_id)
+# then in _commit_costs:
+existing = await self._run_repo.get_by_session_version_and_stage(
+    job.session_id, active_version.id, cost.stage, result.invocation_id
+)
+# and take a fresh reservation per phase, not per session` },
+
+{ id:"F-09", sev:"critical", cat:"hitl",
+  t:"Revision feedback never reaches the LLM",
+  where:"blog_service.py:143 · executor.py:457 · writer_agent.py · editor_agent.py",
+  ev:`# persisted…
+snapshot["outline_feedback"] = feedback_text or ""     # blog_service.py:143
+"outline_feedback": feedback_text or "",               # executor.py:457
+# …pushed into Redis ADK state by _sync_session_state…
+# …and then:
+
+# writer_agent.py instruction — interpolates NOTHING
+# editor_agent.py instruction — interpolates only {blog_draft} and {research_data}
+# grep 'outline_feedback' across agents/ -> zero hits`,
+  imp:`A user who writes "please add more concrete data on the pricing section and cite a real
+source" gets a re-run that is <b>byte-for-byte equivalent</b> to the previous draft, because the only
+thing that distinguishes the two runs never reaches the model.
+
+This is not a subtle degradation. It is the feature that distinguishes <code>revision</code> from
+<code>requeue</code> doing nothing at all.
+
+It is also load-bearing for correctness: <code>FinalReviewRequest</code> <b>requires</b>
+<code>feedback_text</code> when <code>action == "revision_requested"</code>
+(<code>schemas.py:199-206</code>), so the API contract actively asserts that this text matters.`,
+  fix:`# writer_agent.py instruction, after the existing requirements block:
+"""
+Incorporate the reviewer's guidance for this revision: {outline_feedback}
+Treat it as authoritative — it describes what must change from the previous draft.
+"""` },
+
+{ id:"F-03", sev:"critical", cat:"metering",
+  t:"outline_review_agent token usage is never metered",
+  where:"pipeline.py:176-182 · pipeline.py:195-224",
+  ev:`STAGE_BY_AUTHOR = {
+    "intent_classifier": "intent",
+    "outline_agent":     "outline",
+    "research_agent":    "research",
+    "writer_agent":      "writer",
+    "editor_agent":      "editor",
+    # "outline_review_agent" — absent
+}
+
+# pipeline.py:203-205
+stage = STAGE_BY_AUTHOR.get(author or "")
+if stage is None:
+    continue        # <- event silently discarded`,
+  imp:`The outline review agent runs a full Gemini turn on every single generation, including the
+resume turn where it evaluates the confirmation. Those tokens are:
+<ul>
+<li>absent from <code>agent_runs</code> — no row exists for the stage</li>
+<li>absent from <code>budget_ledger</code> — never committed</li>
+<li>absent from <code>blog_sessions.budget_spent_*</code></li>
+<li>absent from <code>agent_token_usage</code> and <code>agent_cost_usd</code></li>
+</ul>
+
+So real spend is understated on every surface, permanently. The 24 spans the README advertises for
+a full generation include this one.` },
+
+/* ═══════════════ HIGH ═══════════════ */
+{ id:"F-14", sev:"high", cat:"durability",
+  t:"A failing failure-handler strands the session in PROCESSING forever",
+  where:"blog_worker.py:95-104 · reaper.py:142-155 · blog_session_repository.py:131-155",
+  ev:`# blog_worker.py:84-104
+async with AsyncSessionFactory() as session:
+    executor = PipelineExecutor(session)
+    await executor.execute(hydrated_job)     # -> _handle_failure may itself raise
+    await session.commit()                   # never reached
+except Exception as e:
+    logger.error("job_failed", ...)         # swallowed
+finally:
+    await self._release_lease(...)           # lease CLOSED
+
+# reaper.py:142 get_stale_sessions requires:  ended_at IS NULL  -> no longer true
+# blog_session_repository.py:131 get_queued_without_active_leases requires status == QUEUED
+#                                -> status is PROCESSING`,
+  imp:`If <code>_handle_failure</code> raises — e.g. <code>mark_failed</code> hits
+<code>InvalidStateTransition</code> because the session is no longer <code>PROCESSING</code>, or
+<code>release_all</code> throws — then TX-2 rolls back, the lease is released, and the row is left
+at <code>PROCESSING</code>.
+
+Both reaper queries are now blind to it:
+<ul>
+<li><code>get_stale_sessions</code> needs an <b>open</b> lease — it was just closed</li>
+<li><code>get_queued_without_active_leases</code> needs <code>QUEUED</code> — it is <code>PROCESSING</code></li>
+</ul>
+
+The session occupies one of the user's single <code>MAX_ACTIVE_SESSIONS_PER_USER = 1</code> slots
+forever. The user is permanently blocked from generating another blog and nothing logs an error
+beyond the one <code>job_failed</code> line.`,
+  fix:`except Exception as e:
+    logger.error("job_failed", session_id=..., phase=..., error=str(e))
+    # guarantee the session leaves PROCESSING even if the handler failed
+    async with AsyncSessionFactory() as s2:
+        await BlogSessionRepository(s2).mark_failed(job.session_id, reason=str(e))
+        await s2.commit()` },
+
+{ id:"F-15", sev:"high", cat:"budget",
+  t:"An abandoned outline review leaks the reservation permanently",
+  where:"executor.py:216-259 · blog_service.py:232-244",
+  ev:`# _handle_outline_pause — the whole method
+await self._commit_costs(job, result.costs)
+...update_version_state(...)
+...sync_active_version_fields(...)
+await self._session_repo.update_status(job.session_id, AWAITING_OUTLINE_REVIEW, ...)
+# NOTE: no release_excess, no release_all — unlike _handle_success and _handle_failure`,
+  imp:`The session may sit in <code>AWAITING_OUTLINE_REVIEW</code> for hours or forever. During that
+window <code>budget_accounts.reserved_usd</code> stays at $1.00 (or $1.00 × the over-reservation of
+F-11) and <code>session_reservations.released_at</code> stays NULL.
+
+Nothing ever closes it:
+<ul>
+<li>no sweeper targets <code>AWAITING_*</code> sessions — the reaper only looks at <code>PROCESSING</code> with an open lease, or <code>QUEUED</code> without one</li>
+<li>rejection at final review calls no budget method</li>
+<li>the reservation is <code>released_at IS NULL</code>-gated, so a later success cannot clean it up either</li>
+</ul>
+
+With <code>available = balance − reserved</code> and only 5 reservations affordable on a $5 grant,
+five abandoned outline reviews lock a user out entirely.`,
+  fix:`# (a) settle on rejection, and (b) sweep abandoned reviews in the reaper:
+# reaper.py — new pass
+await self._reap_abandoned_reviews(older_than_hours=24)
+#   -> find status in AWAITING_* AND an open session_reservations row
+#   -> budget_service.release_all(...) ; optionally mark FAILED` },
+
+{ id:"F-16", sev:"high", cat:"budget",
+  t:"The RELEASE ledger row records the wrong amount, so the ledger never reconciles",
+  where:"budget_service.py:153-161",
+  ev:`# what actually moves the account
+await self._account_repo.apply_commit(
+    user_id=user_id, reserved_usd=reserved_usd,   # 1.00 released
+    actual_usd=actual_usd,                        # 0.001 spent
+)
+# what the ledger records as RELEASE
+await self._budget_repo.write_entry(
+    entry_type=BudgetEntryType.RELEASE,
+    tokens=actual_tokens,
+    amount_usd=actual_usd,        # <-- 0.001, not 0.999
+)`,
+  imp:`Worked example for a 50k-token blog:
+<table style="width:100%;margin:.5rem 0;border-collapse:collapse">
+<tr><td style="padding:.15rem .4rem">RESERVE</td><td style="padding:.15rem .4rem">−1.0000</td></tr>
+<tr><td style="padding:.15rem .4rem">COMMIT ×5</td><td style="padding:.15rem .4rem">−0.0012</td></tr>
+<tr><td style="padding:.15rem .4rem">RELEASE</td><td style="padding:.15rem .4rem">+0.0012</td></tr>
+<tr style="border-top:1px solid var(--ink-600)"><td style="padding:.15rem .4rem"><b>sum</b></td><td style="padding:.15rem .4rem"><b>−1.0000</b></td></tr>
+<tr><td style="padding:.15rem .4rem">actual balance delta</td><td style="padding:.15rem .4rem"><b>−0.0012</b></td></tr>
+</table>
+
+The RELEASE row should carry <code>reserved − actual = +0.9988</code> for the books to balance.
+<code>BudgetService</code>'s docstring explicitly disclaims using the ledger for balances
+(<code>budget_service.py:22-23</code>), so nothing breaks — but the audit trail misreports a
+$0.001 release where $0.999 was returned, and anyone reconciling by hand gets a wrong answer.`,
+  fix:`excess_usd = reserved_usd - actual_usd
+excess_tokens = reservation.reserved_tokens - actual_tokens
+await self._budget_repo.write_entry(
+    ..., entry_type=BudgetEntryType.RELEASE,
+    tokens=excess_tokens, amount_usd=excess_usd,
+    note=f"Released {excess_usd} of {reserved_usd} reserved after generation",
+)` },
+
+{ id:"F-17", sev:"high", cat:"durability",
+  t:"Lease TTL (300 s) and heartbeat extension (90 s) disagree — a slow research poll loses the lease",
+  where:"blog_worker.py:36-37, 113 · tools/tavily_research.py:118",
+  ev:`LEASE_SECONDS   = 300                      # initial lease
+HEARTBEAT_INTERVAL = 30                       # tick
+await lease_repo.heartbeat_lease(session_id, WORKER_ID, extend_seconds=90)
+#                                                       ^^^^^^^^^^^^ 90 < 300
+
+# tavily_research.py:118
+max_wait = 120        # deep-research polling budget, in ONE blocking call`,
+  imp:`The heartbeat pushes expiry to <code>now + 90</code>, not <code>now + 300</code>. Any stall
+longer than 90 s loses the lease while the worker is still running and still writing.
+
+A Tavily deep-research poll waits up to <b>120 s</b> in a single call — comfortably past 90 s. On that
+path the reaper can mark the lease expired, requeue the session, and a second worker can start a
+duplicate run while the first is still executing. Two workers then write the same
+<code>blog_versions</code> row and both attempt <code>release_excess</code>.
+
+Heartbeat failures are also swallowed outright (<code>except Exception: pass</code>,
+<code>blog_worker.py:119-120</code>), so there is no signal at all.`,
+  fix:`await lease_repo.heartbeat_lease(
+    session_id, WORKER_ID, extend_seconds=LEASE_SECONDS   # 300, not 90
+)
+# and lower the Tavily poll budget below the heartbeat period, or move research to a
+# non-blocking tool so the heartbeat task gets scheduled at all` },
+
+{ id:"F-18", sev:"high", cat:"schema",
+  t:"user_blog_quotas.id has no autoincrement in the migration",
+  where:"e1f2a3b4c5d6_add_blog_quota_table.py",
+  ev:`sa.Column("id", sa.Integer(), nullable=False),   # <- no autoincrement=True
+# every other table in the chain:
+sa.Column("id", sa.Integer(), autoincrement=True, nullable=False)`,
+  imp:`Postgres emits a bare <code>integer PRIMARY KEY</code> with no sequence and no default. Inserts
+work today only because SQLAlchemy supplies the value client-side and
+<code>orm_models.py</code> declares <code>autoincrement=True</code> — so ORM inserts never ask the
+database for a value.
+
+Any of these break it silently:
+<ul>
+<li>a raw SQL insert or seed script</li>
+<li><code>Base.metadata.create_all</code> against a different Postgres</li>
+<li>a future <code>bulk_insert_mappings</code> or COPY path</li>
+<li>the <code>blog_quota_repository.get_or_create</code> path if it ever uses a server-side default</li>
+</ul>
+
+CI never runs <code>alembic check</code>, so autogenerate drift is not gated either.` },
+
+/* ═══════════════ MEDIUM ═══════════════ */
+{ id:"F-01", sev:"medium", cat:"hitl",
+  t:"A 3–9 character topic is silently emptied before it reaches the LLM",
+  where:"pipeline.py:509 · sanitization.py:112 · guards/input_guard.py:16",
+  ev:`# schemas.py:146      topic: str = Field(min_length=3, ...)
+# input_guard.py:16    TOPIC_MIN_LENGTH = 3
+# sanitization.py:112  if not topic or len(topic.strip()) < 10:
+#                         return False, "", "Topic must be at least 10 characters"
+
+# pipeline.py:509 — the flag is thrown away
+_, safe_topic, _ = sanitize_topic(topic)
+#                   ^^^^ is_valid discarded, safe_topic == "" on failure`,
+  imp:`A topic of "AI" passes Pydantic and InputGuard, then becomes the empty string. The message
+sent to Gemini is <code>"Generate a blog post about: \\nTarget audience: …"</code> — the writer
+agent has no state variables at all, so it produces a generic post with no error surfaced anywhere.
+
+The browser hides this because <code>DashboardPage.tsx:87-90</code> independently requires 10 chars
+client-side. Any direct API caller — curl, integration test, another service — hits it.`,
+  fix:`is_valid, safe_topic, err = sanitize_topic(topic)
+if not is_valid:
+    raise ValueError(err)          # surfaces as PipelineResult.error -> _handle_failure` },
+
+{ id:"F-02", sev:"medium", cat:"api",
+  t:"sanitize_audience substitutes a silent default and truncates below the column width",
+  where:"sanitization.py:157-172",
+  ev:`if len(audience) > 200:
+    audience = audience[:200]                 # column is varchar(255)
+is_suspicious, _ = detect_injection(audience)
+if is_suspicious:
+    return "general readers"                  # silent, no log, no user signal`,
+  imp:`One match against any of 38 patterns — including the bare word <code>password</code>,
+<code>api key</code>, or <code>roleplay as</code> — replaces the user's entire audience with
+<code>"general readers"</code>. A legitimate brief like "password-reset flows for non-technical
+admins" is silently rewritten, and the outline will be pitched at the wrong reader.
+
+Nothing is logged, nothing is returned to the client, and the original value <em>is</em> stored in
+<code>blog_sessions.audience</code> — so the API echoes back a value the LLM never saw.` },
+
+{ id:"F-06", sev:"medium", cat:"hitl",
+  t:"The pre-approval outline is unrecoverable from both stores",
+  where:"pipeline.py:107 · blog_service.py:141-142",
+  ev:`# pipeline.py:107 — on confirmation
+tool_context.state["blog_outline"] = approved_outline
+
+# blog_service.py:141-142 — on review submit
+snapshot["blog_outline"] = approved_outline
+snapshot["approved_outline"] = approved_outline
+# and update_version_state(outline_data=approved_outline, ...)`,
+  imp:`The generated outline is overwritten in ADK state <em>and</em> in
+<code>blog_versions.outline_data</code>. There is no column or state key that retains what the model
+originally proposed.
+
+Practically this means: when a user reports "the outline changed underneath me", the system cannot
+answer what changed. <code>blog_versions</code> is a fork-on-write chain designed for exactly this
+kind of question, and it forks at the wrong point — on revision, not on approval.`,
+  fix:`# keep the generated outline and the approved outline in separate slots
+tool_context.state["generated_outline"] = current_outline      # before the overwrite
+tool_context.state["blog_outline"]     = approved_outline
+# and add blog_versions.generated_outline JSONB alongside outline_data / approved_outline` },
+
+{ id:"F-07", sev:"medium", cat:"hitl",
+  t:"approved_outline in the snapshot is populated from the generated outline",
+  where:"executor.py:456",
+  ev:`"approved_outline": result.outline or job.approved_outline or {},
+#                 ^^^^^^^^^^^^^^^^ the GENERATED outline, checked first`,
+  imp:`On the pause path <code>result.outline == state["blog_outline"]</code>, i.e. the model's
+proposal — so the snapshot records the proposal as "approved".
+
+It reads correctly on the resume path only because <code>review_generated_outline</code> overwrites
+<code>state["blog_outline"]</code> with the approved outline first (<code>pipeline.py:107</code>).
+That is an ordering coincidence, not an invariant: change the tool's write order, or add a phase that
+populates <code>result.outline</code> without going through the tool, and the snapshot starts
+asserting a human approved something they never saw.`,
+  fix:`"approved_outline": job.approved_outline or state.get("approved_outline") or {},` },
+
+{ id:"F-08", sev:"medium", cat:"metering",
+  t:"latency_ms and completed_at are always NULL, so the duration histogram is never populated",
+  where:"executor.py:386-399, 401-410, 417-420",
+  ev:`if existing:                                   # update path
+    latency_ms = int((now - existing.started_at)...)
+    await self._run_repo.update(existing.id, ..., latency_ms=latency_ms, ...)
+else:                                             # create path
+    agent_run = await self._run_repo.create(
+        ..., total_tokens=..., cost_usd=..., output_snapshot=output_snapshot,
+    )                                              # no latency_ms, no completed_at
+
+# but the update path is unreachable: the COMPLETED skip at :380-381 returns first
+if latency_ms is not None:
+    blog_generation_duration_seconds.labels(stage=cost.stage).observe(latency_ms/1000)`,
+  imp:`Because every row is inserted already-<code>COMPLETED</code>, the next run's
+<code>status == COMPLETED</code> check always short-circuits. So:
+<ul>
+<li><code>agent_runs.latency_ms</code> — always NULL</li>
+<li><code>agent_runs.completed_at</code> — never set</li>
+<li><code>blog_generation_duration_seconds</code> — <b>never observed</b>, so the histogram is permanently empty</li>
+<li><code>AgentRunMetrics.latency_ms</code> and <code>completed_at</code> in <code>/detail</code> — always null</li>
+<li><code>get_duration_ms()</code> — always None</li>
+</ul>
+The dashboard's "time per stage" affordance has no data behind it.` },
+
+{ id:"F-10", sev:"medium", cat:"hitl",
+  t:"The record of the human's outline decision is erased on the first revision",
+  where:"executor.py:458 · executor.py:300",
+  ev:`def _build_state_snapshot(job, result, *, feedback_text):
+    return {
+        ...
+        "outline_review_result": result.confirmation_payload or {},
+        ...
+    }
+# _handle_success then assigns it wholesale:
+state_snapshot=snapshot          # update_version_state replaces, never merges`,
+  imp:`A phase-resume or revision run has <code>confirmation_payload is None</code>, so the key is
+written as <code>{}</code>. The only record that a human reviewed and approved the outline — the
+trigger for the whole HITL architecture — is gone after one revision.
+
+Note the field is already vestigial: <code>review_generated_outline</code> is a tool, so the agent's
+<code>output_key</code> is never really written. Fixing F-09 would make the feedback matter to the
+model; fixing this makes it matter to the audit trail.`,
+  fix:`prev = dict(active_version.state_snapshot or {})
+"outline_review_result": result.confirmation_payload or prev.get("outline_review_result") or {},` },
+
+{ id:"F-19", sev:"medium", cat:"schema",
+  t:"Research sources are never deduplicated and inflate the reported count",
+  where:"executor.py:366-373 · research_sources_repository.py:32-47",
+  ev:`sources_list = research_data["sources"]
+if sources_list:
+    await self._sources_repo.create_many(
+        blog_session_id=job.session_id, sources=sources_list,
+    )
+# no DELETE, no upsert, no natural key on (blog_session_id, url)`,
+  imp:`<code>_commit_costs</code> inserts on every run that carries research — the initial run, any
+recovery, and every revision. A session with three revisions accumulates 4N rows for N sources.
+
+<code>sources_count</code> is reported to the user in three endpoints
+(<code>/content</code>, <code>/detail</code>, <code>/versions/latest</code>) via
+<code>count_for_session</code>, so the UI reports a source count that has nothing to do with the
+number of distinct sources in the draft.
+
+<b>Hidden coupling:</b> <code>create_many</code> is called before the stage loop, but only on the
+path that passes <code>research_data</code>. The pause path calls
+<code>_commit_costs(job, result.costs)</code> with no research argument — so a run that pauses before
+research inserts nothing, correctly.` },
+
+{ id:"F-20", sev:"medium", cat:"dead",
+  t:"OutputGuard exists and is exported but is never called",
+  where:"guards/output_guard.py · guards/__init__.py:4",
+  ev:`# guards/__init__.py
+from src.guards.output_guard import OutputGuard
+__all__ = ["InputGuard", "OutputGuard"]
+
+# grep -rn "OutputGuard\\|validate_blog_output" src/  ->  only the definition and this export`,
+  imp:`Output-side validation (<code>MIN_WORD_COUNT = 300</code>, title ≤120 chars, sections must be
+a list) has never run in production. Nothing enforces a minimum length on generated content.
+
+The gap is invisible because nothing in the pipeline depends on it — but it means the system has
+<strong>no output contract at all</strong>. A 40-word draft with
+<code>editor_review.approved == true</code> would be served as a completed blog.` },
+
+{ id:"F-21", sev:"medium", cat:"schema",
+  t:"get_by_session_and_stage will raise MultipleResultsFound the day a duplicate appears",
+  where:"agent_run_repository.py:63-70 · orm_models.py:276",
+  ev:`async def get_by_session_and_stage(self, blog_session_id, stage_name):
+    result = await self._session.execute(
+        select(AgentRun).where(
+            AgentRun.blog_session_id == blog_session_id,
+            AgentRun.stage_name == stage_name,
+        )
+    )
+    return result.scalar_one_or_none()      # raises if >1 row
+
+# orm_models.py:276 — only a non-unique index
+__table_args__ = (Index("ix_agent_runs_session", "blog_session_id"),)`,
+  imp:`There is <b>no unique constraint</b> on <code>(blog_session_id, stage_name)</code>, yet the
+read assumes exactly one row. Today the <code>status == COMPLETED</code> skip keeps the invariant by
+accident.
+
+The invariant is one code change from breaking — and it is broken by the obvious fix for F-05
+(allow a second run of the same stage to insert a new row). Fixing the metering bug without first
+adding the unique key turns a silent accounting error into a 500 on every revision.` },
+
+{ id:"F-22", sev:"medium", cat:"api",
+  t:"Both frontend error branches read a field that does not exist",
+  where:"DashboardPage.tsx:127-138 vs base.ts:8-30",
+  ev:`// DashboardPage.tsx
+if (err?.status === 409 && err?.body?.error_code === 'SESSION_TERMINAL') { ... }
+if (err?.status === 402 && err?.body?.error_code === 'QUOTA_EXHAUSTED') { ... }
+
+// base.ts
+class ApiError extends Error {
+  status: number
+  errorCode: string      // <-- camelCase, and there is no .body field at all
+  requestId: string
+}`,
+  imp:`<code>err.body</code> is <code>undefined</code>, so both comparisons are false. Every
+quota-exhausted and session-terminal response falls through to the generic branch and shows a raw
+toast.
+
+Compounded by the backend: <code>HTTPException.detail</code> is a dict here, and
+<code>format_error_response</code> folds it through <code>str(error.detail)</code>
+(<code>errors.py:236</code>) — so even the message the user sees is a stringified Python dict, e.g.
+<code>"{'error_code': 'QUOTA_EXHAUSTED', 'message': 'You have used all 10…'}"</code>.
+
+Net effect: the two most important business-rule failures in the system are indistinguishable to
+the user from a 500.`,
+  fix:`// DashboardPage.tsx
+if (err?.status === 409 && err?.errorCode === 'SESSION_TERMINAL') { ... }
+if (err?.status === 402 && err?.errorCode === 'QUOTA_EXHAUSTED') { ... }` },
+
+{ id:"F-23", sev:"medium", cat:"schema",
+  t:"active_blog_version_id is an unindexed circular FK on the hot path",
+  where:"orm_models.py:182-184 · blog_version_repository.py:53-61",
+  ev:`# orm_models.py:182
+active_blog_version_id: Mapped[int | None] = mapped_column(
+    Integer, ForeignKey("blog_versions.id"), nullable=True
+)   # no index=True
+
+# blog_version_repository.py:53 — every executor call
+select(BlogVersion).join(
+    BlogSession, BlogSession.active_blog_version_id == BlogVersion.id
+).where(BlogSession.id == session_id)`,
+  imp:`A circular FK — <code>blog_sessions → blog_versions → blog_sessions</code> — added in
+migration <code>c2d4e6f8a9b1</code> with no accompanying index. Every "which version is active?"
+lookup in the executor, the reaper, and <code>_hydrate_job</code> joins through it.
+
+At current table sizes this is a hash-join fallback and nobody will ever notice. It becomes a
+sequential scan on the second table to cross a few thousand sessions — and it is the kind of index
+that is much cheaper to add now than to retrofit.` },
+
+{ id:"F-24", sev:"medium", cat:"dead",
+  t:"docs/database-schema.md documents a schema that no longer exists",
+  where:"docs/database-schema.md · backend/src/models/orm_models.py",
+  ev:`# docs/database-schema.md — "20 database tables"
+tenants, end_users, service_clients, budget_policies,
+service_client_budget_policies, budget_ledger_entries,
+human_review_events, export_jobs, user_notifications,
+users, blogs, cost_records          # 12 of 20 do not exist
+
+# orm_models.py — 10 tables, all real
+AuthUser BlogSession BlogVersion AgentRun BudgetLedger
+BudgetAccount SessionReservation ResearchSource SessionLease UserBlogQuota`,
+  imp:`The doc describes a multi-tenant <code>service_clients → tenants → end_users</code> hierarchy
+that was removed before the migration chain was squashed. It is dated "generated from
+orm_models.py - 2026-04-29", which was true then.
+
+There is corroborating evidence that the old model still confuses people: the
+<code>metrics.py</code> module still declares <code>service_client_budget_preflight_total</code> and
+<code>daily_cost_usd</code>, and README.md still advertises "per-tenant" and "per-service-client"
+daily caps. None of those exist in code.` },
+
+/* ═══════════════ LOW ═══════════════ */
+{ id:"F-04", sev:"low", cat:"hitl",
+  t:"tone is stored, transported and echoed but never applied",
+  where:"blog_routes.py:74 · blog_session_repository.py:39",
+  ev:`# stored
+tone=blog_session.tone,                                        # orm_models.py:178
+# transported
+tone=session.tone,                                             # blog_service.py:166
+# echoed
+tone=s.tone,                                                   # blog_routes.py:436
+# used by an agent: zero occurrences in agents/`,
+  imp:`Eight validated enum values, a DB column, a queue field, and four response surfaces — and no
+agent instruction mentions tone. The UI's <code>ToneSelect</code> therefore has no effect on output.
+
+Cheap to fix and it makes a user-facing control honest:
+<code>writer_agent</code> and <code>editor_agent</code> can read <code>{tone}</code> from state.` },
+
+{ id:"F-13", sev:"low", cat:"api",
+  t:"The dashboard token balance is always the 4M cap; BudgetPage uses a different hard-coded number",
+  where:"blog_routes.py:240-244 · MAX_TOKENS_PER_USER · BudgetPage.tsx:19-20",
+  ev:`price_per_token   = MODEL_PRICING["gemini-2.5-flash"] / 1000        # 2e-8
+total_granted_tokens = 5.00 / 2e-8 = 250,000,000
+balance_tokens = max(0, min(MAX_TOKENS_PER_USER, granted - spent))
+# MAX_TOKENS_PER_USER = 4_000_000  ->  always clamped. Always.
+
+# BudgetPage.tsx:19-20
+tokenCapacity = 1_000_000     # a third number, disagreeing`,
+  imp:`Spend is computed as USD ÷ price-per-token, which is a unit conversion dressed up as a
+balance. Because the grant converts to 250M tokens against a 4M cap, the displayed balance is
+identical before and after any number of blogs.
+
+Three constants — <code>MAX_TOKENS_PER_USER</code>, the derived USD, and the frontend's local
+1,000,000 — none of which can be reconciled.` },
+
+{ id:"F-25", sev:"low", cat:"dead",
+  t:"dequeue(timeout=5) is dead; the worker backs off 20 s",
+  where:"task_queue.py:56 · blog_worker.py:50-53",
+  ev:`async def dequeue(self, timeout: int = 5) -> BlogJob | None:
+    ...
+    result = await client.evalsha(...)      # non-blocking; timeout is never referenced
+
+job = await self._queue.dequeue(timeout=5)
+if job is None:
+    await asyncio.sleep(EMPTY_QUEUE_BACKOFF_SECONDS)   # 20 s`,
+  imp:`The parameter name suggests a blocking pop with a 5 s wait. The implementation is a
+non-blocking Lua eval, and the effective idle cadence is 20 s.
+
+A 20 s tail latency on job pickup, hidden behind an argument that promises 5 s. One-line rename
+(<code>blocking</code> → <code>max_wait_seconds</code>, or just delete the parameter) makes the
+behaviour legible.` },
+
+{ id:"F-26", sev:"low", cat:"dead",
+  t:"Four metric families are declared with zero call sites",
+  where:"monitoring/metrics.py:89-113",
+  ev:`daily_cost_usd                        Gauge   ['scope']    -> 0 call sites
+service_client_budget_exhausted_total     Counter []          -> 0 call sites
+service_client_budget_preflight_total     Counter ['result']  -> 0 call sites
+judge_decisions_total                     Counter ['decision']-> 0 call sites
+judge_quality_score                       Histogram ['judge']  -> 0 call sites
+validation_failures_total                 Counter [...]       -> 0 call sites`,
+  imp:`These survive from the removed multi-tenant / judge-agent design. On a Prometheus endpoint
+they are indistinguishable from live metrics — they simply never increment.
+
+Combined with <code>blog_generation_duration_seconds</code> (F-08), a provisioned Grafana dashboard
+shows several permanently-flat panels. Anyone reading them has to decide whether flat means
+"healthy" or "broken", and there is nothing in the UI to tell them which.` },
+
+{ id:"F-27", sev:"low", cat:"api",
+  t:"failure_reason is overloaded to carry human rejection and is surfaced nowhere",
+  where:"blog_service.py:236 · orm_models.py:212",
+  ev:`else:  # FinalReviewAction.REJECTED
+    session.status = BlogSessionStatus.REJECTED.value
+    session.current_stage = "rejected"
+    session.failure_reason = "Rejected by user"     # <- a rejection, not a failure`,
+  imp:`The column is documented as the reason a session failed. It now also means "the user said no",
+which makes the column ambiguous for any future analytics and means <code>/detail</code> and
+<code>/status</code> cannot show a rejection reason even though it is right there.
+
+The user's own <code>feedback_text</code> on a rejection is discarded entirely — <code>feedback_text</code>
+is forbidden on the rejected action by <code>schemas.py:204-205</code>, and
+<code>blog_versions.feedback_text</code> keeps its previous value rather than being cleared.` },
+
+{ id:"F-28", sev:"low", cat:"dead",
+  t:"Six enum values and magic strings with no writer",
+  where:"orm_models.py · reaper.py:182",
+  ev:`AgentRunStatus.STARTED        never written  (rows are inserted COMPLETED)
+AgentRunStatus.FAILED         never written
+LeaseEventType.EXPIRED        never written    (mark_expired writes HEARTBEAT_FAILED)
+LeaseEventType.REAPED         never written
+BlogSessionStatus.CANCELLED   never written    (valid transition target, no caller)
+
+"requeued_by_reaper"   reaper.py:182   magic string, no enum
+"revision_research"    session_lease_repository.py:271  magic string
+"revision_requested"   blog_service.py:205  set as current_stage, nothing reads it`,
+  imp:`A state machine with unreachable states is a state machine nobody has tested. The two magic
+strings are worse: <code>"requeued_by_reaper"</code> is load-bearing — step 2 of the reaper cycle
+(<code>reaper.py:145</code>) compares against it to prevent an infinite requeue loop between step 1
+and step 3. A typo there would spin the reaper forever with no error.` },
+
+{ id:"F-29", sev:"low", cat:"dead",
+  t:"agent_delay() sleeps two seconds after every phase",
+  where:"agent_config.py:76-77 · executor.py:115, 154, 181, 208",
+  ev:`async def agent_delay() -> None:
+    """Artificial delay after each agent run."""
+    await asyncio.sleep(2)
+
+# called once per phase execution, after the pipeline returns
+await agent_delay()`,
+  imp:`Eight seconds of pure sleep per blog across the four phases, holding a semaphore slot and a
+pooled DB connection while doing nothing.
+
+The name suggests rate-limit pacing; the comment says "artificial". If it exists to smooth
+Gemini quota bursts, it belongs on the Gemini call, not after the pipeline returns — where it
+delays nothing but the response.` },
+
+{ id:"F-30", sev:"low", cat:"dead",
+  t:"Stale .pyc files from a deleted migration chain remain in __pycache__",
+  where:"backend/alembic/versions/__pycache__/",
+  ev:`# .py files that exist:
+b0d04a975349  367700a374ec  a1b2c3d4e5f6
+c2d4e6f8a9b1  d4e5f6a7b8c9  e1f2a3b4c5d6
+
+# .pyc files with no .py
+000_legacy_schema  012_drop_legacy_tables  100_v1_schema
+008_saga_orchestration_schema  c91b0812afbe_add_worker_jobs_table
+…plus stages from src/ that no longer exist:
+stage_executor.py  human_review_repository.py
+notifications.py  canonical.py  pipeline_v2.py`,
+  imp:`Roughly 40 orphaned bytecode files referencing modules and tables that were deleted. They
+inflate <code>ls</code> output and make the schema history look far larger and more fragmented than
+it is — which is exactly the wrong signal for someone auditing migration coverage.
+
+They also keep imports working by accident if anything references the deleted module names.` },
+
+{ id:"F-31", sev:"low", cat:"api",
+  t:"The CSRF header guard is defined and never invoked",
+  where:"api/auth.py:129-133",
+  ev:`def ensure_csrf_header(request: Request) -> None:
+    if request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+        return
+    if request.headers.get("X-Requested-With") != "XMLHttpRequest":
+        raise HTTPException(status_code=403, detail="Missing CSRF header")
+
+# grep -rn ensure_csrf_header src/  ->  only the definition
+# frontend sends the header on every mutation (base.ts:49-51) and nothing checks it`,
+  imp:`Auth is cookie-based with <code>COOKIE_SAMESITE</code> defaulting to <code>lax</code>
+(<code>local_auth_service.py:57</code>). Lax blocks cross-site POST, so the practical exposure is
+limited — but the codebase clearly intends a CSRF header check and does not perform one.
+
+The frontend's <code>Idempotency-Key</code> on mutations is unrelated and should not be mistaken for
+protection.` },
+
+{ id:"F-32", sev:"low", cat:"hitl",
+  t:"sanitize_feedback exists and is never called",
+  where:"sanitization.py:175-192",
+  ev:`def sanitize_feedback(feedback: str | None) -> str | None:
+    if not feedback: return None
+    if len(feedback) > 1000: feedback = feedback[:1000]
+    return sanitize_for_llm(feedback, strict=True)
+
+# grep -rn sanitize_feedback src/  ->  only the definition
+# compare: sanitize_topic and sanitize_audience both have live call sites`,
+  imp:`Revision feedback is persisted to <code>blog_versions.feedback_text</code> and
+<code>state_snapshot.outline_feedback</code> completely unsanitised — including all 38
+prompt-injection patterns.
+
+Today this is inert, because of all things no agent reads the field (F-09). The two findings are
+coupled: <b>fixing F-09 without first wiring <code>sanitize_feedback</code> converts this into a
+live prompt-injection path</b>, where a user-supplied string is interpolated into the writer's
+instruction on the resume path.
+
+Suggested order is inverted from how it looks — do this one first.` },
+
+];
+
+/* ── render ──────────────────────────────────────────────── */
+const SEV = { critical:'crit', high:'high', medium:'med', low:'low' };
+const list = document.getElementById('list');
+let open = new Set();
+
+F.forEach(f => {
+  const d = document.createElement('div');
+  d.className = 'f-item';
+  d.dataset.sev = f.sev;
+  d.dataset.cat = f.cat;
+  d.innerHTML = `
+    <div class="f-top">
+      <span class="f-id">${f.id.replace('F-','')}</span>
+      <span>
+        <span class="f-ttl">${f.t}</span>
+        <span class="f-where">${f.where}</span>
+      </span>
+      <span style="display:flex;gap:.35rem;align-items:center;flex-shrink:0">
+        <span class="tag" style="font-size:.54rem">${f.cat}</span>
+        <span class="sev ${SEV[f.sev]}">${f.sev}</span>
+      </span>
+    </div>
+    <div class="f-body">
+      <div class="f-meta">
+        <div class="blk"><h4>Evidence</h4><pre>${f.ev}</pre></div>
+        <div class="blk"><h4>Impact</h4><div>${f.imp}</div></div>
+      </div>
+      <div class="f-meta" style="margin-top:.7rem">
+        <div class="blk fix" style="grid-column:1/-1"><h4>Suggested fix</h4><pre>${f.fix}</pre></div>
+      </div>
+    </div>`;
+  d.querySelector('.f-top').addEventListener('click', () => {
+    d.classList.toggle('open');
+    d.classList.contains('open') ? open.add(f.id) : open.delete(f.id);
+  });
+  list.appendChild(d);
+});
+open.forEach(id => { const el = [...list.children].find(c => c.querySelector('.f-id').textContent === id.replace('F-','')); if (el) el.classList.add('open'); });
+
+/* tally */
+const tally = { critical:0, high:0, medium:0, low:0 };
+F.forEach(f => tally[f.sev]++);
+document.getElementById('tally').innerHTML = Object.entries(tally).map(([k,v]) =>
+  `<div class="t ${k}"><b>${v}</b><span>${k}</span></div>`).join('');
+
+/* filters */
+let mode = 'all', cat = 'all';
+function apply() {
+  let n = 0;
+  [...list.children].forEach(el => {
+    const ok = (mode === 'all' || el.dataset.sev === mode) && (cat === 'all' || el.dataset.cat === cat);
+    el.style.display = ok ? '' : 'none';
+    if (ok) n++;
+  });
+  return n;
+}
+document.querySelectorAll('.controls .btn[data-f]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.controls .btn[data-f]').forEach(x => x.setAttribute('aria-pressed','false'));
+  b.setAttribute('aria-pressed','true');
+  mode = b.dataset.f; apply();
+}));
+document.getElementById('cat').addEventListener('change', e => { cat = e.target.value; apply(); });
+</script>
+</body>
+</html>

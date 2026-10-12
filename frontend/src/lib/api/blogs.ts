@@ -124,11 +124,9 @@ export interface BudgetSnapshot {
 
 export interface AgentRunSummary {
   run_id: number;
-  stage_name: string;
-  agent_name: string;
+  stage: string;
   status: string;
-  prompt_tokens: number;
-  completion_tokens: number;
+  total_tokens: number;
   cost_usd: number;
   latency_ms: number | null;
   started_at: string;
@@ -139,11 +137,10 @@ export interface AgentRunSummary {
 export interface HumanReviewEventView {
   event_id: number;
   session_id: number;
-  version_id: number;
+  version_id: number | null;
   reviewer_user_id: string;
   action: string;
   feedback_text: string | null;
-  review_context: Record<string, unknown> | null;
   created_at: string;
 }
 

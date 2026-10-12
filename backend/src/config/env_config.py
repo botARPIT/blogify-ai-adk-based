@@ -164,6 +164,12 @@ def get_config() -> BaseConfig:
     config_class = config_map.get(env, DevelopmentConfig)
     return config_class()
 
+def get_llm_api_key() -> str | None:
+    "Get LLM API key"
+    return os.getenv("LLM_API_KEY")
+
+def get_llm_base_url() -> str | None:
+    return os.getenv("OLLAMA_BASE_URL")
 
 # Global config instance
 config = get_config()

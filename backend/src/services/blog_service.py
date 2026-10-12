@@ -3,6 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
+from src.config.logging_config import get_logger
 from src.core.task_queue import BlogJob, TaskQueue
 from src.models.orm_models import (
     BlogJobPhase,
@@ -11,10 +12,15 @@ from src.models.orm_models import (
     FinalReviewAction,
     UserAction,
 )
+from src.models.repositories.blog_review_event_repository import BlogReviewEventRepository
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.blog_version_repository import BlogVersionRepository
+from src.models.repositories.workflow_outbox_repository import WorkflowOutboxRepository
+from src.models.schemas import OutlineSchema
 from src.services.budget_service import BudgetService
 from src.services.exceptions import SessionTerminalError
+
+logger = get_logger(__name__)
 
 
 class BlogService:
@@ -34,6 +40,45 @@ class BlogService:
         self._budget_service = budget_service
         self._task_queue = task_queue
         self._redis = redis_client
+        self._outbox = WorkflowOutboxRepository(session_repo.session)
+        self._review_events = BlogReviewEventRepository(session_repo.session)
+
+    async def commit_and_dispatch(self, session_id: int) -> None:
+        """Commit API state, then publish its event as a fast path to Redis.
+
+        The reaper recovers failed publishes. Duplicate delivery is safe because
+        workers claim an outbox event by ID in PostgreSQL.
+        """
+        db_session = self._session_repo.session
+        event = await self._outbox.get_undispatched_for_aggregate(session_id)
+        await db_session.commit()
+        if event is None:
+            return
+
+        try:
+            job_data = dict(event.payload["job"])
+            job_data["outbox_event_id"] = event.id
+            await self._task_queue.enqueue(BlogJob(**job_data))
+        except Exception as exc:
+            logger.warning(
+                "outbox_fast_dispatch_failed",
+                event_id=event.id,
+                session_id=session_id,
+                error=str(exc),
+            )
+            return
+
+        try:
+            await self._outbox.mark_dispatched(event.id)
+            await db_session.commit()
+        except Exception as exc:
+            await db_session.rollback()
+            logger.warning(
+                "outbox_dispatch_marker_failed",
+                event_id=event.id,
+                session_id=session_id,
+                error=str(exc),
+            )
 
     async def create_generation(
         self,
@@ -105,7 +150,11 @@ class BlogService:
             tone=tone,
             phase=BlogJobPhase.FRESH_GENERATION.value,
         )
-        await self._task_queue.enqueue(job)
+        await self._outbox.enqueue(
+            event_type="blog.generate",
+            aggregate_id=session.id,
+            payload={"job": job.__dict__},
+        )
 
         return session
 
@@ -129,15 +178,30 @@ class BlogService:
         session_id: int,
         approved_outline: dict,
         feedback_text: str | None = None,
+        action: str = "approve",
     ) -> BlogSession:
         print(f"DEBUG [blog_service.py:100] BlogService.submit_outline_review called: user_id={user_id}, session_id={session_id}, approved_outline={approved_outline}, feedback_text={feedback_text}", flush=True)
-        session = await self.get_session(user_id, session_id)
+        session = await self._session_repo.get_by_id_for_update(session_id)
+        if not session:
+            raise ValueError("Session not found")
+        if session.user_id != user_id:
+            raise ValueError("Access denied")
         if session.status != BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value:
             raise ValueError("Session not awaiting outline review")
+
+        approved_outline = OutlineSchema.model_validate(approved_outline).model_dump()
 
         active_version = await self._version_repo.get_active_for_session(session.id)
         if active_version is None:
             raise ValueError("Active blog version not found")
+
+        await self._review_events.create(
+            blog_session_id=session.id,
+            blog_version_id=active_version.id,
+            reviewer_user_id=user_id,
+            action=f"outline_{action}",
+            feedback_text=feedback_text,
+        )
 
         snapshot = dict(active_version.state_snapshot or {})
         snapshot["blog_outline"] = approved_outline
@@ -147,7 +211,7 @@ class BlogService:
         await self._version_repo.update_version_state(
             active_version.id,
             status=BlogSessionStatus.QUEUED.value,
-            job_phase=BlogJobPhase.RESUME_OUTLINE.value,
+            job_phase=BlogJobPhase.RESEARCH_PHASE.value,
             outline_data=approved_outline,
             approved_outline=approved_outline,
             feedback_text=feedback_text or "",
@@ -156,7 +220,7 @@ class BlogService:
 
         session.outline_data = approved_outline
         session.status = BlogSessionStatus.QUEUED.value
-        session.job_phase = BlogJobPhase.RESUME_OUTLINE.value
+        session.job_phase = BlogJobPhase.RESEARCH_PHASE.value
         session.updated_at = datetime.now(timezone.utc)
         await self._session_repo.session.flush()
 
@@ -167,9 +231,13 @@ class BlogService:
             topic=session.topic,
             audience=session.audience,
             tone=session.tone,
-            phase=BlogJobPhase.RESUME_OUTLINE.value,
+            phase=BlogJobPhase.RESEARCH_PHASE.value,
         )
-        await self._task_queue.enqueue(job)
+        await self._outbox.enqueue(
+            event_type="blog.continue_after_outline_review",
+            aggregate_id=session.id,
+            payload={"job": job.__dict__},
+        )
 
         return session
 
@@ -182,12 +250,24 @@ class BlogService:
         feedback_text: str | None = None,
     ) -> BlogSession:
         print(f"DEBUG [blog_service.py:133] BlogService.submit_final_review called: user_id={user_id}, session_id={session_id}, action={action}, feedback_text={feedback_text}", flush=True)
-        session = await self.get_session(user_id, session_id)
+        session = await self._session_repo.get_by_id_for_update(session_id)
+        if not session:
+            raise ValueError("Session not found")
+        if session.user_id != user_id:
+            raise ValueError("Access denied")
         if session.status != BlogSessionStatus.AWAITING_FINAL_REVIEW.value:
             raise ValueError("Session not awaiting final review")
 
         active_version = await self._version_repo.get_active_for_session(session.id)
         review_action = FinalReviewAction(action)
+
+        await self._review_events.create(
+            blog_session_id=session.id,
+            blog_version_id=active_version.id if active_version else None,
+            reviewer_user_id=user_id,
+            action=f"final_{review_action.value}",
+            feedback_text=feedback_text,
+        )
 
         if review_action == FinalReviewAction.APPROVED:
             session.status = BlogSessionStatus.COMPLETED.value
@@ -230,7 +310,11 @@ class BlogService:
                 phase=BlogJobPhase.REVISION.value,
                 feedback_text=feedback_text,
             )
-            await self._task_queue.enqueue(job)
+            await self._outbox.enqueue(
+                event_type="blog.revise",
+                aggregate_id=session.id,
+                payload={"job": job.__dict__},
+            )
         else:
             session.status = BlogSessionStatus.REJECTED.value
             session.current_stage = "rejected"

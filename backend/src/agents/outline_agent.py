@@ -1,34 +1,43 @@
-"""Blog outline generation agent."""
+"""Blog outline generation agent.
+
+The agent writes the outline; a deterministic workflow node turns the raw text
+into an :class:`~src.models.schemas.OutlineSchema`. Because the model may answer
+in Markdown or JSON depending on provider and prompt, enforcement belongs
+outside ADK — ``output_schema`` here would be silently dropped by
+OpenAI-compatible endpoints rather than applied.
+"""
 
 from google.adk.agents import Agent
-from google.adk.models.google_llm import Gemini
 
-from src.config import OUTLINE_MODEL, create_retry_config
-from src.models.schemas import OutlineSchema
+from src.llm.factory import create_model
+from src.llm.model_configs import OUTLINE_MODEL
+
+OUTLINE_INSTRUCTION = """
+Generate a structured blog outline based on the topic and audience from intent result: {intent_result}
+
+Requirements:
+- Title: Compelling, max 120 characters, SEO-friendly
+- Sections: 3-7 sections
+- Each section: id, heading, goal, target_words (80-300 each)
+- Total words: Sum of all section target_words
+
+Respond with JSON matching this shape, or equivalent Markdown:
+{
+  "title": "...",
+  "sections": [
+    {"id": "section_1", "heading": "...", "goal": "...", "target_words": 150}
+  ],
+  "estimated_total_words": 450
+}
+""".strip()
 
 
 def create_outline_agent() -> Agent:
     return Agent(
         name="outline_agent",
-        model=Gemini(
-            model=OUTLINE_MODEL.name,
-            retry_options=create_retry_config(attempts=OUTLINE_MODEL.retry_attempts),
-            temperature=OUTLINE_MODEL.temperature,
-            max_output_tokens=OUTLINE_MODEL.max_output_tokens,
-        ),
-        instruction="""
-        Generate a structured blog outline based on the topic and audience from intent result: {intent_result}
-        
-        Requirements:
-        - Title: Compelling, max 120 characters, SEO-friendly
-        - Sections: 3-7 sections minimum
-        - Each section: id, heading, goal, target_words (80-300 each)
-        - Total words: Sum of all section target_words
-        
-        Output must be a valid JSON matching OutlineSchema.
-        """.strip(),
-        output_schema=OutlineSchema,
-        output_key="blog_outline",
+        model=create_model(OUTLINE_MODEL),
+        instruction=OUTLINE_INSTRUCTION,
+        output_key="outline_raw",
     )
 
 

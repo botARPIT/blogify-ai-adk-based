@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.agents.pipeline import (
     CostInfo,
     PipelineResult,
-    resume_pipeline,
     run_pipeline,
     run_pipeline_from_phase,
 )
@@ -25,6 +24,22 @@ from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.research_sources_repository import ResearchSourcesRepository
 from src.models.repositories.session_reservation_repository import SessionReservationRepository
 from src.services.budget_service import BudgetService
+from src.workflows.state_schema import build_session_state
+
+
+class RetryableDownstreamError(Exception):
+    """Transient provider/network failure eligible for bounded retry."""
+
+#: Phases whose flow starts at research. They share a graph today but are
+#: declared separately in the pipeline so the lifecycles stay distinguishable.
+#:
+#: ``REVISION``        -- a reviewer asked for changes
+#: ``RESEARCH_PHASE``  -- outline approval or stale-worker recovery
+_POST_OUTLINE_PHASES = frozenset({BlogJobPhase.REVISION.value, BlogJobPhase.RESEARCH_PHASE.value})
+
+#: The fresh graph ends after outline normalization. The human-review wait is
+#: represented by the persisted blog lifecycle, not a paused ADK invocation.
+_OUTLINE_REVIEW_PHASES = frozenset({BlogJobPhase.FRESH_GENERATION.value})
 
 
 class PipelineExecutor:
@@ -45,105 +60,75 @@ class PipelineExecutor:
         self._sources_repo = ResearchSourcesRepository(session)
 
     async def execute(self, job: BlogJob) -> None:
+        """Run the job's flow, then persist whatever it produced.
+
+        Which graph runs is decided by :mod:`src.agents.pipeline` from the
+        job's phase. This class owns only the second half: turning a
+        :class:`PipelineResult` into durable state, and moving the session to
+        whichever lifecycle state that result implies.
+        """
         try:
-            if job.phase == BlogJobPhase.FRESH_GENERATION.value:
-                await self._execute_fresh_generation(job)
-            elif job.phase == BlogJobPhase.RESUME_OUTLINE.value:
-                await self._execute_resume_outline(job)
-            elif job.phase == BlogJobPhase.RESEARCH_PHASE.value:
-                await self._execute_research_phase(job)
-            elif job.phase == BlogJobPhase.REVISION.value:
-                await self._execute_revision(job)
-            else:
-                raise ValueError(f"Unknown job phase: {job.phase}")
-        except Exception as e:
-            await self._handle_failure(job, str(e))
+            result = await self._run_flow(job)
+        except Exception as exc:
+            await self._handle_failure(job, str(exc))
+            return
 
-    async def _execute_fresh_generation(self, job: BlogJob) -> None:
+        await self._persist(job, result)
+
+    async def _run_flow(self, job: BlogJob) -> PipelineResult:
+        """Hand the job to the pipeline and rate-limit afterwards.
+
+        The delay is applied here, after execution and before persistence, so
+        it throttles provider call cadence without holding a transaction open.
+        """
         active_version = await self._get_active_version(job.session_id)
-        result = await run_pipeline(
-            topic=job.topic,
-            audience=job.audience,
-            user_id=str(job.user_id),
-            session_id=job.adk_session_id,
-            state_snapshot=active_version.state_snapshot if active_version else None,
-        )
+        state_snapshot = active_version.state_snapshot if active_version else None
+
+        if job.phase == BlogJobPhase.FRESH_GENERATION.value:
+            result = await run_pipeline(
+                topic=job.topic,
+                audience=job.audience,
+                user_id=str(job.user_id),
+                session_id=job.adk_session_id,
+                state_snapshot=state_snapshot,
+            )
+        elif job.phase in _POST_OUTLINE_PHASES or job.phase == BlogJobPhase.RESUME_OUTLINE.value:
+            # Revision and stale-worker recovery share a graph today; the
+            # pipeline names it, this module only reports which phase was asked
+            # for. Both are "research again, then redraft".
+            result = await run_pipeline_from_phase(
+                phase=(
+                    BlogJobPhase.RESEARCH_PHASE.value
+                    if job.phase == BlogJobPhase.RESUME_OUTLINE.value
+                    else job.phase
+                ),
+                topic=job.topic,
+                audience=job.audience,
+                user_id=str(job.user_id),
+                session_id=job.adk_session_id,
+                state_snapshot=state_snapshot,
+            )
+        else:
+            raise ValueError(f"Unknown job phase: {job.phase}")
 
         await agent_delay()
+        return result
 
+    async def _persist(self, job: BlogJob, result: PipelineResult) -> None:
+        """Persist outputs and move the session to the next lifecycle state."""
         if result.error:
+            if result.retryable:
+                raise RetryableDownstreamError(result.error)
             await self._handle_failure(job, result.error)
             return
 
-        if result.paused_for_confirmation:
-            await self._handle_outline_pause(job, result)
+        if job.phase in _OUTLINE_REVIEW_PHASES and result.outline:
+            await self._handle_outline_review_wait(job, result)
             return
 
         await self._handle_success(job, result)
 
-    async def _execute_resume_outline(self, job: BlogJob) -> None:
-        active_version = await self._get_active_version(job.session_id)
-        result = await resume_pipeline(
-            topic=job.topic,
-            audience=job.audience,
-            user_id=str(job.user_id),
-            session_id=job.adk_session_id,
-            invocation_id=job.invocation_id,
-            confirmation_request_id=job.confirmation_request_id,
-            approved_outline=job.approved_outline,
-            feedback_text=job.feedback_text,
-            state_snapshot=active_version.state_snapshot if active_version else None,
-        )
-
-        await agent_delay()
-
-        if result.error:
-            await self._handle_failure(job, result.error)
-            return
-
-        await self._handle_success(job, result)
-
-    async def _execute_revision(self, job: BlogJob) -> None:
-        """Re-enter the pipeline from the research phase for draft revision."""
-        active_version = await self._get_active_version(job.session_id)
-        result = await run_pipeline_from_phase(
-            phase="research_phase",
-            topic=job.topic,
-            audience=job.audience,
-            user_id=str(job.user_id),
-            session_id=job.adk_session_id,
-            state_snapshot=active_version.state_snapshot if active_version else None,
-        )
-
-        await agent_delay()
-
-        if result.error:
-            await self._handle_failure(job, result.error)
-            return
-
-        await self._handle_success(job, result)
-
-    async def _execute_research_phase(self, job: BlogJob) -> None:
-        """Resume from post-outline-approval research after a stale worker recovery."""
-        active_version = await self._get_active_version(job.session_id)
-        result = await run_pipeline_from_phase(
-            phase="research_phase",
-            topic=job.topic,
-            audience=job.audience,
-            user_id=str(job.user_id),
-            session_id=job.adk_session_id,
-            state_snapshot=active_version.state_snapshot if active_version else None,
-        )
-
-        await agent_delay()
-
-        if result.error:
-            await self._handle_failure(job, result.error)
-            return
-
-        await self._handle_success(job, result)
-
-    async def _handle_outline_pause(self, job: BlogJob, result: PipelineResult) -> None:
+    async def _handle_outline_review_wait(self, job: BlogJob, result: PipelineResult) -> None:
         await self._commit_costs(job, result.costs)
         active_version = await self._get_active_version(job.session_id)
         normalized_research = self._normalize_research_data(result.research)
@@ -153,7 +138,7 @@ class PipelineExecutor:
             await self._version_repo.update_version_state(
                 active_version.id,
                 status=BlogSessionStatus.AWAITING_OUTLINE_REVIEW.value,
-                job_phase=BlogJobPhase.RESUME_OUTLINE.value,
+                job_phase=BlogJobPhase.RESEARCH_PHASE.value,
                 title=self._extract_title(result.outline, job.topic),
                 outline_data=result.outline or {},
                 approved_outline=active_version.approved_outline,
@@ -163,16 +148,12 @@ class PipelineExecutor:
                 editor_review=result.editor_review,
                 feedback_text=job.feedback_text or active_version.feedback_text,
                 adk_session_id=job.adk_session_id,
-                invocation_id=result.invocation_id,
-                confirmation_request_id=result.confirmation_request_id,
                 state_snapshot=snapshot,
             )
 
         await self._session_repo.sync_active_version_fields(
             job.session_id,
             outline_data=result.outline or {},
-            invocation_id=result.invocation_id,
-            confirmation_request_id=result.confirmation_request_id,
             adk_session_id=job.adk_session_id,
         )
 
@@ -195,7 +176,8 @@ class PipelineExecutor:
                 job_phase=job.phase,
                 title=self._extract_title(result.outline, job.topic),
                 outline_data=result.outline or active_version.outline_data,
-                approved_outline=snapshot.get("approved_outline") or active_version.approved_outline,
+                approved_outline=snapshot.get("approved_outline")
+                or active_version.approved_outline,
                 research_data=normalized_research,
                 draft_content=result.draft,
                 final_content=result.final_content,
@@ -203,10 +185,6 @@ class PipelineExecutor:
                 feedback_text=job.feedback_text or active_version.feedback_text,
                 user_action=None,
                 adk_session_id=job.adk_session_id,
-                invocation_id=result.invocation_id or active_version.invocation_id,
-                confirmation_request_id=(
-                    result.confirmation_request_id or active_version.confirmation_request_id
-                ),
                 state_snapshot=snapshot,
             )
 
@@ -215,10 +193,6 @@ class PipelineExecutor:
                 job.session_id,
                 outline_data=result.outline or {},
                 final_content=result.final_content,
-                invocation_id=result.invocation_id or job.invocation_id,
-                confirmation_request_id=(
-                    result.confirmation_request_id or job.confirmation_request_id
-                ),
                 adk_session_id=job.adk_session_id,
             )
 
@@ -245,6 +219,11 @@ class PipelineExecutor:
             )
         await self._session_repo.mark_failed(job.session_id, reason=error)
         await self._budget_service.release_all(user_id=job.user_id, blog_session_id=job.session_id)
+
+    async def fail(self, job: BlogJob, error: str) -> None:
+        """Persist a terminal worker failure after retries are exhausted."""
+        await self._handle_failure(job, error)
+
 
     async def _commit_costs(
         self, job: BlogJob, costs: list[CostInfo], research_data: dict | None = None
@@ -312,19 +291,27 @@ class PipelineExecutor:
         *,
         feedback_text: str | None,
     ) -> dict:
-        normalized_research = self._normalize_research_data(result.research)
-        return {
-            "topic": job.topic,
-            "audience": job.audience,
-            "intent_result": result.intent_result or {},
-            "blog_outline": result.outline or {},
-            "approved_outline": result.outline or job.approved_outline or {},
-            "outline_feedback": feedback_text or "",
-            "outline_review_result": result.confirmation_payload or {},
-            "research_data": normalized_research,
-            "blog_draft": result.draft or "",
-            "editor_review": result.editor_review or {},
-        }
+        """Build the state snapshot for Postgres.
+
+        Key names come from the shared schema so this cannot drift away from
+        the session the pipeline seeded.
+        """
+        return build_session_state(
+            topic=job.topic,
+            audience=job.audience,
+            intent_result=result.intent_result or {},
+            blog_outline=result.outline or {},
+            approved_outline=(
+                job.approved_outline or {}
+                if job.phase == BlogJobPhase.FRESH_GENERATION.value
+                else result.outline or job.approved_outline or {}
+            ),
+            outline_feedback=feedback_text or "",
+            outline_review_result={},
+            research_data=self._normalize_research_data(result.research),
+            blog_draft=result.draft or "",
+            editor_review=result.editor_review or {},
+        )
 
     def _extract_title(self, outline: dict | None, fallback: str) -> str:
         if isinstance(outline, dict):

@@ -1,0 +1,17 @@
+{
+  "name": "editor-rejected",
+  "stages": {
+    "editor": {
+      "tool_names": [],
+      "steps": [
+        {
+          "thought_file": "editor/thought.txt",
+          "response_file": "editor/rejected.json",
+          "prompt_tokens": 120,
+          "completion_tokens": 80,
+          "model_version": "fake-editor-v1"
+        }
+      ]
+    }
+  }
+}

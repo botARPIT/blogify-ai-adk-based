@@ -1,0 +1,1 @@
+Synthetic diagnostic thought payload used only to control event size in tests.

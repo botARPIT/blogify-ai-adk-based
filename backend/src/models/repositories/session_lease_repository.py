@@ -218,8 +218,6 @@ class SessionLeaseRepository:
         if phase == BlogJobPhase.RESUME_OUTLINE.value:
             if not active_version.approved_outline and not active_version.outline_data:
                 raise ValueError("Approved outline missing for resume_outline")
-            if not active_version.invocation_id or not active_version.confirmation_request_id:
-                raise ValueError("Outline resume metadata missing")
             return
 
         if phase == BlogJobPhase.RESEARCH_PHASE.value:

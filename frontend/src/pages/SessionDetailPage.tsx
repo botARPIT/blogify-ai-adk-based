@@ -145,11 +145,12 @@ const SessionDetailPage: React.FC = () => {
               {detail.agent_runs.map((run) => (
                 <div key={run.run_id} className="event-card">
                   <div className="event-header">
-                    <strong>{run.stage_name}</strong>
-                    <span className="text-secondary">{run.agent_name}</span>
+                    <strong>{run.stage}</strong>
+                    <span className="text-secondary">{run.status}</span>
                   </div>
                   <div className="text-secondary detail-copy" style={{ marginTop: '0.5rem' }}>
-                    Status: {run.status} | Prompt: {run.prompt_tokens} | Completion: {run.completion_tokens} | Cost: ${run.cost_usd.toFixed(4)}
+                    {run.total_tokens.toLocaleString()} tokens | ${run.cost_usd.toFixed(6)}
+                    {run.latency_ms != null ? ` | ${run.latency_ms.toLocaleString()} ms` : ' | timing unavailable'}
                   </div>
                   {run.error_message ? <p style={{ color: 'var(--error-color)', marginTop: '0.5rem' }}>{run.error_message}</p> : null}
                 </div>

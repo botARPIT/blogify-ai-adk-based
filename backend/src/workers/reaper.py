@@ -13,15 +13,15 @@ import json
 from src.config.logging_config import get_logger
 from src.core.database import AsyncSessionFactory
 from src.core.task_queue import BlogJob, TaskQueue
-from src.models.orm_models import BlogJobPhase
 from src.models.repositories.blog_session_repository import BlogSessionRepository
-from src.models.repositories.blog_version_repository import BlogVersionRepository
 from src.models.repositories.session_lease_repository import SessionLeaseRepository
+from src.models.repositories.workflow_outbox_repository import WorkflowOutboxRepository
 
 logger = get_logger(__name__)
 
 MAX_REAP_COUNT = 3
 REAP_INTERVAL_SECONDS = 180
+OUTBOX_RELAY_INTERVAL_SECONDS = 2
 STALE_THRESHOLD_MINUTES = 2
 
 
@@ -29,7 +29,10 @@ class Reaper:
     def __init__(self, task_queue: TaskQueue) -> None:
         self._queue = task_queue
 
-    async def run_forever(self) -> None:    
+    async def run_forever(self) -> None:
+        await asyncio.gather(self._outbox_relay_forever(), self._maintenance_forever())
+
+    async def _maintenance_forever(self) -> None:
         while True:
             try:
                 await self._reap_stale_leases()
@@ -38,11 +41,15 @@ class Reaper:
                 logger.error("reaper_cycle_failed", error=str(e))
             await asyncio.sleep(REAP_INTERVAL_SECONDS)
 
+    async def _outbox_relay_forever(self) -> None:
+        while True:
+            await self._dispatch_outbox_events()
+            await asyncio.sleep(OUTBOX_RELAY_INTERVAL_SECONDS)
+
     async def _reap_stale_leases(self) -> None:
         async with AsyncSessionFactory() as session:
             try:
                 session_repo = BlogSessionRepository(session)
-                version_repo = BlogVersionRepository(session)
                 lease_repo = SessionLeaseRepository(session)
 
                 stale_leases = await lease_repo.get_stale_sessions(STALE_THRESHOLD_MINUTES)
@@ -79,26 +86,8 @@ class Reaper:
                         )
                         if recovered_session is None:
                             continue
-                        active_version = await version_repo.get_active_for_session(
-                            lease.blog_session_id
-                        )
-                        job_phase = self._recovery_phase_for_session(
-                            recovered_session.job_phase
-                            or (active_version.job_phase if active_version else None),
-                            recovered_session.current_stage,
-                        )
-                        job = BlogJob(
-                            session_id=recovered_session.id,
-                            user_id=recovered_session.user_id,
-                            adk_session_id=recovered_session.adk_session_id,
-                            topic=recovered_session.topic,
-                            audience=recovered_session.audience,
-                            tone=recovered_session.tone,
-                            phase=job_phase,
-                        )
-                        await self._queue.enqueue(job)
                         logger.info(
-                            "session_requeued",
+                            "session_recovered_for_outbox_redelivery",
                             session_id=lease.blog_session_id,
                             reap_count=new_reap_count,
                             previous_worker=lease.lease_owner,
@@ -109,6 +98,36 @@ class Reaper:
             except Exception as e:
                 await session.rollback()
                 logger.error("reaper_cycle_db_error", error=str(e))
+
+    async def _dispatch_outbox_events(self) -> None:
+        """Relay durable outbox events to Redis; stale markers are republished."""
+        async with AsyncSessionFactory() as session:
+            try:
+                repo = WorkflowOutboxRepository(session)
+                events = await repo.get_dispatchable()
+                pending = [(event.id, dict(event.payload)) for event in events]
+                await session.rollback()
+            except Exception as exc:
+                await session.rollback()
+                logger.error("outbox_dispatch_failed", error=str(exc))
+                return
+
+        for event_id, payload in pending:
+            try:
+                job_data = dict(payload["job"])
+                job_data["outbox_event_id"] = event_id
+                await self._queue.enqueue(BlogJob(**job_data))
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.error("invalid_outbox_job", event_id=event_id, error=str(exc))
+                continue
+
+            async with AsyncSessionFactory() as session:
+                try:
+                    await WorkflowOutboxRepository(session).mark_dispatched(event_id)
+                    await session.commit()
+                except Exception as exc:
+                    await session.rollback()
+                    logger.error("outbox_dispatch_marker_failed", event_id=event_id, error=str(exc))
 
     async def _reap_queue(self) -> None:
         stale_entries = await self._queue.get_stale_processing_entries()
@@ -128,20 +147,6 @@ class Reaper:
 
         if cleaned > 0:
             logger.info("queue_cleaned", count=cleaned)
-
-    def _recovery_phase_for_session(
-        self,
-        persisted_phase: str | None,
-        current_stage: str | None,
-    ) -> str:
-        if (
-            persisted_phase == BlogJobPhase.RESUME_OUTLINE.value
-            and current_stage == "research"
-        ):
-            return BlogJobPhase.RESEARCH_PHASE.value
-
-        return persisted_phase or BlogJobPhase.FRESH_GENERATION.value
-
 
 async def main() -> None:
     from src.config.env_config import config

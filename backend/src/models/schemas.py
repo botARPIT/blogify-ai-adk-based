@@ -203,6 +203,16 @@ class SessionInfo(BaseModel):
     current_version_number: int | None = None
 
 
+class HumanReviewEventView(BaseModel):
+    event_id: int
+    session_id: int
+    version_id: int | None = None
+    reviewer_user_id: str
+    action: str
+    feedback_text: str | None = None
+    created_at: datetime
+
+
 class BlogVersionMetrics(BaseModel):
     version_id: int = 1
     version_number: int = 1
@@ -222,8 +232,8 @@ class BlogSessionMetrics(BaseModel):
     total_words: int
     outline: dict | None = None
     latest_version: BlogVersionMetrics | None = None
-    agent_runs: list[AgentRunMetrics] = []
-    review_events: list = []
+    agent_runs: list[AgentRunMetrics] = Field(default_factory=list)
+    review_events: list[HumanReviewEventView] = Field(default_factory=list)
 
 
 class BlogSessionDetail(BaseModel):

@@ -3,11 +3,12 @@
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.auth import AuthenticatedUser, get_current_user
+from src.api.auth import AuthenticatedUser, get_current_user, require_authenticated_user
 from src.core.database import get_db_session
 from src.core.redis_pool import get_redis_client
 from src.core.task_queue import task_queue
 from src.guards.input_guard import InputGuard
+from src.models.repositories.blog_review_event_repository import BlogReviewEventRepository
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.blog_version_repository import BlogVersionRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
@@ -26,6 +27,7 @@ from src.models.schemas import (
     FinalReviewRequest,
     GenerateRequest,
     GenerateResponse,
+    HumanReviewEventView,
     OutlineFrontendDecision,
     OutlineFrontendRequest,
     OutlineReviewRequest,
@@ -55,35 +57,24 @@ input_guard = InputGuard()
 async def generate_blog(
     body: GenerateRequest,
     idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
-    current_user: AuthenticatedUser = Depends(get_current_user),
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
     session: AsyncSession = Depends(get_db_session),
 ):
     is_valid, error_msg = input_guard.validate(body.topic, body.audience, body.tone)
     if not is_valid:
         raise HTTPException(status_code=400, detail=error_msg)
-    print("Input validation passed!, this call is from blog_routes")
     effective_idempotency_key = idempotency_key or body.idempotency_key
-    print("Effective idempotency key!, this call is from blog_routes")
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
-    print("Session repo created!, this call is from blog_routes")
     budget_repo = BudgetRepository(session)
-    print("Budget repo created!, this call is from blog_routes")
     account_repo = BudgetAccountRepository(session)
-    print("Account repo created!, this call is from blog_routes")
     reservation_repo = SessionReservationRepository(session)
-    print("Reservation repo created!, this call is from blog_routes")
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
-    print("Budget service created!, this call is from blog_routes")
     redis_client = await get_redis_client()
-    print("Redis client created!, this call is from blog_routes")
     version_repo = BlogVersionRepository(session)
     blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
-    print("Blog service created!, this call is from blog_routes")
-    print("Before try blog service create generation!, this call is from blog_routes")
 
     try:
-        print("Inside try blog service create generation!, this call is from blog_routes")
         result = await blog_service.create_generation(
             user_id=user_id,
             topic=body.topic,
@@ -91,6 +82,7 @@ async def generate_blog(
             tone=body.tone,
             idempotency_key=effective_idempotency_key,
         )
+        await blog_service.commit_and_dispatch(result.id)
         print("After try blog service create generation!, this call is from blog_routes")
         return GenerateResponse(
             session_id=result.id,
@@ -193,9 +185,8 @@ async def submit_outline_review_frontend(
     account_repo = BudgetAccountRepository(session)
     reservation_repo = SessionReservationRepository(session)
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
-    redis_client = await get_redis_client()
     version_repo = BlogVersionRepository(session)
-    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
+    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, None)
 
     if body.action == "revise" and body.edited_outline:
         approved_outline = body.edited_outline
@@ -210,7 +201,9 @@ async def submit_outline_review_frontend(
             session_id=session_id,
             approved_outline=approved_outline,
             feedback_text=body.feedback_text,
+            action=body.action,
         )
+        await blog_service.commit_and_dispatch(result.id)
         return OutlineFrontendDecision(
             session_id=result.id,
             action=body.action,
@@ -299,6 +292,7 @@ async def get_session_detail(
     session_repo = BlogSessionRepository(session)
     version_repo = BlogVersionRepository(session)
     sources_repo = ResearchSourcesRepository(session)
+    review_repo = BlogReviewEventRepository(session)
 
     blog_session = await session_repo.get_by_id(session_id)
     if not blog_session or blog_session.user_id != user_id:
@@ -310,6 +304,7 @@ async def get_session_detail(
 
     result = await session.execute(select(AgentRun).where(AgentRun.blog_session_id == session_id))
     agent_runs = result.scalars().all()
+    review_events = await review_repo.get_for_session(session_id)
 
     latest_version_row = await version_repo.get_latest_for_session(session_id)
     latest_content = (
@@ -373,7 +368,18 @@ async def get_session_detail(
             )
             for ar in agent_runs
         ],
-        review_events=[],
+        review_events=[
+            HumanReviewEventView(
+                event_id=event.id,
+                session_id=event.blog_session_id,
+                version_id=event.blog_version_id,
+                reviewer_user_id=str(event.reviewer_user_id),
+                action=event.action,
+                feedback_text=event.feedback_text,
+                created_at=event.created_at,
+            )
+            for event in review_events
+        ],
     )
 
 
@@ -450,9 +456,8 @@ async def submit_outline_review(
     account_repo = BudgetAccountRepository(session)
     reservation_repo = SessionReservationRepository(session)
     budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
-    redis_client = await get_redis_client()
     version_repo = BlogVersionRepository(session)
-    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
+    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, None)
 
     try:
         result = await blog_service.submit_outline_review(
@@ -461,6 +466,7 @@ async def submit_outline_review(
             approved_outline=body.approved_outline,
             feedback_text=body.feedback_text,
         )
+        await blog_service.commit_and_dispatch(result.id)
         return {"session_id": result.id, "status": result.status}
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
@@ -490,6 +496,7 @@ async def submit_final_review(
             action=body.action,
             feedback_text=body.feedback_text,
         )
+        await blog_service.commit_and_dispatch(result.id)
         return {"session_id": result.id, "status": result.status}
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blogify — Lifecycle Dossier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  .hero { padding: clamp(2.5rem,7vw,5.5rem) 0 clamp(2rem,4vw,3rem); border-bottom: var(--rule); }
+  .hero .meta { display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1.6rem; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(268px,1fr)); gap:0.9rem; }
+  .card {
+    border: var(--rule); background: linear-gradient(180deg,var(--ink-850),var(--ink-900));
+    padding: 1.2rem 1.15rem 1.3rem; text-decoration:none; color:inherit; display:block; position:relative; overflow:hidden;
+    transition: transform .2s cubic-bezier(.2,.8,.2,1), border-color .2s;
+  }
+  .card::after { content:""; position:absolute; inset:auto 0 0 0; height:2px; background:var(--amber); transform:scaleX(0); transform-origin:left; transition:transform .3s cubic-bezier(.2,.8,.2,1); }
+  .card:hover { transform: translateY(-4px); border-color: var(--ink-500); }
+  .card:hover::after { transform: scaleX(1); }
+  .card .no { font-family:var(--display); font-size:2.6rem; line-height:1; color:var(--ink-500); }
+  .card:hover .no { color: var(--amber); }
+  .card h3 { font-family:var(--display); font-size:1.5rem; line-height:1.12; margin:0.55rem 0 0.5rem; letter-spacing:-.01em; }
+  .card p { margin:0; font-size:.86rem; color:var(--paper-dim); line-height:1.6; }
+  .card ul { margin:0.75rem 0 0; padding-left:1.05rem; }
+  .card ul li { font-family:var(--mono); font-size:.68rem; color:var(--paper-faint); }
+  .stat-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:0; border:var(--rule); margin:2rem 0; }
+  .stat { border-right:var(--rule-soft); padding:1rem 1.05rem; }
+  .stat:last-child { border-right:none; }
+  .stat b { display:block; font-family:var(--display); font-size:2.1rem; line-height:1; color:var(--amber); }
+  .stat span { font-family:var(--mono); font-size:.58rem; letter-spacing:.16em; text-transform:uppercase; color:var(--paper-faint); }
+</style>
+</head>
+<body>
+<div class="grain"></div>
+<div class="wrap">
+
+<header class="top">
+  <div class="brand"><span class="dot"></span><b>Blogify</b><span class="tag">LIFECYCLE DOSSIER</span></div>
+  <nav class="tabs">
+    <a href="index.html" aria-current="page">Index</a>
+    <a href="01-timeline.html">01 · Timeline</a>
+    <a href="02-lineage.html">02 · Lineage</a>
+    <a href="03-orm.html">03 · ORM</a>
+    <a href="04-findings.html">04 · Findings</a>
+    <a href="../blog-generation-lifecycle.md" style="border-color:var(--ink-600)">↗ Full report (MD)</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="hero">
+  <div class="meta">
+    <span class="tag amber">ONE REQUEST</span>
+    <span class="tag">6 TRANSACTIONS</span>
+    <span class="tag cyan">4 PROCESSES</span>
+    <span class="tag rust">30 FINDINGS</span>
+    <span class="tag violet">9 STORES</span>
+    <span class="tag">commit 6b6ae2d</span>
+  </div>
+  <h1 class="display">The complete lifecycle<br>of a <em>single blog</em>.</h1>
+  <p class="lede" style="margin-top:1.6rem">
+    Traced from <code class="mono" style="color:var(--cyan)">POST /api/v1/blogs/generate</code> to terminal
+    database state. Every object that is created, every process boundary it crosses, every field that is
+    added, rewritten or silently dropped — and the ORM transaction story underneath.
+  </p>
+
+  <div class="stat-row">
+    <div class="stat"><b>11</b><span>Phases</span></div>
+    <div class="stat"><b>5</b><span>Identifiers</span></div>
+    <div class="stat"><b>8<span style="font-size:1.3rem">/10</span></b><span>Tables touched</span></div>
+    <div class="stat"><b>7</b><span>Status states</span></div>
+    <div class="stat"><b>4</b><span>Job phases</span></div>
+    <div class="stat"><b>10</b><span>Agent spans</span></div>
+  </div>
+</section>
+
+<section>
+  <header><h3 class="sub">Read in order</h3><h2 class="sec" style="margin-top:.5rem">Four lenses on one flow</h2></header>
+  <div class="cards">
+
+    <a class="card" href="01-timeline.html">
+      <div class="no">01</div>
+      <h3>Timeline</h3>
+      <p>An interactive swimlane diagram. Seven lanes — browser, API, Redis, Postgres, worker, ADK, Gemini — with clickable nodes that open the exact ORM and Redis operations at that instant.</p>
+      <ul>
+        <li>Click any node → SQL / Redis ops</li>
+        <li>Filter lanes on and off</li>
+        <li>Beat markers show wall-clock phase</li>
+      </ul>
+    </a>
+
+    <a class="card" href="02-lineage.html">
+      <div class="no">02</div>
+      <h3>Lineage</h3>
+      <p>Field-by-field provenance. Where each value originates, which hops it survives, which stores it lands in — and where it dies. Built to answer "where did that go?"</p>
+      <ul>
+        <li>24 fields tracked end to end</li>
+        <li>Hop chains with drop points marked</li>
+        <li>Filter: survives / dropped / never read</li>
+      </ul>
+    </a>
+
+    <a class="card" href="03-orm.html">
+      <div class="no">03</div>
+      <h3>ORM</h3>
+      <p>Ten tables, clickable, with every column typed and keyed. Plus a transaction Gantt showing the six commit boundaries — and the 30–90 second window where an idle DB session is held open across all LLM calls.</p>
+      <ul>
+        <li>Interactive ERD, PK/FK/index markers</li>
+        <li>Tx boundaries across PG + Redis</li>
+        <li>State-machine transition matrix</li>
+      </ul>
+    </a>
+
+    <a class="card" href="04-findings.html">
+      <div class="no">04</div>
+      <h3>Findings</h3>
+      <p>Thirty defects and gaps, severity-ranked, each with the exact evidence line, the runtime consequence, and a suggested fix. Four are rated critical.</p>
+      <ul>
+        <li>Filter by severity and category</li>
+        <li>Expandable evidence + fix diffs</li>
+        <li>Verified arithmetic inline</li>
+      </ul>
+    </a>
+
+  </div>
+</section>
+
+<section>
+  <header><h3 class="sub">The five identifiers</h3><h2 class="sec" style="margin-top:.5rem">Keep these straight or lose a day</h2></header>
+  <div class="panel">
+    <div class="cap"><span class="t">Identifier register</span><span class="tag amber">Confusing these is the #1 bug source here</span></div>
+    <div class="scroll">
+      <table class="grid">
+        <thead><tr><th>#</th><th>Name</th><th>Type</th><th>Created at</th><th>Scope</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td class="strong">1</td><td class="strong"><code>BlogSession.id</code></td><td>int PK</td><td class="m"><code>blog_routes.py:89</code></td><td>DB</td><td>The public handle the frontend polls</td></tr>
+          <tr><td class="strong">2</td><td class="strong"><code>adk_session_id</code></td><td>uuid4 str</td><td class="m"><code>blog_service.py:64</code></td><td>DB + Redis key</td><td>ADK conversation identity; names <code>adk:session:&lt;id&gt;</code></td></tr>
+          <tr><td class="strong">3</td><td class="strong"><code>BlogJob.phase</code></td><td>str enum</td><td class="m"><code>blog_service.py:106</code></td><td>Redis payload</td><td>Which pipeline entrypoint runs — the only mutable trigger</td></tr>
+          <tr><td class="strong">4</td><td class="strong"><code>invocation_id</code></td><td>str</td><td class="m">ADK, <code>pipeline.py:409</code></td><td>Redis + DB</td><td>ADK resume handle. <code>None</code> on fresh runs</td></tr>
+          <tr><td class="strong">5</td><td class="strong"><code>confirmation_request_id</code></td><td>str</td><td class="m">ADK tool-call id, <code>pipeline.py:409</code></td><td>Redis + DB</td><td>Function-call id the user's approval binds to</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="note">
+    <b>Redis payloads are hints; Postgres is truth.</b> On dequeue the worker discards the payload and
+    re-hydrates every field from the database (<code class="mono">session_lease_repository.py:251-264</code>).
+    That is what lets the reaper repair drift — and why a <code class="mono">BlogJob</code> you observe in
+    Redis may not be the one that executes.
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <p style="margin:0 0 .5rem">
+    Every claim in this dossier is anchored to <code>file_path:line_number</code>. Where code and prose docs
+    disagree, the code wins and the disagreement is called out — see finding F-24.
+  </p>
+  <p style="margin:0">
+    Sources: <code>backend/src/**</code> · <code>backend/alembic/versions/**</code> · <code>frontend/src/**</code> ·
+    narrative report at <a href="../blog-generation-lifecycle.md">docs/blog-generation-lifecycle.md</a>
+  </p>
+</footer>
+
+</div>
+</body>
+</html>

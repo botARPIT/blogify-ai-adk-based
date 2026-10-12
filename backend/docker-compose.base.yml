@@ -7,7 +7,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-blogify}
       POSTGRES_USER: ${POSTGRES_USER:-blogify}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-blogify_dev_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backups:/backups
