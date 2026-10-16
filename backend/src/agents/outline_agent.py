@@ -9,6 +9,7 @@ OpenAI-compatible endpoints rather than applied.
 
 from google.adk.agents import Agent
 
+from src.agents.timing import agent_timing_callbacks
 from src.llm.factory import create_model
 from src.llm.model_configs import OUTLINE_MODEL
 
@@ -33,11 +34,14 @@ Respond with JSON matching this shape, or equivalent Markdown:
 
 
 def create_outline_agent() -> Agent:
+    before_agent, after_agent = agent_timing_callbacks("outline")
     return Agent(
         name="outline_agent",
         model=create_model(OUTLINE_MODEL),
         instruction=OUTLINE_INSTRUCTION,
         output_key="outline_raw",
+        before_agent_callback=before_agent,
+        after_agent_callback=after_agent,
     )
 
 

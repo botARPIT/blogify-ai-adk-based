@@ -126,25 +126,9 @@ curl http://localhost:8000/metrics
 
 ## Architecture
 
-### Agent Pipeline
+### Job Processing Architecture
 
-```
-Chatbot (tool: blog_generation)
-    ↓
-Intent Clarification Loop (max 3 iterations)
-    ↓ [Human Approval Required]
-Outline Generation
-    ↓ [Human Approval Required]
-Research (Tavily MCP)
-    ↓
-Writer ⟷ Editor Loop (max 3 iterations)
-    ↓
-Context Compression
-    ↓
-LLM Judge (Gemini Pro)
-    ↓
-Output Guardrail → Final Blog
-```
+![Blog generation architecture: requests flow from the user through the API server and queue to a worker, while the database stores outbox jobs and stage results.](docs/architecture/images/blog-generation-architecture.png)
 
 ### Validation Policy
 

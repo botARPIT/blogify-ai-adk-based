@@ -1,0 +1,19 @@
+filebeat.inputs:
+  - type: filestream
+    id: blogify-local-docker-container-logs
+    prospector.scanner.symlinks: true
+    parsers:
+      - container:
+          stream: all
+          format: docker
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    processors:
+      - decode_json_fields:
+          fields: [message]
+          target: ""
+          overwrite_keys: true
+          add_error_key: true
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]

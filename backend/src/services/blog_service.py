@@ -3,6 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
+from src.config.api_config import DAILY_BLOG_GENERATION_LIMIT
 from src.config.logging_config import get_logger
 from src.core.task_queue import BlogJob, TaskQueue
 from src.models.orm_models import (
@@ -12,13 +13,14 @@ from src.models.orm_models import (
     FinalReviewAction,
     UserAction,
 )
+from src.models.repositories.blog_quota_repository import BlogQuotaRepository
 from src.models.repositories.blog_review_event_repository import BlogReviewEventRepository
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.blog_version_repository import BlogVersionRepository
 from src.models.repositories.workflow_outbox_repository import WorkflowOutboxRepository
 from src.models.schemas import OutlineSchema
 from src.services.budget_service import BudgetService
-from src.services.exceptions import SessionTerminalError
+from src.services.exceptions import DailyBlogLimitExceededError, SessionTerminalError
 
 logger = get_logger(__name__)
 
@@ -42,6 +44,7 @@ class BlogService:
         self._redis = redis_client
         self._outbox = WorkflowOutboxRepository(session_repo.session)
         self._review_events = BlogReviewEventRepository(session_repo.session)
+        self._quota_repo = BlogQuotaRepository(session_repo.session)
 
     async def commit_and_dispatch(self, session_id: int) -> None:
         """Commit API state, then publish its event as a fast path to Redis.
@@ -105,6 +108,17 @@ class BlogService:
         active_count = await self._session_repo.count_active_for_user(user_id)
         if active_count >= self.MAX_ACTIVE_SESSIONS_PER_USER:
             raise ValueError("User already has an active generation")
+
+        # This atomic upsert shares the transaction with session and outbox
+        # creation. The route commits them together after budget reservation;
+        # rejected requests therefore do not consume a daily slot.
+        quota_consumed = await self._quota_repo.consume_daily_slot(
+            user_id=user_id,
+            daily_limit=DAILY_BLOG_GENERATION_LIMIT,
+            usage_date=datetime.now(timezone.utc).date(),
+        )
+        if not quota_consumed:
+            raise DailyBlogLimitExceededError(DAILY_BLOG_GENERATION_LIMIT)
 
         adk_session_id = str(uuid.uuid4())
         session = await self._session_repo.create(

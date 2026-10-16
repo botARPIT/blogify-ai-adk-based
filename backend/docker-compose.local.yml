@@ -8,17 +8,22 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - ENVIRONMENT=local
+      - ENVIRONMENT=dev
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_SEARCH_API_KEY=${GOOGLE_SEARCH_API_KEY}
+      - GOOGLE_SEARCH_ENGINE_ID=${GOOGLE_SEARCH_ENGINE_ID}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       - DATABASE_URL=postgresql+asyncpg://blogify:changeme@postgres:5432/blogify
       - REDIS_URL=redis://redis:6379/0
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=blogify-api
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     volumes:
       - ./src:/app/src:ro
     healthcheck:
@@ -35,17 +40,22 @@ services:
       dockerfile: Dockerfile
     command: ["python", "-m", "src.workers.blog_worker"]
     environment:
-      - ENVIRONMENT=local
+      - ENVIRONMENT=dev
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - GOOGLE_SEARCH_API_KEY=${GOOGLE_SEARCH_API_KEY}
+      - GOOGLE_SEARCH_ENGINE_ID=${GOOGLE_SEARCH_ENGINE_ID}
       - TAVILY_API_KEY=${TAVILY_API_KEY}
       - DATABASE_URL=postgresql+asyncpg://blogify:changeme@postgres:5432/blogify
       - REDIS_URL=redis://redis:6379/0
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=blogify-worker
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
       api:
         condition: service_healthy
     volumes:
@@ -60,14 +70,18 @@ services:
       dockerfile: Dockerfile
     command: ["python", "-m", "src.workers.reaper"]
     environment:
-      - ENVIRONMENT=local
+      - ENVIRONMENT=dev
       - DATABASE_URL=postgresql+asyncpg://blogify:changeme@postgres:5432/blogify
       - REDIS_URL=redis://redis:6379/0
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=blogify-reaper
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     volumes:
       - ./src:/app/src:ro
     restart: unless-stopped

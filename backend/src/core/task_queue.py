@@ -24,6 +24,7 @@ class BlogJob:
     approved_outline: dict | None = None
     feedback_text: str | None = None
     outbox_event_id: int | None = None
+    trace_context: dict[str, str] | None = None
     enqueued_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

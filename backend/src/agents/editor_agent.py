@@ -9,6 +9,7 @@ structured-output support the provider happens to have.
 
 from google.adk.agents import Agent
 
+from src.agents.timing import agent_timing_callbacks
 from src.llm.factory import create_model
 from src.llm.model_configs import EDITOR_MODEL
 
@@ -18,7 +19,8 @@ Research sources: {research_data}
 
 Review criteria:
 1. Grammar, spelling, punctuation
-2. Citation accuracy - all [N] references must exist in research_data
+2. Citation accuracy - all [N] references must map to research_data.sources
+   in array order ([1] is sources[0]); do not add unsupported citations
 3. Tone consistency and professionalism
 4. Word count adherence to outline targets
 5. Content quality and engagement
@@ -34,6 +36,8 @@ IF READY FOR PUBLICATION:
 - Set approved=true
 - Polish the content (fix minor grammar/style issues)
 - Create professional "Sources:" section with all citations
+- In sources_section, list each cited source as [N] Title - URL using the
+  same numbering from research_data.sources; never invent a source or URL
 - Put complete polished blog in 'final_blog' field
 - Set 'feedback' to empty string
 
@@ -43,11 +47,14 @@ Return a JSON object with 'approved', 'feedback', 'final_blog' and
 
 
 def create_editor_agent() -> Agent:
+    before_agent, after_agent = agent_timing_callbacks("editor")
     return Agent(
         name="editor_agent",
         model=create_model(EDITOR_MODEL),
         instruction=EDITOR_INSTRUCTION,
         output_key="editor_review_raw",
+        before_agent_callback=before_agent,
+        after_agent_callback=after_agent,
     )
 
 

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -17,6 +18,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     text,
+)
+from sqlalchemy import (
+    Enum as SQLAlchemyEnum,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -157,6 +161,21 @@ class FinalReviewAction(StrEnum):
     REJECTED = "rejected"
 
 
+class BlogToneValue(StrEnum):
+    """Curated tone identifiers exposed by the tone catalog API."""
+
+    PRACTICAL = "practical"
+    PROFESSIONAL = "professional"
+    TECHNICAL = "technical"
+    CONVERSATIONAL = "conversational"
+    FRIENDLY = "friendly"
+    PERSUASIVE = "persuasive"
+    INFORMATIVE = "informative"
+    STORYTELLING = "storytelling"
+    ACADEMIC = "academic"
+    THOUGHT_PROVOKING = "thought-provoking"
+
+
 class AuthUser(Base):
     __tablename__ = "auth_users"
 
@@ -167,6 +186,28 @@ class AuthUser(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserBlogQuota(Base):
+    """UTC calendar-day generation counter, serialized per user in PostgreSQL."""
+
+    __tablename__ = "user_blog_quotas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("auth_users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    blogs_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    blogs_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5")
+    usage_date: Mapped[date] = mapped_column(
+        Date, nullable=False, server_default=func.current_date()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
 
 
 class BlogSession(Base):
@@ -217,6 +258,27 @@ class BlogSession(Base):
         Index("ix_blog_sessions_user_id", "user_id"),
         Index("ix_blog_sessions_status", "status"),
     )
+
+
+class ToneCatalog(Base):
+    """Curated writing tones available to clients when creating a blog."""
+
+    __tablename__ = "tone_catalog"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    value: Mapped[BlogToneValue] = mapped_column(
+        SQLAlchemyEnum(
+            BlogToneValue,
+            name="blog_tone_value",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+            validate_strings=True,
+        ),
+        unique=True,
+        nullable=False,
+    )
+    label: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str] = mapped_column(String(255), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
 
 
 class BlogVersion(Base):

@@ -6,6 +6,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.orm_models import WorkflowOutboxEvent
+from src.monitoring.tracing import inject_trace_context
 
 
 class WorkflowOutboxRepository:
@@ -19,10 +20,14 @@ class WorkflowOutboxRepository:
         aggregate_id: int,
         payload: dict,
     ) -> WorkflowOutboxEvent:
+        durable_payload = dict(payload)
+        trace_context = inject_trace_context()
+        if trace_context:
+            durable_payload.setdefault("trace_context", trace_context)
         event = WorkflowOutboxEvent(
             event_type=event_type,
             aggregate_id=aggregate_id,
-            payload=payload,
+            payload=durable_payload,
         )
         self._session.add(event)
         await self._session.flush()
@@ -58,6 +63,30 @@ class WorkflowOutboxRepository:
             .limit(limit)
         )
         return list((await self._session.execute(stmt)).scalars().all())
+
+    async def fail_exhausted_expired_claims(self, *, max_attempts: int = 4) -> list[int]:
+        """Fail expired claims after the initial attempt plus bounded retries."""
+        now = datetime.now(timezone.utc)
+        stmt = (
+            select(WorkflowOutboxEvent)
+            .where(
+                WorkflowOutboxEvent.status == "PROCESSING",
+                WorkflowOutboxEvent.locked_until <= now,
+                WorkflowOutboxEvent.attempts >= max_attempts,
+            )
+            .with_for_update(skip_locked=True)
+        )
+        events = list((await self._session.execute(stmt)).scalars().all())
+        session_ids = []
+        for event in events:
+            event.status = "FAILED"
+            event.last_error = "worker claim expired after maximum attempts"
+            event.locked_by = None
+            event.locked_until = None
+            session_ids.append(event.aggregate_id)
+        if events:
+            await self._session.flush()
+        return session_ids
 
     async def get_undispatched_for_aggregate(
         self, aggregate_id: int
@@ -113,6 +142,26 @@ class WorkflowOutboxRepository:
         event.locked_until = now + timedelta(seconds=lease_seconds)
         await self._session.flush()
         return event
+
+    async def get_delivery_state(
+        self, event_id: int
+    ) -> tuple[str, datetime | None, datetime] | None:
+        """Return durable state after a delivery could not claim its event.
+
+        This distinguishes an already-owned/terminal duplicate from a pending
+        event whose Redis message must be delivered again.
+        """
+        result = await self._session.execute(
+            select(
+                WorkflowOutboxEvent.status,
+                WorkflowOutboxEvent.locked_until,
+                WorkflowOutboxEvent.available_at,
+            ).where(WorkflowOutboxEvent.id == event_id)
+        )
+        row = result.one_or_none()
+        if row is None:
+            return None
+        return row.status, row.locked_until, row.available_at
 
     async def heartbeat(
         self,

@@ -1,0 +1,23 @@
+filebeat.inputs:
+  - type: filestream
+    id: blogify-docker-container-logs
+    prospector.scanner.symlinks: true
+    parsers:
+      - container:
+          stream: all
+          format: docker
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    processors:
+      - decode_json_fields:
+          fields: [message]
+          target: ""
+          overwrite_keys: true
+          add_error_key: true
+
+output.elasticsearch:
+  hosts: ["${ELASTICSEARCH_URL}"]
+  username: "${ELASTICSEARCH_FILEBEAT_USERNAME}"
+  password: "${ELASTICSEARCH_FILEBEAT_PASSWORD}"
+  ssl:
+    verification_mode: full

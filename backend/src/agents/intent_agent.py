@@ -8,6 +8,7 @@ is the job of a deterministic workflow node, not of ADK's provider-dependent
 
 from google.adk.agents import Agent
 
+from src.agents.timing import agent_timing_callbacks
 from src.llm.factory import create_model
 from src.llm.model_configs import INTENT_MODEL
 
@@ -25,11 +26,14 @@ Return a JSON object with 'status' and 'message' fields.
 
 
 def create_intent_agent() -> Agent:
+    before_agent, after_agent = agent_timing_callbacks("intent")
     return Agent(
         name="intent_classifier",
         model=create_model(INTENT_MODEL),
         instruction=INTENT_INSTRUCTION,
         output_key="intent_raw",
+        before_agent_callback=before_agent,
+        after_agent_callback=after_agent,
     )
 
 

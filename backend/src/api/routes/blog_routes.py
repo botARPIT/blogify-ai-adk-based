@@ -1,13 +1,26 @@
 """Blog routes — generation, listing, reviews, budget."""
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+import re
+import shutil
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 
 from src.api.auth import AuthenticatedUser, get_current_user, require_authenticated_user
+from src.config.api_config import DAILY_BLOG_GENERATION_LIMIT
 from src.core.database import get_db_session
 from src.core.redis_pool import get_redis_client
 from src.core.task_queue import task_queue
 from src.guards.input_guard import InputGuard
+from src.models.orm_models import BlogSessionStatus
+from src.models.repositories.blog_quota_repository import BlogQuotaRepository
 from src.models.repositories.blog_review_event_repository import BlogReviewEventRepository
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.blog_version_repository import BlogVersionRepository
@@ -18,9 +31,11 @@ from src.models.repositories.session_reservation_repository import SessionReserv
 from src.models.schemas import (
     AgentRunMetrics,
     BlogContentView,
+    BlogInsightsResponse,
     BlogSessionDetail,
     BlogSessionListItem,
     BlogSessionMetrics,
+    BlogSessionPage,
     BlogVersionMetrics,
     BlogVersionView,
     BudgetResponse,
@@ -37,7 +52,11 @@ from src.models.schemas import (
 )
 from src.services.blog_service import BlogService
 from src.services.budget_service import BudgetService
-from src.services.exceptions import InsufficientBudgetError, SessionTerminalError
+from src.services.exceptions import (
+    DailyBlogLimitExceededError,
+    InsufficientBudgetError,
+    SessionTerminalError,
+)
 
 router = APIRouter(prefix="/blogs", tags=["blogs"])
 
@@ -90,6 +109,16 @@ async def generate_blog(
             adk_session_id=result.adk_session_id,
             created_at=result.created_at,
         )
+    except DailyBlogLimitExceededError as e:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error_code": "DAILY_BLOG_LIMIT_REACHED",
+                "message": str(e),
+                "daily_limit": e.daily_limit,
+                "resets_at": "00:00 UTC",
+            },
+        )
     except SessionTerminalError:
         raise HTTPException(
             status_code=409,
@@ -107,35 +136,96 @@ async def generate_blog(
         raise HTTPException(status_code=400, detail=error_msg)
 
 
-@router.get("/", response_model=list[BlogSessionListItem])
+@router.get("/", response_model=BlogSessionPage)
 async def list_blogs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(12, ge=1, le=50),
+    status: list[BlogSessionStatus] | None = Query(None),
+    q: str | None = Query(None, max_length=100),
     current_user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
 ):
     user_id = get_authenticated_user_id(current_user)
     session_repo = BlogSessionRepository(session)
-    version_repo = BlogVersionRepository(session)
-    budget_repo = BudgetRepository(session)
-    account_repo = BudgetAccountRepository(session)
-    reservation_repo = SessionReservationRepository(session)
-    budget_service = BudgetService(budget_repo, session_repo, account_repo, reservation_repo)
-    redis_client = await get_redis_client()
-    blog_service = BlogService(session_repo, version_repo, budget_service, task_queue, redis_client)
+    search = q.strip() if q and q.strip() else None
+    sessions, total = await session_repo.list_for_user(
+        user_id,
+        page=page,
+        page_size=page_size,
+        statuses=status,
+        search=search,
+    )
+    total_pages = (total + page_size - 1) // page_size
+    return BlogSessionPage(
+        items=[
+            BlogSessionListItem(
+                session_id=s.id,
+                topic=s.topic,
+                audience=s.audience,
+                tone=s.tone,
+                status=s.status,
+                current_stage=s.current_stage,
+                created_at=s.created_at,
+                completed_at=s.completed_at,
+                cost_usd=float(s.budget_spent_usd or 0),
+            )
+            for s in sessions
+        ],
+        page=page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+    )
 
-    sessions = await blog_service.get_user_sessions(user_id)
-    return [
-        BlogSessionListItem(
-            session_id=s.id,
-            topic=s.topic,
-            audience=s.audience,
-            tone=s.tone,
-            status=s.status,
-            current_stage=s.current_stage,
-            created_at=s.created_at,
-            completed_at=s.completed_at,
-        )
-        for s in sessions
+
+@router.get("/insights", response_model=BlogInsightsResponse)
+async def get_blog_insights(
+    days: int = Query(30, ge=7, le=365),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    user_id = get_authenticated_user_id(current_user)
+    today = datetime.now(timezone.utc).date()
+    first_day = today - timedelta(days=days - 1)
+    since = datetime.combine(first_day, datetime.min.time(), tzinfo=timezone.utc)
+    insight_data = await BlogSessionRepository(session).get_insights_for_user(
+        user_id,
+        since=since,
+    )
+    daily_by_date = {
+        row.day: {
+            "generated_count": row.generated_count,
+            "cost_usd": float(row.cost_usd or 0),
+        }
+        for row in insight_data["daily"]
+    }
+    daily = [
+        {
+            "date": day,
+            "generated_count": daily_by_date.get(day, {}).get("generated_count", 0),
+            "cost_usd": daily_by_date.get(day, {}).get("cost_usd", 0.0),
+        }
+        for offset in range(days)
+        for day in [first_day + timedelta(days=offset)]
     ]
+    return BlogInsightsResponse(
+        days=days,
+        total_generated=insight_data["total_generated"],
+        completed_count=insight_data["completed_count"],
+        failed_count=insight_data["failed_count"],
+        total_cost_usd=insight_data["total_cost_usd"],
+        daily=daily,
+        blog_costs=[
+            {
+                "session_id": blog.id,
+                "topic": blog.topic,
+                "status": blog.status,
+                "created_at": blog.created_at,
+                "cost_usd": float(blog.budget_spent_usd or 0),
+            }
+            for blog in insight_data["blog_costs"]
+        ],
+    )
 
 
 @router.get("/{session_id}/outline", response_model=OutlineReviewView)
@@ -222,7 +312,6 @@ async def get_budget(
     from src.config.budget_config import MODEL_PRICING
 
     user_id = get_authenticated_user_id(current_user)
-    session_repo = BlogSessionRepository(session)
     account_repo = BudgetAccountRepository(session)
 
     snapshot = await account_repo.get_snapshot(user_id)
@@ -232,14 +321,17 @@ async def get_budget(
     available_usd = float(snapshot["available_usd"])
     balance_tokens = int(available_usd / price_per_token) if price_per_token > 0 else 0
 
-    active_count = await session_repo.count_active_for_user(user_id)
-    daily_limit = 1
-    daily_limit_left = max(0, daily_limit - active_count)
+    daily_limit_left = await BlogQuotaRepository(session).get_remaining(
+        user_id=user_id,
+        daily_limit=DAILY_BLOG_GENERATION_LIMIT,
+        usage_date=datetime.now(timezone.utc).date(),
+    )
 
     return BudgetResponse(
         balance_usd=float(snapshot["balance_usd"]),
         balance_tokens=balance_tokens,
         daily_blog_limit_left=daily_limit_left,
+        daily_blog_limit=DAILY_BLOG_GENERATION_LIMIT,
     )
 
 
@@ -271,7 +363,6 @@ async def get_session_status(
     current_agent = None
     if latest_agent_run and latest_agent_run.status == "RUNNING":
         current_agent = latest_agent_run.stage_name
-
     return SessionStatusResponse(
         session_id=blog_session.id,
         status=blog_session.status,
@@ -305,7 +396,6 @@ async def get_session_detail(
     result = await session.execute(select(AgentRun).where(AgentRun.blog_session_id == session_id))
     agent_runs = result.scalars().all()
     review_events = await review_repo.get_for_session(session_id)
-
     latest_version_row = await version_repo.get_latest_for_session(session_id)
     latest_content = (
         latest_version_row.final_content if latest_version_row and latest_version_row.final_content else blog_session.final_content
@@ -538,6 +628,91 @@ async def get_content(
         topic=blog_session.topic,
         audience=blog_session.audience,
         status=blog_session.status,
+    )
+
+
+@router.get("/{session_id}/export")
+async def export_completed_blog(
+    session_id: int,
+    format: Literal["pdf", "docx"] = Query(..., description="The file format to export"),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    """Export the latest completed article as a PDF or Word document."""
+    user_id = get_authenticated_user_id(current_user)
+    session_repo = BlogSessionRepository(session)
+    version_repo = BlogVersionRepository(session)
+
+    blog_session = await session_repo.get_by_id(session_id)
+    if not blog_session or blog_session.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if blog_session.status != "COMPLETED":
+        raise HTTPException(status_code=409, detail="Only completed blogs can be exported")
+
+    latest_version = await version_repo.get_latest_for_session(session_id)
+    markdown = (latest_version.final_content if latest_version else None) or blog_session.final_content
+    if not markdown:
+        raise HTTPException(status_code=404, detail="Final blog content is not available for this session")
+
+    suffix = ".pdf" if format == "pdf" else ".docx"
+    title = (latest_version.title if latest_version else None) or blog_session.topic or f"blog-{session_id}"
+    filename = re.sub(r"[^\w.-]+", "-", title, flags=re.UNICODE).strip("-._")[:100] or f"blog-{session_id}"
+    temp_dir = tempfile.mkdtemp(prefix="blogify-export-")
+    output_path = Path(temp_dir) / f"{filename}{suffix}"
+
+    try:
+        import pypandoc
+    except ImportError as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Document export is unavailable because pypandoc is not installed on the API server.",
+        ) from exc
+
+    try:
+        pypandoc.get_pandoc_path()
+    except (OSError, RuntimeError) as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Document export is unavailable because Pandoc is not installed in the API runtime. Rebuild and deploy the backend image.",
+        ) from exc
+
+    if format == "pdf" and shutil.which("xelatex") is None:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=503,
+            detail="PDF export is unavailable because XeLaTeX is not installed in the API runtime. Rebuild and deploy the backend image.",
+        )
+
+    def convert_markdown() -> None:
+        extra_args = ["--pdf-engine=xelatex"] if format == "pdf" else None
+        pypandoc.convert_text(
+            markdown,
+            to=format,
+            format="md",
+            outputfile=str(output_path),
+            extra_args=extra_args or [],
+        )
+
+    try:
+        await run_in_threadpool(convert_markdown)
+    except (OSError, RuntimeError) as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=503,
+            detail="The document converter could not create this export. Check Pandoc and PDF engine availability on the API server.",
+        ) from exc
+    except Exception as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail="Could not convert this blog for export") from exc
+
+    media_type = "application/pdf" if format == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    return FileResponse(
+        output_path,
+        media_type=media_type,
+        filename=f"{filename}{suffix}",
+        background=BackgroundTask(shutil.rmtree, temp_dir, ignore_errors=True),
     )
 
 

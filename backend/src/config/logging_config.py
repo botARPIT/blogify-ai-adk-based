@@ -1,6 +1,7 @@
 """Logging configuration with structured JSON logging."""
 
 import logging
+import os
 import re
 import sys
 from typing import Any
@@ -31,6 +32,21 @@ def _mask_sensitive_values(_logger, _method_name, event_dict):
     return mask(event_dict)
 
 
+def _add_runtime_context(_logger, _method_name, event_dict):
+    event_dict.setdefault("service.name", os.getenv("OTEL_SERVICE_NAME", "blogify-api"))
+    event_dict.setdefault("deployment.environment", os.getenv("ENVIRONMENT", "dev"))
+    try:
+        from opentelemetry import trace
+
+        span_context = trace.get_current_span().get_span_context()
+        if span_context.is_valid:
+            event_dict.setdefault("trace_id", f"{span_context.trace_id:032x}")
+            event_dict.setdefault("span_id", f"{span_context.span_id:016x}")
+    except ImportError:
+        pass
+    return event_dict
+
+
 def setup_logging(
     log_level: str = "INFO",
     *,
@@ -53,6 +69,7 @@ def setup_logging(
         structlog.stdlib.filter_by_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
+        _add_runtime_context,
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),

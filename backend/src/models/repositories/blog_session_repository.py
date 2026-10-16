@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import Date, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.orm_models import BlogSession, BlogSessionStatus
@@ -32,6 +32,7 @@ class BlogSessionRepository:
             audience=audience,
             tone=tone,
             status=BlogSessionStatus.QUEUED,
+            job_phase="fresh_generation",
             adk_session_id=adk_session_id,
             idempotency_key=idempotency_key,
         )
@@ -68,6 +69,102 @@ class BlogSessionRepository:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def list_for_user(
+        self,
+        user_id: int,
+        *,
+        page: int,
+        page_size: int,
+        statuses: list[BlogSessionStatus] | None = None,
+        search: str | None = None,
+    ) -> tuple[list[BlogSession], int]:
+        conditions = [BlogSession.user_id == user_id]
+        if statuses:
+            conditions.append(BlogSession.status.in_([status.value for status in statuses]))
+        if search:
+            pattern = f"%{search.strip()}%"
+            conditions.append(
+                or_(BlogSession.topic.ilike(pattern), BlogSession.audience.ilike(pattern))
+            )
+
+        total = await self._session.scalar(
+            select(func.count(BlogSession.id)).where(*conditions)
+        )
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(*conditions)
+            .order_by(BlogSession.created_at.desc(), BlogSession.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        return list(result.scalars().all()), int(total or 0)
+
+    async def get_insights_for_user(
+        self,
+        user_id: int,
+        *,
+        since: datetime,
+    ) -> dict:
+        conditions = [BlogSession.user_id == user_id, BlogSession.created_at >= since]
+        unsuccessful_statuses = [
+            BlogSessionStatus.FAILED.value,
+            BlogSessionStatus.REJECTED.value,
+            BlogSessionStatus.CANCELLED.value,
+        ]
+        non_failed_conditions = [
+            *conditions,
+            BlogSession.status.notin_(unsuccessful_statuses),
+        ]
+        summary = await self._session.execute(
+            select(
+                func.sum(
+                    case((BlogSession.status.notin_(unsuccessful_statuses), 1), else_=0)
+                ),
+                func.sum(case((BlogSession.status == BlogSessionStatus.COMPLETED.value, 1), else_=0)),
+                func.sum(case((BlogSession.status.in_([
+                    *unsuccessful_statuses,
+                ]), 1), else_=0)),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                BlogSession.status.notin_(unsuccessful_statuses),
+                                BlogSession.budget_spent_usd,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            ).where(*conditions)
+        )
+        total_generated, completed_count, failed_count, total_cost_usd = summary.one()
+
+        daily_result = await self._session.execute(
+            select(
+                cast(BlogSession.created_at, Date).label("day"),
+                func.count(BlogSession.id).label("generated_count"),
+                func.coalesce(func.sum(BlogSession.budget_spent_usd), 0).label("cost_usd"),
+            )
+            .where(*non_failed_conditions)
+            .group_by(cast(BlogSession.created_at, Date))
+            .order_by(cast(BlogSession.created_at, Date))
+        )
+        recent_result = await self._session.execute(
+            select(BlogSession)
+            .where(*non_failed_conditions)
+            .order_by(BlogSession.created_at.desc(), BlogSession.id.desc())
+            .limit(12)
+        )
+        return {
+            "total_generated": int(total_generated or 0),
+            "completed_count": int(completed_count or 0),
+            "failed_count": int(failed_count or 0),
+            "total_cost_usd": float(total_cost_usd or 0),
+            "daily": list(daily_result.all()),
+            "blog_costs": list(recent_result.scalars().all()),
+        }
 
     async def count_active_for_user(self, user_id: int) -> int:
         active = [s.value for s in BlogSessionStatus.active_states()]

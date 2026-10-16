@@ -35,10 +35,12 @@ except ImportError:
 
 # Global tracer
 _tracer = None
+_provider_initialized = False
+_clients_instrumented = False
 
 
 def init_tracing(
-    service_name: str = "blogify-api",
+    service_name: str | None = None,
     otlp_endpoint: str | None = None,
 ) -> None:
     """
@@ -48,13 +50,20 @@ def init_tracing(
         service_name: Name of this service in traces
         otlp_endpoint: OTLP collector endpoint (default from env)
     """
-    global _tracer
+    global _tracer, _provider_initialized
 
     if not OTEL_AVAILABLE:
         logger.warning("tracing_disabled", reason="opentelemetry not installed")
         return
 
-    endpoint = otlp_endpoint or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+    if _provider_initialized:
+        return
+
+    service_name = service_name or os.getenv("OTEL_SERVICE_NAME", "blogify-api")
+    endpoint = otlp_endpoint or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if not endpoint:
+        logger.info("tracing_disabled", reason="OTEL_EXPORTER_OTLP_ENDPOINT is not configured")
+        return
 
     # Create resource
     resource = Resource.create(
@@ -79,6 +88,7 @@ def init_tracing(
 
     # Set global provider
     trace.set_tracer_provider(provider)
+    _provider_initialized = True
 
     # Get tracer
     _tracer = trace.get_tracer(__name__)
@@ -97,10 +107,19 @@ def instrument_app(app) -> None:
         return
 
     try:
-        FastAPIInstrumentor.instrument_app(app)
+        FastAPIInstrumentor.instrument_app(app, excluded_urls=r"/metrics,/api/health.*,/api/v1/health.*")
         logger.info("fastapi_instrumented")
     except Exception as e:
         logger.warning("fastapi_instrumentation_failed", error=str(e))
+
+    instrument_clients()
+
+
+def instrument_clients() -> None:
+    """Instrument outbound HTTP and Redis clients once per process."""
+    global _clients_instrumented
+    if not OTEL_AVAILABLE or _clients_instrumented:
+        return
 
     try:
         HTTPXClientInstrumentor().instrument()
@@ -113,6 +132,7 @@ def instrument_app(app) -> None:
         logger.info("redis_instrumented")
     except Exception as e:
         logger.warning("redis_instrumentation_failed", error=str(e))
+    _clients_instrumented = True
 
 
 def instrument_database(engine) -> None:
@@ -126,7 +146,7 @@ def instrument_database(engine) -> None:
         return
 
     try:
-        SQLAlchemyInstrumentor().instrument(engine=engine)
+        SQLAlchemyInstrumentor().instrument(engine=getattr(engine, "sync_engine", engine))
         logger.info("sqlalchemy_instrumented")
     except Exception as e:
         logger.warning("sqlalchemy_instrumentation_failed", error=str(e))
@@ -143,6 +163,35 @@ def get_tracer():
             _tracer = NoOpTracer()
 
     return _tracer
+
+
+def inject_trace_context() -> dict[str, str]:
+    """Return W3C trace headers for persistence with asynchronous work."""
+    if not OTEL_AVAILABLE:
+        return {}
+    carrier: dict[str, str] = {}
+    from opentelemetry.propagate import inject
+
+    inject(carrier)
+    return carrier
+
+
+def extract_trace_context(carrier: dict[str, str] | None):
+    """Restore W3C trace context carried by an outbox event or queue job."""
+    if not OTEL_AVAILABLE or not carrier:
+        return None
+    from opentelemetry.propagate import extract
+
+    return extract(carrier)
+
+
+def record_current_exception(exception: Exception) -> None:
+    """Mark the active span failed when application code handles the exception."""
+    if not OTEL_AVAILABLE:
+        return
+    span = trace.get_current_span()
+    span.record_exception(exception)
+    span.set_status(Status(StatusCode.ERROR, str(exception)))
 
 
 class NoOpTracer:
@@ -173,6 +222,8 @@ class NoOpSpan:
 def trace_span(
     name: str,
     attributes: dict | None = None,
+    *,
+    context=None,
 ):
     """
     Create a traced span.
@@ -184,7 +235,7 @@ def trace_span(
     """
     tracer = get_tracer()
 
-    with tracer.start_as_current_span(name) as span:
+    with tracer.start_as_current_span(name, context=context) as span:
         if attributes:
             for key, value in attributes.items():
                 span.set_attribute(key, value)

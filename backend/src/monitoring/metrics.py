@@ -1,8 +1,11 @@
 """Prometheus metrics instrumentation."""
 
-from fastapi import Response
+import hmac
+
+from fastapi import HTTPException, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
+from src.config.env_config import config
 from src.config.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -116,6 +119,16 @@ judge_quality_score = Histogram(
 )
 
 
-async def metrics_endpoint():
+async def metrics_endpoint(request: Request):
     """Prometheus metrics endpoint."""
+    if not config.metrics_public:
+        expected = config.metrics_bearer_token
+        supplied = request.headers.get("Authorization", "")
+        scheme, _, supplied_token = supplied.partition(" ")
+        if (
+            scheme.lower() != "bearer"
+            or not expected
+            or not hmac.compare_digest(supplied_token, expected)
+        ):
+            raise HTTPException(status_code=404, detail="Not found")
     return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)

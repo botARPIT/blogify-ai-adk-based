@@ -2,6 +2,8 @@
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DAILY_BLOG_GENERATION_LIMIT = 5
+
 
 class APISettings(BaseSettings):
     """API server settings loaded from environment."""
@@ -15,7 +17,6 @@ class APISettings(BaseSettings):
     log_level: str = "INFO"
 
     # Rate limiting
-    rate_limit_blogs_per_day: int = 10
     rate_limit_requests_per_minute: int = 20
 
     # Concurrency

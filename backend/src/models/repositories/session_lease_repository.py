@@ -48,14 +48,29 @@ class SessionLeaseRepository:
             return LeaseAcquireResult(acquired=False)
 
         current_lease = await self._get_active_lease(job.session_id)
-        if current_lease and current_lease.lease_owner != worker_id:
+        lease_is_live = bool(
+            current_lease
+            and current_lease.lease_expires_at
+            and current_lease.lease_expires_at > now
+        )
+        if current_lease and lease_is_live and current_lease.lease_owner != worker_id:
             return LeaseAcquireResult(acquired=False)
+
+        if current_lease and not lease_is_live:
+            # The outbox lease is the recovery clock. Once it expires, the
+            # session lease must stop blocking the redelivered event too.
+            current_lease.ended_at = now
+            current_lease.release_reason = LeaseEventType.HEARTBEAT_FAILED
+            session_model.status = BlogSessionStatus.QUEUED.value
+            session_model.current_stage = "requeued_by_outbox"
+            session_model.updated_at = now
+            await self._session.flush()
 
         new_version = (current_lease.lease_version + 1) if current_lease else 1
         active_version = await self._resolve_active_version(session_model, job)
         self._validate_phase_state(session_model, job.phase, active_version)
 
-        if current_lease and current_lease.lease_owner == worker_id:
+        if current_lease and lease_is_live and current_lease.lease_owner == worker_id:
             result = await self._session.execute(
                 update(SessionLease)
                 .where(
@@ -138,29 +153,6 @@ class SessionLeaseRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
-
-    async def get_stale_sessions(self, stale_threshold_minutes: int = 10) -> list[SessionLease]:
-        """Get all leases that have expired (heartbeat lost)."""
-        threshold = datetime.now(timezone.utc) - timedelta(minutes=stale_threshold_minutes)
-        result = await self._session.execute(
-            select(SessionLease)
-            .where(
-                
-                SessionLease.ended_at.is_(None),
-                SessionLease.lease_expires_at < threshold,
-                BlogSession.status == BlogSessionStatus.PROCESSING
-            )
-            .order_by(SessionLease.blog_session_id)
-        )
-        return list(result.scalars().all())
-
-    async def mark_expired(self, session_id: int) -> None:
-        """Mark the current lease as expired due to heartbeat failure."""
-        active_lease = await self._get_active_lease(session_id)
-        if active_lease:
-            active_lease.ended_at = datetime.now(timezone.utc)
-            active_lease.release_reason = LeaseEventType.HEARTBEAT_FAILED
-            await self._session.flush()
 
     async def get_lease_history(self, session_id: int) -> list[SessionLease]:
         """Get all lease events for a session (full audit trail)."""

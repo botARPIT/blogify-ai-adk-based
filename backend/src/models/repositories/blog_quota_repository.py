@@ -1,52 +1,61 @@
-"""BlogQuotaRepository — manages per-user blog generation quotas."""
+"""Atomic per-user daily blog-generation quota backed by PostgreSQL."""
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import case, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.orm_models import UserBlogQuota
-
-_BLOG_LIMIT = 10
 
 
 class BlogQuotaRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_or_create(self, user_id: int) -> UserBlogQuota:
-        """Return the quota row for this user, creating it if it doesn't exist."""
+    async def consume_daily_slot(self, user_id: int, daily_limit: int, usage_date: date) -> bool:
+        """Consume a generation slot atomically; return False once the cap is reached.
+
+        A row lock taken by the upsert serializes concurrent requests for this user.
+        The caller's transaction keeps the increment atomic with session creation and
+        the workflow outbox insert; a failed generation request rolls it back.
+        """
+        now = datetime.now(timezone.utc)
+        statement = insert(UserBlogQuota).values(
+            user_id=user_id,
+            blogs_used=1,
+            blogs_limit=daily_limit,
+            usage_date=usage_date,
+            created_at=now,
+            updated_at=now,
+        )
+        statement = statement.on_conflict_do_update(
+            index_elements=[UserBlogQuota.user_id],
+            set_={
+                "blogs_used": case(
+                    (UserBlogQuota.usage_date == usage_date, UserBlogQuota.blogs_used + 1),
+                    else_=1,
+                ),
+                "blogs_limit": daily_limit,
+                "usage_date": usage_date,
+                "updated_at": now,
+            },
+            where=or_(
+                UserBlogQuota.usage_date != usage_date,
+                UserBlogQuota.blogs_used < daily_limit,
+            ),
+        ).returning(UserBlogQuota.blogs_used)
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none() is not None
+
+    async def get_remaining(self, user_id: int, daily_limit: int, usage_date: date) -> int:
+        """Read remaining slots without requiring a row to exist for every user."""
         result = await self._session.execute(
-            select(UserBlogQuota).where(UserBlogQuota.user_id == user_id)
-        )
-        quota = result.scalar_one_or_none()
-        if quota is None:
-            quota = UserBlogQuota(
-                user_id=user_id,
-                blogs_used=0,
-                blogs_limit=_BLOG_LIMIT,
-            )
-            self._session.add(quota)
-            await self._session.flush()
-        return quota
-
-    async def get_remaining(self, user_id: int) -> int:
-        """Return the number of blogs the user can still generate."""
-        quota = await self.get_or_create(user_id)
-        return max(0, quota.blogs_limit - quota.blogs_used)
-
-    async def increment_used(self, user_id: int) -> int:
-        """Atomically increment blogs_used by 1. Returns the new blogs_used count."""
-        quota = await self.get_or_create(user_id)
-        await self._session.execute(
-            update(UserBlogQuota)
-            .where(UserBlogQuota.user_id == user_id)
-            .values(
-                blogs_used=UserBlogQuota.blogs_used + 1,
-                updated_at=datetime.now(timezone.utc),
+            select(UserBlogQuota.blogs_used, UserBlogQuota.usage_date).where(
+                UserBlogQuota.user_id == user_id
             )
         )
-        await self._session.flush()
-        # Refresh to get the authoritative value from DB
-        await self._session.refresh(quota)
-        return quota.blogs_used
+        quota = result.one_or_none()
+        if quota is None or quota.usage_date != usage_date:
+            return daily_limit
+        return max(0, daily_limit - quota.blogs_used)

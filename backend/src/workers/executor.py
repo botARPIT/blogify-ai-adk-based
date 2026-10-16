@@ -1,7 +1,7 @@
 """PipelineExecutor — bridges worker to ADK pipeline."""
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -238,7 +238,7 @@ class PipelineExecutor:
                 )
 
         for cost in costs:
-            if cost.total_tokens <= 0:
+            if cost.total_tokens <= 0 and cost.latency_ms is None:
                 continue
 
             existing = await self._run_repo.get_by_session_and_stage(job.session_id, cost.stage)
@@ -253,6 +253,7 @@ class PipelineExecutor:
                     latency_ms = int(
                         (datetime.now(timezone.utc) - existing.started_at).total_seconds() * 1000
                     )
+                latency_ms = cost.latency_ms if cost.latency_ms is not None else latency_ms
                 await self._run_repo.update(
                     existing.id,
                     total_tokens=cost.total_tokens,
@@ -263,23 +264,33 @@ class PipelineExecutor:
                 )
                 agent_run_id = existing.id
             else:
+                completed_at = datetime.now(timezone.utc)
+                started_at = (
+                    completed_at - timedelta(milliseconds=cost.latency_ms)
+                    if cost.latency_ms is not None
+                    else completed_at
+                )
                 agent_run = await self._run_repo.create(
                     blog_session_id=job.session_id,
                     stage_name=cost.stage,
                     status=AgentRunStatus.COMPLETED,
                     total_tokens=cost.total_tokens,
                     cost_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
+                    latency_ms=cost.latency_ms,
                     output_snapshot=output_snapshot,
+                    started_at=started_at,
+                    completed_at=completed_at,
                 )
                 agent_run_id = agent_run.id
 
-            await self._budget_service.commit_stage(
-                user_id=job.user_id,
-                blog_session_id=job.session_id,
-                agent_run_id=agent_run_id,
-                actual_tokens=cost.total_tokens,
-                actual_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
-            )
+            if cost.total_tokens > 0:
+                await self._budget_service.commit_stage(
+                    user_id=job.user_id,
+                    blog_session_id=job.session_id,
+                    agent_run_id=agent_run_id,
+                    actual_tokens=cost.total_tokens,
+                    actual_usd=Decimal(str(get_model_cost(cost.model, cost.total_tokens))),
+                )
 
     async def _get_active_version(self, session_id: int):
         return await self._version_repo.get_active_for_session(session_id)

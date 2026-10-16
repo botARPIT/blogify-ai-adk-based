@@ -41,8 +41,11 @@ services:
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--config.expand-env'
       - '--storage.tsdb.path=/prometheus'
       - '--web.enable-lifecycle'
+    environment:
+      METRICS_BEARER_TOKEN: ${METRICS_BEARER_TOKEN:-}
     ports:
       - "9090:9090"
     restart: unless-stopped
@@ -58,12 +61,52 @@ services:
       - "3200:3200"
     restart: unless-stopped
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    command: ["--config=/etc/otel-collector.yaml"]
+    volumes:
+      - ./monitoring/otel-collector.yaml:/etc/otel-collector.yaml:ro
+    depends_on:
+      - tempo
+    expose:
+      - "4317"
+      - "4318"
+      - "13133"
+    restart: unless-stopped
+
+  # Local development only; keep security disabled and do not publish a host port.
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    expose:
+      - "9200"
+    restart: unless-stopped
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.19.0
+    user: root
+    command: ["--strict.perms=false", "-e"]
+    volumes:
+      - ./monitoring/filebeat.local.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      - elasticsearch
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:10.1.0
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL:-http://elasticsearch:9200}
+      - ELASTICSEARCH_GRAFANA_USERNAME=${ELASTICSEARCH_GRAFANA_USERNAME:-}
+      - ELASTICSEARCH_GRAFANA_PASSWORD=${ELASTICSEARCH_GRAFANA_PASSWORD:-}
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
@@ -72,6 +115,7 @@ services:
     depends_on:
       - prometheus
       - tempo
+      - elasticsearch
     restart: unless-stopped
 
 volumes:
@@ -80,3 +124,4 @@ volumes:
   prometheus_data:
   tempo_data:
   grafana_data:
+  elasticsearch_data:

@@ -159,9 +159,26 @@ class TestOutputKeys:
             assert getattr(module, factory)().output_key == expected
 
     def test_writer_keeps_the_draft_key(self):
-        from src.agents.writer_agent import create_writer_agent
+        from src.agents.writer_agent import WRITER_INSTRUCTION, create_writer_agent
 
         assert create_writer_agent().output_key == "blog_draft"
+        for state_key in (
+            "topic",
+            "audience",
+            "approved_outline",
+            "blog_outline",
+            "research_data",
+            "outline_feedback",
+        ):
+            assert f"{{{state_key}}}" in WRITER_INSTRUCTION
+        assert "do not ask the user to provide them again" in WRITER_INSTRUCTION
+        assert "research_data.sources[0]" in WRITER_INSTRUCTION
+
+    def test_editor_prompt_preserves_numbered_source_mapping(self):
+        from src.agents.editor_agent import EDITOR_INSTRUCTION
+
+        assert "[1] is sources[0]" in EDITOR_INSTRUCTION
+        assert "never invent a source or URL" in EDITOR_INSTRUCTION
 
     def test_research_keeps_its_key(self):
         from src.agents.research_agent import create_research_agent

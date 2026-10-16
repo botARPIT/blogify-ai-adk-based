@@ -1,6 +1,6 @@
 """Pydantic schemas for V1 API contract and agent I/O."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, model_validator
@@ -91,6 +91,16 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user_id: int
     email: str
+
+
+class ToneOptionResponse(BaseModel):
+    value: str
+    label: str
+    description: str
+
+
+class ToneCatalogResponse(BaseModel):
+    items: list[ToneOptionResponse]
 
 
 class UserResponse(BaseModel):
@@ -261,12 +271,46 @@ class BlogSessionListItem(BaseModel):
     current_stage: str | None
     created_at: datetime
     completed_at: datetime | None
+    cost_usd: float
+
+
+class BlogSessionPage(BaseModel):
+    items: list[BlogSessionListItem]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+
+
+class DailyBlogInsight(BaseModel):
+    date: date
+    generated_count: int
+    cost_usd: float
+
+
+class BlogCostInsight(BaseModel):
+    session_id: int
+    topic: str
+    status: str
+    created_at: datetime
+    cost_usd: float
+
+
+class BlogInsightsResponse(BaseModel):
+    days: int
+    total_generated: int
+    completed_count: int
+    failed_count: int
+    total_cost_usd: float
+    daily: list[DailyBlogInsight]
+    blog_costs: list[BlogCostInsight]
 
 
 class BudgetResponse(BaseModel):
     balance_usd: float
     balance_tokens: int
     daily_blog_limit_left: int
+    daily_blog_limit: int
 
 
 class SessionStatusResponse(BaseModel):

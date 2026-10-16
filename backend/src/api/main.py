@@ -16,9 +16,13 @@ from src.api.auth import AuthMiddleware
 from src.api.routes import health
 from src.api.routes.auth_routes import router as auth_router
 from src.api.routes.blog_routes import router as blog_router
+from src.api.routes.tone_routes import router as tone_router
 from src.config.env_config import config
 from src.config.logging_config import get_logger, setup_logging
+from src.core.database import engine
 from src.core.errors import register_exception_handlers
+from src.monitoring.metrics import metrics_endpoint
+from src.monitoring.tracing import init_tracing, instrument_app, instrument_database
 
 setup_logging(
     config.log_level,
@@ -48,6 +52,11 @@ app = FastAPI(
     openapi_url="/openapi.json",
 )
 
+init_tracing()
+instrument_app(app)
+instrument_database(engine)
+app.add_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins,
@@ -64,6 +73,7 @@ app.include_router(health.router, prefix="/api", tags=["Health"])
 app.include_router(health.router, prefix=API_PREFIX, tags=["Health"])
 app.include_router(auth_router, prefix=API_PREFIX, tags=["Auth"])
 app.include_router(blog_router, prefix=API_PREFIX, tags=["Blogs"])
+app.include_router(tone_router, prefix=API_PREFIX, tags=["Tones"])
 
 
 @app.get("/", tags=["Root"])

@@ -21,6 +21,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from src.agents.timing import AGENT_TIMINGS_STATE_KEY
 from src.config.logging_config import get_logger
 from src.core.sanitization import sanitize_audience, sanitize_topic
 from src.monitoring.tracing import trace_span
@@ -54,6 +55,7 @@ class CostInfo:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    latency_ms: int | None = None
     research_sources: list[dict] = None
 
     def __post_init__(self):
@@ -71,6 +73,7 @@ class PipelineResult:
     editor_review: dict[str, Any] | None = None
     final_content: str = ""
     costs: list[CostInfo] = field(default_factory=list)
+    stage_timings_ms: dict[str, int] = field(default_factory=dict)
     error: str | None = None
     retryable: bool = False
 
@@ -172,6 +175,13 @@ def _populate_result_from_state(result: PipelineResult, state: dict[str, Any]) -
     result.research = state.get("research_data")
     result.draft = state.get("blog_draft", "")
     result.editor_review = state.get("editor_review")
+    timings = state.get(AGENT_TIMINGS_STATE_KEY, {})
+    if isinstance(timings, dict):
+        result.stage_timings_ms = {
+            str(stage): max(0, int(duration))
+            for stage, duration in timings.items()
+            if isinstance(duration, (int, float))
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +275,12 @@ async def _finalize_result(
         result.final_content = result.draft
 
     result.costs.extend(_extract_costs_from_events(events))
+    for cost in result.costs:
+        cost.latency_ms = result.stage_timings_ms.get(cost.stage)
+    recorded_stages = {cost.stage for cost in result.costs}
+    for stage, duration_ms in result.stage_timings_ms.items():
+        if stage not in recorded_stages:
+            result.costs.append(CostInfo(stage=stage, latency_ms=duration_ms))
     logger.info(
         "pipeline_completed",
         session_id=session_id,

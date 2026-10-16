@@ -5,10 +5,12 @@ import json
 import os
 from typing import Any
 
+import httpx
 from tavily import TavilyClient
 
 from src.config.logging_config import get_logger
 from src.monitoring.circuit_breaker import CircuitBreaker
+from src.tools.google_search import google_search_topic
 
 logger = get_logger(__name__)
 
@@ -42,62 +44,78 @@ async def research_topic(topic: str, max_results: int = 5) -> dict[str, Any]:
     Returns:
         Dictionary containing research results and sources
     """
+    logger.info("researching_topic", topic=topic[:50], max_results=max_results)
+    client: TavilyClient | None = None
+    tavily_error: Exception | None = None
+
     try:
-        logger.info("researching_topic", topic=topic[:50], max_results=max_results)
-
         client = _get_tavily_client()
-
-        # Try simple search first (faster, works with basic plan)
-        try:
-            response = client.search(query=topic, max_results=max_results)
-
-            results = response.get("results", [])
-
-            formatted_results = {
+        response = client.search(query=topic, max_results=max_results)
+        results = response.get("results", [])
+        sources = [
+            {
+                "title": result.get("title", ""),
+                "url": result.get("url", ""),
+                "content": result.get("content", "")[:500],
+                "score": result.get("score", 0.0),
+                "provider": "tavily",
+            }
+            for result in results
+            if result.get("url")
+        ]
+        if sources:
+            logger.info("research_completed", sources_found=len(sources), provider="tavily")
+            return {
                 "topic": topic,
                 "summary": response.get("answer", f"Research results for: {topic}"),
-                "total_sources": len(results),
-                "sources": [
-                    {
-                        "title": r.get("title", ""),
-                        "url": r.get("url", ""),
-                        "content": r.get("content", "")[:500],  # Truncate for storage
-                        "score": r.get("score", 0.0),
-                    }
-                    for r in results
-                ],
+                "total_sources": len(sources),
+                "sources": sources,
+                "provider": "tavily",
             }
+        tavily_error = ValueError("Tavily returned no usable sources")
+    except Exception as exc:
+        tavily_error = exc
+        logger.warning("tavily_search_failed", error=str(exc))
 
-            logger.info("research_completed", sources_found=len(results))
-            return formatted_results
+    google_error: Exception | None = None
+    try:
+        google_results = await google_search_topic(topic, max_results)
+        if google_results.get("sources"):
+            logger.info(
+                "research_completed",
+                sources_found=google_results["total_sources"],
+                provider="google_custom_search",
+            )
+            return google_results
+        raise ValueError("Google Search returned no usable sources")
+    except Exception as exc:
+        google_error = exc
+        logger.warning(
+            "google_search_fallback_failed",
+            error_type=type(exc).__name__,
+            status_code=getattr(getattr(exc, "response", None), "status_code", None),
+        )
 
-        except Exception as search_error:
-            logger.warning("simple_search_failed", error=str(search_error))
+    if client is not None:
+        try:
+            return await _deep_research(client, topic)
+        except Exception as deep_error:
+            logger.warning("deep_research_not_available", error=str(deep_error))
 
-            # Fallback: try deep research if available
-            try:
-                return await _deep_research(client, topic)
-            except Exception as deep_error:
-                logger.warning("deep_research_not_available", error=str(deep_error))
-
-                # Return empty results if all methods fail
-                return {
-                    "topic": topic,
-                    "summary": f"Unable to research: {topic}",
-                    "total_sources": 0,
-                    "sources": [],
-                    "error": str(search_error),
-                }
-
-    except Exception as e:
-        logger.error("research_failed", error=str(e), topic=topic[:50])
-        return {
-            "topic": topic,
-            "summary": f"Research failed for: {topic}",
-            "total_sources": 0,
-            "sources": [],
-            "error": str(e),
-        }
+    google_error_detail = (
+        f"HTTP {google_error.response.status_code}"
+        if isinstance(google_error, httpx.HTTPStatusError)
+        else type(google_error).__name__
+    )
+    error = f"Tavily: {type(tavily_error).__name__}; Google Search: {google_error_detail}"
+    logger.error("research_failed", error=error, topic=topic[:50])
+    return {
+        "topic": topic,
+        "summary": f"Research failed for: {topic}",
+        "total_sources": 0,
+        "sources": [],
+        "error": error,
+    }
 
 
 async def _deep_research(client: TavilyClient, topic: str) -> dict[str, Any]:

@@ -46,7 +46,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
-          source: "backend/docker-compose.prod.yml,backend/nginx/,backend/monitoring/"
+          source: "backend/docker-compose.prod.yml,backend/nginx/,backend/monitoring/,backend/grafana/provisioning/datasources/"
           target: "${{ env.DEPLOY_DIR }}/"
           strip_components: 0
           overwrite: true
@@ -151,6 +151,10 @@ jobs:
 
             echo "==> Pruning old images..."
             docker image prune -f
+
+            echo "==> Verifying document export runtime..."
+            docker exec blogifyai-api pandoc --version
+            docker exec blogifyai-api xelatex --version
 
             echo "✅ Deploy of ${IMAGE} complete."
 
