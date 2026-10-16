@@ -1,319 +1,93 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import {
-  generateBlog,
-  getSession,
-  getBlogSessions,
-  type GenerateBlogRequest,
-} from '../lib/api/blogs';
+import { generateBlog, getTones, type GenerateBlogRequest, type ToneOption } from '../lib/api/blogs';
 import { getRouteForStatus } from '../lib/session-routing';
-import StatusBadge from '../components/session/StatusBadge';
-import LoadingState from '../components/state/LoadingState';
+import SessionLibrary from '../components/session/SessionLibrary';
 import { useBudgetPolling } from '../hooks/useBudgetPolling';
 
-interface SessionItem {
-  session_id: number;
-  topic: string;
-  audience: string;
-  tone: string;
-  status: string;
-  current_stage: string | null;
-  created_at: string;
-  completed_at: string | null;
-}
-
 const DashboardPage: React.FC = () => {
+  const practicalTone: ToneOption = {
+    value: 'practical',
+    label: 'Practical',
+    description: 'Clear, useful guidance readers can put into action.',
+  };
   const [topic, setTopic] = useState('');
   const [audience, setAudience] = useState('');
-  const [tone, setTone] = useState('Practical');
+  const [tone, setTone] = useState(practicalTone.value);
+  const [tones, setTones] = useState<ToneOption[]>([practicalTone]);
+  const [tonesLoading, setTonesLoading] = useState(true);
+  const [tonesUnavailable, setTonesUnavailable] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [recentSessions, setRecentSessions] = useState<SessionItem[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const { budget, error: budgetError } = useBudgetPolling();
   const navigate = useNavigate();
-  // Idempotency key — one UUID per user-intent.
-  // Kept across network retries; cleared after a terminal outcome.
   const idempotencyKeyRef = useRef<string | null>(null);
-  const carouselRef = useRef<HTMLUListElement>(null);
-
-  const scrollUp = () => {
-    if (carouselRef.current) {
-      carouselRef.current.scrollBy({ top: -140, behavior: 'smooth' });
-    }
-  };
-
-  const scrollDown = () => {
-    if (carouselRef.current) {
-      carouselRef.current.scrollBy({ top: 140, behavior: 'smooth' });
-    }
-  };
-
-  const fetchSessions = async (showLoading = true) => {
-    if (showLoading) setRefreshing(true);
-    try {
-      const sessions = await getBlogSessions();
-      setRecentSessions(sessions);
-    } catch (err) {
-      console.error('Failed to fetch sessions', err);
-      toast.error('Failed to load sessions');
-    } finally {
-      setSessionsLoading(false);
-      if (showLoading) setRefreshing(false);
-    }
-  };
 
   useEffect(() => {
-    fetchSessions();
+    let active = true;
+    getTones()
+      .then(({ items }) => {
+        if (!active || items.length === 0) return;
+        setTones(items);
+        setTone((currentTone) =>
+          items.some((option) => option.value === currentTone) ? currentTone : items[0].value,
+        );
+        setTonesUnavailable(false);
+      })
+      .catch(() => {
+        if (active) setTonesUnavailable(true);
+      })
+      .finally(() => {
+        if (active) setTonesLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const getActionLabel = (status: string) => {
-    const normalizedStatus = status?.toLowerCase();
-    switch (normalizedStatus) {
-      case 'awaiting_outline_review':
-        return 'Review Outline';
-      case 'awaiting_final_review':
-        return 'Review Draft';
-      case 'completed':
-        return 'Open Output';
-      default:
-        return 'Continue';
-    }
-  };
+  const selectedTone = tones.find((option) => option.value === tone) ?? practicalTone;
 
-  const handleGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!topic || topic.length < 10) {
-      setError('Topic must be at least 10 characters long.');
-      return;
-    }
-
-    // Generate a fresh UUID if this is a new intent (no key yet)
-    if (!idempotencyKeyRef.current) {
-      idempotencyKeyRef.current = crypto.randomUUID();
-    }
-
+  const handleGenerate = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (topic.trim().length < 10) { setError('Add a little more detail. Topics need at least 10 characters.'); return; }
+    if (!idempotencyKeyRef.current) idempotencyKeyRef.current = crypto.randomUUID();
     setLoading(true);
     setError('');
-
     try {
-      const payload: GenerateBlogRequest = {
-        topic,
-        audience: audience || 'general readers',
-        tone,
-        idempotencyKey: idempotencyKeyRef.current,
-      };
-
-      const data = await generateBlog(payload);
-
-      // Success → terminal outcome, clear key so next Generate is a fresh intent
+      const payload: GenerateBlogRequest = { topic: topic.trim(), audience: audience.trim() || 'general readers', tone, idempotencyKey: idempotencyKeyRef.current };
+      const response = await generateBlog(payload);
       idempotencyKeyRef.current = null;
-
-      const newSession: SessionItem = {
-        session_id: data.session_id,
-        topic,
-        audience: audience || 'general readers',
-        tone,
-        status: data.status,
-        current_stage: null,
-        created_at: new Date().toISOString(),
-        completed_at: null,
-      };
-
-      setRecentSessions([newSession, ...recentSessions]);
-      toast.success('Blog generation queued', {
-        description: 'The canonical workflow is now processing your request.',
-      });
-      navigate(getRouteForStatus(data.session_id, data.status));
-    } catch (err: any) {
-      // SESSION_TERMINAL → the previous run finished; auto-rotate key and advise user
-      if (err?.status === 409 && err?.body?.error_code === 'SESSION_TERMINAL') {
-        idempotencyKeyRef.current = null;
-        setError('Previous generation already completed. Click Generate again to start a new one.');
-        toast.info('Previous session was terminal', {
-          description: 'A new request ID has been issued — click Generate to proceed.',
-        });
-      } else {
-        // Transient error → keep the key so retries deduplicate
-        const message = err.message || 'Generation failed';
-        setError(message);
-        toast.error('Failed to queue blog generation', { description: message });
-      }
-    } finally {
-      setLoading(false);
-    }
+      toast.success('Your story is underway', { description: 'We’ll bring you back when it’s time to review.' });
+      navigate(getRouteForStatus(String(response.session_id), response.status));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'We couldn’t start this session. Try again.';
+      setError(message);
+      toast.error('Couldn’t start your story', { description: message });
+    } finally { setLoading(false); }
   };
 
-  if (sessionsLoading) {
-    return <LoadingState title="Booting dashboard..." message="Loading your blog sessions." />;
-  }
+  return <div className="workspace-content page-enter">
+    <section className="welcome-header"><div><span className="eyebrow">YOUR EDITORIAL DESK</span><h1>Make room for <em>good ideas.</em></h1><p>Pick up where you left off, or give a new story its first shape.</p></div><div className="welcome-date"><span className="welcome-spark">✳</span><span>ONE THOUGHTFUL STEP AT A TIME</span></div></section>
 
-  return (
-    <div className="animate-in page-shell">
-      <div className="page-header">
-        <div className="page-header-copy">
-          <span className="eyebrow-label">Canonical Workflow</span>
-          <h1 className="page-title">Generate blog sessions with an outline review gate.</h1>
-          <p className="page-subtitle">
-            Start a new session, inspect recent outcomes, and keep the budget in view without losing the current editorial feel.
-          </p>
-        </div>
-      </div>
+    <section className="dashboard-hero-grid">
+      <form className="compose-card" onSubmit={(event) => void handleGenerate(event)}>
+        <div className="compose-heading"><span className="compose-icon">✎</span><div><span className="eyebrow">START SOMETHING NEW</span><h2>What’s on your mind?</h2></div></div>
+        <div className="field-group"><label htmlFor="story-topic">Your topic</label><input id="story-topic" className="field-input topic-input" value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="e.g. Why small rituals make teams stronger" minLength={10} maxLength={500} required aria-describedby="topic-hint"/><div id="topic-hint" className="field-hint"><span>Start with an idea, a question, or a point of view.</span><span>{topic.length}/500</span></div></div>
+        <div className="field-row"><div className="field-group"><label htmlFor="story-audience">Who’s it for?</label><input id="story-audience" className="field-input" value={audience} onChange={(event) => setAudience(event.target.value)} placeholder="e.g. Curious founders" maxLength={255}/></div><div className="field-group"><label htmlFor="story-tone">What should it sound like?</label><select id="story-tone" className="field-input field-select" value={tone} onChange={(event) => setTone(event.target.value)} aria-describedby="tone-hint"><option value="practical">Practical</option>{tones.filter((option) => option.value !== 'practical').map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><div id="tone-hint" className="field-hint" aria-live="polite">{tonesUnavailable ? 'Tone options are unavailable right now. Practical remains available.' : tonesLoading ? 'Loading tone options…' : selectedTone.description}</div></div></div>
+        {error && <div className="inline-alert" role="alert">{error}</div>}
+        <div className="compose-footer"><span><i /> You’ll review the outline before we write.</span><button className="button button-primary" type="submit" disabled={loading}>{loading ? <><span className="spinner" /> Getting things ready…</> : <>Build my outline <span aria-hidden="true">↗</span></>}</button></div>
+      </form>
+      <aside className="desk-aside">
+        <div className="flow-card"><div className="flow-card-top"><span className="eyebrow">A LITTLE STRUCTURE</span><span className="flow-spark">✳</span></div><h2>From your idea<br />to <em>something real.</em></h2><ol className="mini-flow"><li><span className="flow-index">01</span><span>Shape a brief</span><i>✓</i></li><li className="flow-checkpoint"><span className="flow-index">02</span><span>Approve the outline</span><i>YOU</i></li><li><span className="flow-index">03</span><span>Research & write</span><i>✳</i></li><li className="flow-checkpoint"><span className="flow-index">04</span><span>Review the draft</span><i>YOU</i></li></ol><Link to="/#workflow" className="flow-link">See how the process works <span aria-hidden="true">↗</span></Link></div>
+        <div className="usage-card"><div><span className="eyebrow">TODAY’S ROOM TO CREATE</span><Link to="/budget" aria-label="View usage and budget">↗</Link></div>{budgetError ? <p className="usage-error">Usage details are temporarily unavailable.</p> : <><strong>{budget?.daily_blog_limit_left ?? '—'} <small>blogs left today</small></strong><div className="usage-progress"><span style={{ width: `${Math.max(0, Math.min(100, ((budget?.daily_blog_limit_left ?? 0) / Math.max(1, budget?.daily_blog_limit ?? 5)) * 100))}%` }}/></div><span className="usage-meta">${(budget?.balance_usd ?? 0).toFixed(2)} available</span></>}</div>
+      </aside>
+    </section>
 
-      <div className="dashboard-grid-centered">
-        <section className="bento-card panel-card composer-panel" style={{ borderLeft: '4px solid var(--accent-color)' }}>
-          <h2 className="card-title">Compose A New Session</h2>
-          <form onSubmit={handleGenerate}>
-            <div className="mb-md">
-              <label className="eyebrow-label">Topic / Concept</label>
-              <input 
-                className="brutalist-input"
-                type="text" 
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                placeholder="e.g. quantum cryptography"
-                required
-              />
-            </div>
-            
-            <div className="mb-md">
-              <label className="eyebrow-label">Target Audience</label>
-              <input 
-                className="brutalist-input"
-                type="text" 
-                value={audience}
-                onChange={(e) => setAudience(e.target.value)}
-                placeholder="e.g. Technical SEOs"
-              />
-            </div>
-
-            <div className="mb-md">
-              <label className="eyebrow-label">Tone Direction</label>
-              <input
-                className="brutalist-input"
-                type="text"
-                value={tone}
-                onChange={(e) => setTone(e.target.value)}
-                placeholder="e.g. practical, executive, technical"
-              />
-            </div>
-            
-            <button 
-              className="brutalist-button"
-              type="submit" 
-              disabled={loading}
-              style={{ width: '100%', padding: '1rem', fontSize: '1.2rem', marginTop: '0.5rem' }}
-            >
-              {loading ? <span className="spinner"></span> : null}
-              {loading ? 'Queueing Session...' : 'Commence Generation'}
-            </button>
-          </form>
-          {error && <div className="mb-sm" style={{ color: 'var(--error-color)', fontWeight: 'bold', marginTop: '1rem' }}>{error}</div>}
-        </section>
-
-        <section className="bento-card panel-card recent-sessions-panel">
-          <div className="panel-header-row">
-            <h2 className="card-title">Recent Sessions</h2>
-            <span className="eyebrow-label">Resume canonical flow</span>
-          </div>
-          {recentSessions.length === 0 ? (
-            <p className="text-secondary italic">No recent sessions found.</p>
-          ) : (
-            <div className="vertical-carousel-wrapper">
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                <button type="button" onClick={scrollUp} className="brutalist-button secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.9rem' }} aria-label="Scroll Up">
-                  ▲
-                </button>
-                <button type="button" onClick={scrollDown} className="brutalist-button secondary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.9rem' }} aria-label="Scroll Down">
-                  ▼
-                </button>
-              </div>
-              <ul 
-                className="session-list" 
-                ref={carouselRef}
-                style={{ 
-                  maxHeight: '400px', 
-                  overflowY: 'auto', 
-                  scrollSnapType: 'y mandatory',
-                  scrollbarWidth: 'none',
-                  msOverflowStyle: 'none'
-                }}
-              >
-                <style>{`.session-list::-webkit-scrollbar { display: none; }`}</style>
-                {recentSessions.map((session) => (
-                  <li 
-                    key={session.session_id} 
-                    className="session-list-item"
-                    style={{ scrollSnapAlign: 'start' }}
-                  >
-                  <div className="session-list-row">
-                    <div className="session-list-copy">
-                      <h4 className="session-list-title">{session.topic}</h4>
-                      <div className="text-secondary session-list-meta">
-                        Audience: {session.audience}
-                      </div>
-                      <div className="text-secondary session-list-meta">Tone: {session.tone}</div>
-                      <div className="text-secondary session-list-meta">Session {session.session_id}</div>
-                    </div>
-                    <div className="session-list-actions">
-                      <StatusBadge status={session.status} />
-                      <button
-                        className="brutalist-button secondary"
-                        onClick={() => navigate(getRouteForStatus(String(session.session_id), session.status))}
-                      >
-                        {getActionLabel(session.status)}
-                      </button>
-                    </div>
-                  </div>
-                </li>
-              ))}
-              </ul>
-            </div>
-          )}
-        </section>
-
-        <aside className="bento-card panel-card budget-snapshot-panel">
-          <div className="panel-header-row">
-            <h2 className="card-title">Budget Snapshot</h2>
-            <span className="eyebrow-label">Live limits</span>
-          </div>
-          {budgetError ? (
-            <p className="text-secondary">{budgetError}</p>
-          ) : budget ? (
-            <div className="stat-stack">
-              <div className="meta-row" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
-                  <span className="eyebrow-label" style={{ margin: 0 }}>Daily Blogs Remaining</span>
-                  <span className="meta-value">{budget.daily_blog_limit_left || 0} / 100</span>
-                </div>
-                <div className="progress-bar-container">
-                  <div 
-                    className="progress-bar-fill" 
-                    style={{ width: `${Math.max(0, Math.min(100, ((budget.daily_blog_limit_left || 0) / 100) * 100))}%` }} 
-                  />
-                </div>
-              </div>
-              <div className="meta-row">
-                <span className="eyebrow-label" style={{ margin: 0 }}>Remaining Credits</span>
-                <span className="meta-value">{(budget.balance_tokens || 0).toLocaleString()}</span>
-              </div>
-              <div className="meta-row">
-                <span className="eyebrow-label" style={{ margin: 0 }}>Balance USD</span>
-                <span className="meta-value" style={{ color: 'var(--accent-color)' }}>${(budget.balance_usd || 0).toFixed(2)}</span>
-              </div>
-              <button className="brutalist-button secondary" type="button" onClick={() => navigate('/budget')} style={{ marginTop: '1rem' }}>
-                Open Budget View
-              </button>
-            </div>
-          ) : (
-            <p className="text-secondary">Budget data is loading.</p>
-          )}
-        </aside>
-      </div>
-    </div>
-  );
+    <SessionLibrary latestOnly heading="Latest generation" eyebrow="MOST RECENT STORY" />
+    <div className="dashboard-footnote"><span>✳</span> Your work is saved automatically, so you can always come back to it.</div>
+  </div>;
 };
 
 export default DashboardPage;

@@ -1,4 +1,4 @@
-import { request } from './base';
+import { request, requestFile } from './base';
 
 export interface GenerateBlogRequest {
   topic: string;
@@ -8,10 +8,20 @@ export interface GenerateBlogRequest {
 }
 
 export interface GenerateBlogResponse {
-  session_id: string;
+  session_id: number;
   status: string;
-  message: string;
-  budget_reserved_usd: number;
+  adk_session_id?: string;
+  created_at?: string;
+}
+
+export interface ToneOption {
+  value: string;
+  label: string;
+  description: string;
+}
+
+export interface ToneCatalogResponse {
+  items: ToneOption[];
 }
 
 export interface SessionStatusResponse {
@@ -70,8 +80,8 @@ export interface OutlineReviewDecision {
   new_status: string;
   current_stage: string | null;
   requires_human_review: boolean;
-  outline: OutlineSchema;
-  message: string;
+  outline?: OutlineSchema;
+  message?: string;
 }
 
 export interface BlogVersionView {
@@ -120,6 +130,7 @@ export interface BudgetSnapshot {
   balance_usd: number;
   balance_tokens: number;
   daily_blog_limit_left: number;
+  daily_blog_limit: number;
 }
 
 export interface AgentRunSummary {
@@ -128,7 +139,6 @@ export interface AgentRunSummary {
   status: string;
   total_tokens: number;
   cost_usd: number;
-  latency_ms: number | null;
   started_at: string;
   completed_at: string | null;
   error_message: string | null;
@@ -184,6 +194,10 @@ export async function generateBlog(input: GenerateBlogRequest): Promise<Generate
   });
 }
 
+export async function getTones(): Promise<ToneCatalogResponse> {
+  return request<ToneCatalogResponse>('/api/v1/tones');
+}
+
 export async function getSession(sessionId: string): Promise<SessionStatusResponse> {
   return request<SessionStatusResponse>(`/api/v1/blogs/${sessionId}`);
 }
@@ -225,6 +239,10 @@ export async function getContent(sessionId: string): Promise<BlogContentView> {
   return request<BlogContentView>(`/api/v1/blogs/${sessionId}/content`);
 }
 
+export async function exportBlog(sessionId: string, format: 'pdf' | 'docx') {
+  return requestFile(`/api/v1/blogs/${sessionId}/export?format=${format}`);
+}
+
 export async function getSessionDetail(sessionId: string): Promise<SessionDetailView> {
   return request<SessionDetailView>(`/api/v1/blogs/${sessionId}/detail`);
 }
@@ -242,10 +260,67 @@ export interface BlogSessionItem {
   current_stage: string | null;
   created_at: string;
   completed_at: string | null;
+  cost_usd: number;
 }
 
-export async function getBlogSessions(): Promise<BlogSessionItem[]> {
-  return request<BlogSessionItem[]>('/api/v1/blogs/');
+export interface BlogSessionPage {
+  items: BlogSessionItem[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+}
+
+export type BlogSessionStatusFilter =
+  | 'QUEUED'
+  | 'PROCESSING'
+  | 'AWAITING_OUTLINE_REVIEW'
+  | 'AWAITING_FINAL_REVIEW'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'REJECTED'
+  | 'CANCELLED';
+
+export interface BlogSessionsQuery {
+  page: number;
+  pageSize: number;
+  statuses?: BlogSessionStatusFilter[];
+  search?: string;
+}
+
+export async function getBlogSessions(query: BlogSessionsQuery): Promise<BlogSessionPage> {
+  const params = new URLSearchParams({ page: String(query.page), page_size: String(query.pageSize) });
+  query.statuses?.forEach((status) => params.append('status', status));
+  if (query.search?.trim()) params.set('q', query.search.trim());
+  return request<BlogSessionPage>(`/api/v1/blogs/?${params.toString()}`);
+}
+
+export interface DailyBlogInsight {
+  date: string;
+  generated_count: number;
+  cost_usd: number;
+}
+
+export interface BlogCostInsight {
+  session_id: number;
+  topic: string;
+  status: string;
+  created_at: string;
+  cost_usd: number;
+}
+
+export interface BlogInsights {
+  days: number;
+  total_generated: number;
+  completed_count: number;
+  failed_count: number;
+  total_cost_usd: number;
+  daily: DailyBlogInsight[];
+  blog_costs: BlogCostInsight[];
+}
+
+export async function getBlogInsights(days = 30): Promise<BlogInsights> {
+  return request<BlogInsights>(`/api/v1/blogs/insights?days=${days}`);
 }
 
 export interface SessionStatusPollingResponse {

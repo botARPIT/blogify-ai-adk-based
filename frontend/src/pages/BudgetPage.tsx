@@ -43,7 +43,7 @@ const BudgetPage: React.FC = () => {
         <div className="bento-card panel-card">
           <span className="eyebrow-label">Daily Blog Limit Left</span>
           <h3 className="stat-number">{budget.daily_blog_limit_left ?? 0}</h3>
-          <p className="text-secondary">Sessions remaining today</p>
+          <p className="text-secondary">Blog generations remaining today</p>
         </div>
       </div>
 

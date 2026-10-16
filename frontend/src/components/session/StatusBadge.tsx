@@ -23,31 +23,13 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
     normalizedStatus === 'failed' ||
     normalizedStatus === 'cancelled' ||
     normalizedStatus === 'rejected';
-  const color = isFailure
-    ? 'var(--error-color)'
-    : isAttention
-      ? 'var(--accent-color)'
-      : 'var(--text-primary)';
+  const badgeClass = isFailure ? 'status-failure' : isAttention ? 'status-attention' : normalizedStatus === 'completed' ? 'status-done' : '';
 
   return (
     <span
-      className="brutalist-label"
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '0.5rem',
-        color,
-        margin: 0,
-      }}
+      className={`status-badge ${badgeClass}`}
+      aria-label={`Status: ${STATUS_LABELS[normalizedStatus] || status}`}
     >
-      <span
-        style={{
-          width: '10px',
-          height: '10px',
-          background: color,
-          display: 'inline-block',
-        }}
-      />
       {STATUS_LABELS[normalizedStatus] || status}
     </span>
   );

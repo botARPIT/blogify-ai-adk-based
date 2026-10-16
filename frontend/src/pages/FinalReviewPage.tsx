@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useSessionStatus } from '../hooks/useSessionStatus';
 import { submitFinalReview } from '../lib/api/blogs';
@@ -16,151 +16,53 @@ const FinalReviewPage = () => {
   const { session } = useSessionStatus(sessionId, true);
   const { version, loading, error } = useLatestVersion(sessionId);
   const navigate = useNavigate();
-
   const [feedback, setFeedback] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [selectedAction, setSelectedAction] = useState<'revision_requested' | null>(null);
 
-  if (loading) {
-    return <LoadingState title="Loading final draft..." message="Fetching the latest canonical version for human review." />;
-  }
-  if (error || !version) {
-    return <ErrorState title="Draft Unavailable" message={error || 'No draft version was available for review.'} />;
-  }
+  if (loading) return <LoadingState title="Opening your draft" message="Bringing the latest version into the review room." />;
+  if (error || !version) return <ErrorState title="Draft unavailable" message={error || 'No draft version was available for review.'} />;
 
   const handleAction = async (action: 'approved' | 'revision_requested' | 'rejected') => {
     if (!sessionId) return;
-    if (action === 'revision_requested' && !feedback.trim()) {
-      setSubmitError('Feedback is required when requesting a revision.');
-      return;
-    }
+    if (action === 'revision_requested' && !feedback.trim()) { setSubmitError('Add a note about what you want changed.'); return; }
     setSubmitting(true);
     setSubmitError('');
     try {
-      const result = await submitFinalReview(sessionId, {
-        action,
-        ...(action === 'revision_requested' ? { feedback_text: feedback } : {}),
-      });
-      const statusLabel =
-        action === 'approved'
-          ? 'Blog approved!'
-          : action === 'revision_requested'
-            ? 'Revision requested'
-            : 'Blog rejected';
-      toast.success(statusLabel, { description: 'The session has been updated.' });
+      const result = await submitFinalReview(sessionId, { action, ...(action === 'revision_requested' ? { feedback_text: feedback.trim() } : {}) });
+      toast.success(action === 'approved' ? 'Article approved' : action === 'revision_requested' ? 'Revision requested' : 'Article rejected', { description: 'Your decision has been saved.' });
       navigate(getRouteForStatus(sessionId, result.status), { replace: true });
     } catch (err) {
-      console.error('Failed to submit final review: ', err);
-      const message = err instanceof Error ? err.message : 'Failed to submit final review';
+      const message = err instanceof Error ? err.message : 'We couldn’t save your review. Try again.';
       setSubmitError(message);
-      toast.error('Review failed', { description: message });
-    } finally {
-      setSubmitting(false);
-    }
+      toast.error('Review not saved', { description: message });
+    } finally { setSubmitting(false); }
   };
 
-  return (
-    <div className="animate-in">
-      <SessionHeader
-        sessionId={sessionId || String(version.session_id)}
-        title="Final Review"
-        subtitle={version.title || session?.topic || 'Latest generated draft'}
-        status={session?.status || 'awaiting_final_review'}
-      />
-
-      <div className="bento-grid" style={{ alignItems: 'start' }}>
-        <article className="bento-card" style={{ gridColumn: '1 / span 2' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--spacing-md)' }}>
-            <span className="brutalist-label" style={{ margin: 0 }}>Latest Version</span>
-            <button className="brutalist-button secondary" onClick={() => setShowRaw((value) => !value)}>
-              {showRaw ? 'Rendered View' : 'Raw Markdown'}
-            </button>
+  return <div className="animate-in workspace-content review-page">
+    <SessionHeader sessionId={sessionId || String(version.session_id)} title="Final review" subtitle={version.title || session?.topic || 'Latest generated draft'} status={session?.status || 'awaiting_final_review'} />
+    <div className="final-review-layout">
+      <article className="bento-card final-article-card">
+        <div className="article-toolbar"><div><span className="eyebrow">THE LATEST DRAFT</span><div className="article-version">Version {version.version_number} <i /> {version.word_count.toLocaleString()} words</div></div><button className="button button-quiet" type="button" onClick={() => setShowRaw((value) => !value)} aria-pressed={showRaw}>{showRaw ? 'Rendered view' : 'Raw markdown'}</button></div>
+        {showRaw ? <pre className="markdown-code-block raw-article"><code>{version.content_markdown || ''}</code></pre> : <MarkdownArticle markdown={version.content_markdown || ''} />}
+      </article>
+      <aside className="final-review-aside">
+        <section className="checkpoint-card final-checkpoint"><span className="checkpoint-icon">✓</span><span className="eyebrow">YOUR FINAL CHECKPOINT</span><h2>Is it ready to go?</h2><p>Approve the article, or tell us exactly what needs a second pass.</p>
+          <MetadataPanel title="Draft details" items={[{ label: 'Version', value: version.version_number }, { label: 'Words', value: version.word_count.toLocaleString() }, { label: 'Sources', value: version.sources_count }, { label: 'Editor pass', value: version.editor_status }]} />
+          <div className="bento-card decision-card"><h2 className="section-title">Your decision</h2>
+            {selectedAction === 'revision_requested' && <div className="field-group"><label htmlFor="revision-feedback">What should change?</label><textarea id="revision-feedback" className="field-input guidance-input" rows={4} maxLength={3000} placeholder="Be specific: what should be added, changed, or clarified?" value={feedback} onChange={(event) => setFeedback(event.target.value)} /></div>}
+            {submitError && <p className="inline-alert" role="alert">{submitError}</p>}
+            <div className="decision-actions"><button className="button button-primary" type="button" onClick={() => { setSelectedAction(null); setSubmitError(''); void handleAction('approved'); }} disabled={submitting}>{submitting ? 'Saving…' : <>Approve article <span aria-hidden="true">✓</span></>}</button>
+              {selectedAction === 'revision_requested' ? <><button className="button button-quiet" type="button" onClick={() => { setSelectedAction(null); setSubmitError(''); }} disabled={submitting}>Cancel revision</button><button className="button button-secondary-warm" type="button" onClick={() => void handleAction('revision_requested')} disabled={submitting}>{submitting ? 'Sending…' : 'Send revision request'}</button></> : <button className="button button-quiet" type="button" onClick={() => { setSelectedAction('revision_requested'); setSubmitError(''); }} disabled={submitting}>Request a revision</button>}
+              <button className="reject-action" type="button" onClick={() => { setSelectedAction(null); setSubmitError(''); void handleAction('rejected'); }} disabled={submitting}>Reject this draft</button>
+            </div>
           </div>
-          <h2 style={{ marginBottom: 'var(--spacing-md)' }}>{version.title || 'Untitled draft'}</h2>
-          {showRaw ? (
-            <pre className="markdown-code-block" style={{ whiteSpace: 'pre-wrap' }}>
-              <code>{version.content_markdown || ''}</code>
-            </pre>
-          ) : (
-            <MarkdownArticle markdown={version.content_markdown || ''} />
-          )}
-        </article>
-
-        <MetadataPanel
-          title="Version Metrics"
-          items={[
-            { label: 'Version', value: version.version_number },
-            { label: 'Words', value: version.word_count },
-            { label: 'Sources', value: version.sources_count },
-            { label: 'Editor Status', value: version.editor_status },
-            { label: 'Created By', value: version.created_by },
-          ]}
-        />
-
-        <div className="bento-card">
-          <h2 className="section-title">Review Decision</h2>
-          {selectedAction === 'revision_requested' ? (
-            <textarea
-              className="brutalist-input"
-              rows={5}
-              placeholder="Describe the changes needed before the next revision loop."
-              value={feedback}
-              onChange={(e) => setFeedback(e.target.value)}
-              style={{ width: '100%', fontSize: '1rem' }}
-            />
-          ) : null}
-          {submitError ? (
-            <p style={{ color: 'var(--error-color)', marginBottom: 'var(--spacing-sm)' }}>{submitError}</p>
-          ) : null}
-          <div style={{ display: 'flex', gap: 'var(--spacing-sm)', flexWrap: 'wrap' }}>
-            <button
-              className="brutalist-button"
-              onClick={() => {
-                setSelectedAction(null);
-                setSubmitError('');
-                void handleAction('approved');
-              }}
-              disabled={submitting}
-            >
-              Approve Release
-            </button>
-            <button
-              className="brutalist-button secondary"
-              onClick={() => {
-                setSelectedAction('revision_requested');
-                setSubmitError('');
-              }}
-              disabled={submitting}
-            >
-              Request Revision
-            </button>
-            <button
-              className="brutalist-button secondary"
-              onClick={() => {
-                setSelectedAction(null);
-                setSubmitError('');
-                void handleAction('rejected');
-              }}
-              disabled={submitting}
-            >
-              Reject
-            </button>
-            {selectedAction === 'revision_requested' ? (
-              <button
-                className="brutalist-button"
-                onClick={() => void handleAction('revision_requested')}
-                disabled={submitting}
-              >
-                Submit Revision Request
-              </button>
-            ) : null}
-          </div>
-        </div>
-      </div>
+        </section>
+      </aside>
     </div>
-  );
+  </div>;
 };
 
 export default FinalReviewPage;

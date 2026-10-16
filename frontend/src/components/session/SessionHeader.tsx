@@ -12,8 +12,8 @@ interface SessionHeaderProps {
 const SessionHeader: React.FC<SessionHeaderProps> = ({ sessionId, title, subtitle, status }) => (
   <div className="page-header">
     <div className="page-header-copy">
-      <Link to="/" className="brutalist-button secondary" style={{ fontSize: '0.875rem', padding: '0.5rem 1rem', marginBottom: 'var(--spacing-sm)', textDecoration: 'none' }}>
-        &larr; Dashboard
+      <Link to="/dashboard" className="session-back-link">
+        <span aria-hidden="true">←</span> All sessions
       </Link>
       <h1 className="page-title">{title}</h1>
       {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
