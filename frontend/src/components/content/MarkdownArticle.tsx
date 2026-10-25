@@ -1,4 +1,5 @@
 import React from 'react';
+import { getMarkdownHeadings } from '../../lib/markdown-headings';
 
 interface MarkdownArticleProps {
   markdown: string;
@@ -46,6 +47,7 @@ function isTableSeparator(line: string): boolean {
 
 const MarkdownArticle: React.FC<MarkdownArticleProps> = ({ markdown, className }) => {
   const lines = markdown.split('\n');
+  const headingIds = new Map(getMarkdownHeadings(markdown).map((heading) => [heading.line, heading.id]));
   const elements: React.ReactNode[] = [];
   let paragraph: string[] = [];
   let unorderedItems: string[] = [];
@@ -178,19 +180,19 @@ const MarkdownArticle: React.FC<MarkdownArticleProps> = ({ markdown, className }
 
     if (trimmed.startsWith('# ')) {
       flushAll(key);
-      elements.push(<h1 key={`${key}-h1`}>{renderInline(trimmed.slice(2), `${key}-h1`)}</h1>);
+      elements.push(<h1 id={headingIds.get(index)} tabIndex={-1} key={`${key}-h1`}>{renderInline(trimmed.slice(2), `${key}-h1`)}</h1>);
       return;
     }
 
     if (trimmed.startsWith('## ')) {
       flushAll(key);
-      elements.push(<h2 key={`${key}-h2`}>{renderInline(trimmed.slice(3), `${key}-h2`)}</h2>);
+      elements.push(<h2 id={headingIds.get(index)} tabIndex={-1} key={`${key}-h2`}>{renderInline(trimmed.slice(3), `${key}-h2`)}</h2>);
       return;
     }
 
     if (trimmed.startsWith('### ')) {
       flushAll(key);
-      elements.push(<h3 key={`${key}-h3`}>{renderInline(trimmed.slice(4), `${key}-h3`)}</h3>);
+      elements.push(<h3 id={headingIds.get(index)} tabIndex={-1} key={`${key}-h3`}>{renderInline(trimmed.slice(4), `${key}-h3`)}</h3>);
       return;
     }
 
