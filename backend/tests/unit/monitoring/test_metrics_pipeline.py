@@ -60,3 +60,17 @@ async def test_database_outage_does_not_stop_queue_snapshot(monkeypatch):
 
     assert await runtime_metrics.refresh_runtime_metrics("api", include_shared_state=True) is False
     refresh_redis.assert_awaited_once()
+
+
+def test_rate_limit_rejection_preserves_cors_and_retry_delay(test_client, mock_request_limiter):
+    import time
+
+    from src.services.rate_limiter import RateLimitResult
+
+    mock_request_limiter.check_request_rate.return_value = RateLimitResult(
+        allowed=False, remaining=0, reset_at_unix=int(time.time()) + 15,
+    )
+    response = test_client.get("/api/v1/blogs/", headers={"Origin": "http://localhost:3000"})
+    assert response.status_code == 429
+    assert response.headers["access-control-allow-origin"] in {"*", "http://localhost:3000"}
+    assert 1 <= int(response.headers["retry-after"]) <= 15

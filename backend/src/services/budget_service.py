@@ -117,10 +117,10 @@ class BudgetService:
         reserved_usd = reservation.reserved_usd
         reserved_tokens = reservation.reserved_tokens
 
-        # get actual spends from blog_sessions
-        session = await self._session_repo.get_by_id(blog_session_id)
-        actual_usd = session.budget_spent_usd if session else Decimal("0")
-        actual_tokens = session.budget_spent_tokens if session else 0
+        # The ledger is authoritative even when the session's cached totals
+        # are stale in the same transaction. COMMIT entries are negative.
+        actual_usd = abs(await self._budget_repo.get_committed_for_session(blog_session_id))
+        actual_tokens = abs(await self._budget_repo.get_committed_tokens_for_session(blog_session_id))
         released_usd = max(Decimal("0"), reserved_usd - actual_usd)
         released_tokens = max(0, reserved_tokens - actual_tokens)
         await self._account_repo.apply_commit(

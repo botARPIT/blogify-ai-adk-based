@@ -79,8 +79,8 @@ class BaseConfig(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # Rate limiting
-    rate_limit_requests_per_minute: int = 20
-    service_rate_limit_requests_per_minute: int = 120
+    rate_limit_requests_per_minute: int = 120
+    service_rate_limit_requests_per_minute: int = 600
     service_rate_limit_blog_generations_per_day: int = 1000
 
     # Concurrency

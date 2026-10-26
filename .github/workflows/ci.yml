@@ -182,9 +182,27 @@ jobs:
       - name: MyPy
         run: mypy src/ --ignore-missing-imports || true
 
+  observability-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose and dashboard configuration
+        run: |
+          cp backend/.env.example backend/.env
+          docker compose -f backend/docker-compose.yml config --quiet
+          docker compose --env-file .env.prod.example -f backend/docker-compose.prod.yml config --quiet
+          python3 -c 'import json,pathlib; [json.loads(p.read_text()) for p in pathlib.Path("backend/grafana/provisioning/dashboards").glob("*.json")]'
+      - name: Validate Prometheus configuration with its pinned image
+        run: |
+          printf '%s' ci-metrics-token > "$RUNNER_TEMP/metrics-token"
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/backend/monitoring:/etc/prometheus:ro" \
+            -v "$RUNNER_TEMP/metrics-token:/tmp/metrics-token:ro" \
+            prom/prometheus:v2.51.2 check config /etc/prometheus/prometheus.yml
+
   # ── 5. Build & push Docker image to Docker Hub (main branch only) ────────────
   build-and-push:
-    needs: [test, lint, alembic-check, frontend]
+    needs: [test, lint, alembic-check, frontend, observability-config]
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
 

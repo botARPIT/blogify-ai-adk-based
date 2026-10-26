@@ -56,6 +56,10 @@ async def e2e(monkeypatch):
     monkeypatch.setattr("src.core.task_queue.get_redis_client", lambda: redis)
     monkeypatch.setattr("src.core.redis_pool.get_redis_client", lambda: redis)
     monkeypatch.setattr("src.api.dependencies.get_redis_client", lambda: redis)
+    monkeypatch.setattr("src.services.rate_limiter.get_redis_client", lambda: redis)
+    from src.services.rate_limiter import RedisRateLimiter
+
+    monkeypatch.setattr("src.services.rate_limiter._limiter", RedisRateLimiter(redis, key_prefix=prefix))
     monkeypatch.setattr("src.core.database.AsyncSessionFactory", sessions)
     monkeypatch.setattr("src.workers.job_attempt_processor.AsyncSessionFactory", sessions)
     monkeypatch.setattr("src.workers.reaper.AsyncSessionFactory", sessions)
@@ -126,4 +130,10 @@ def mock_redis():
 @pytest.fixture(autouse=True)
 def mock_session_factory():
     """Override the root test suite's automatic database mock for E2E tests."""
+    yield None
+
+
+@pytest.fixture(autouse=True)
+def mock_request_limiter():
+    """E2E requests exercise the real Lua rate limiter on disposable Redis."""
     yield None

@@ -196,3 +196,13 @@ class TestAuthMe:
         assert response.status_code == 200
         data = response.json()
         assert data["authenticated"] is False
+
+
+class TestMetrics:
+    """Test /metrics endpoint."""
+
+    def test_metrics_endpoint_returns_200(self, test_client):
+        """Test GET /metrics returns 200 and prometheus format."""
+        response = test_client.get("/metrics")
+        assert response.status_code == 200
+        assert "text/plain" in response.headers.get("content-type", "")

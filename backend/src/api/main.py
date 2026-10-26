@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.auth import AuthMiddleware
+from src.api.middleware.rate_limit import RateLimitMiddleware
 from src.api.routes import health
 from src.api.routes.auth_routes import router as auth_router
 from src.api.routes.blog_routes import router as blog_router
@@ -70,6 +71,9 @@ init_tracing()
 instrument_app(app)
 instrument_database(engine)
 app.add_route("/metrics", metrics_endpoint, methods=["GET"], include_in_schema=False)
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(AuthMiddleware, required=False)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.cors_origins,
@@ -77,8 +81,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.add_middleware(AuthMiddleware, required=False)
 
 
 @app.middleware("http")

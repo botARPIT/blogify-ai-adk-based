@@ -86,3 +86,14 @@ local span-to-metric processor, but exported traces require the Collector and Te
 
 For local access to production metrics through SSH, follow the
 [Azure VM runbook](../runbooks/azure-vm.md#view-production-metrics-on-your-local-machine).
+
+
+Request rate limiting uses the upstream Redis sliding-window limiter. Public
+health, metrics and documentation endpoints bypass it. Rejections increment
+`rate_limit_rejections_total{limit_type="per_user_request"}` or
+`rate_limit_rejections_total{limit_type="service_global"}`. Per-user admission
+limits default to 120 requests/minute, allowing the UI's status polling; global
+admission defaults to 600 requests/minute. Configure these through
+`RATE_LIMIT_REQUESTS_PER_MINUTE` and `SERVICE_RATE_LIMIT_REQUESTS_PER_MINUTE`.
+These limits are protective thresholds and do not establish measured capacity.
+Daily generation quotas continue to use the transactional PostgreSQL quota.

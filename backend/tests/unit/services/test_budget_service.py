@@ -19,6 +19,8 @@ def _build_service(
     reservation_repo = AsyncMock()
     reservation_repo.get_by_session.return_value = reservation
     session_repo.get_by_id.return_value = blog_session
+    budget_repo.get_committed_for_session.return_value = -(blog_session.budget_spent_usd if blog_session else Decimal("0"))
+    budget_repo.get_committed_tokens_for_session.return_value = -(blog_session.budget_spent_tokens if blog_session else 0)
 
     service = BudgetService(
         budget_repo=budget_repo,
@@ -44,6 +46,9 @@ async def test_release_excess_records_unused_tokens_and_usd() -> None:
         blog_session=blog_session,
     )
 
+    # Deliberately stale session totals must not erase ledger charges.
+    blog_session.budget_spent_usd = Decimal("0")
+    blog_session.budget_spent_tokens = 0
     await service.release_excess(user_id=7, blog_session_id=41)
 
     account_repo.apply_commit.assert_awaited_once_with(

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from src.config.api_config import DAILY_BLOG_GENERATION_LIMIT
-from src.config.budget_config import MODEL_PRICING
+from src.config.budget_config import MAX_TOKENS_PER_USER, MODEL_PRICING
 from src.models.orm_models import BlogSessionStatus
 from src.models.repositories.agent_run_repository import AgentRunRepository
 from src.models.repositories.blog_quota_repository import BlogQuotaRepository
@@ -130,7 +130,7 @@ class BlogReadService:
         available = float(snapshot["available_usd"])
         return BudgetResponse(
             balance_usd=float(snapshot["balance_usd"]),
-            balance_tokens=int(available / price_per_token) if price_per_token else 0,
+            balance_tokens=min(MAX_TOKENS_PER_USER, int(available / price_per_token)) if price_per_token else 0,
             daily_blog_limit_left=await self._quotas.get_remaining(
                 user_id, DAILY_BLOG_GENERATION_LIMIT, datetime.now(timezone.utc).date()
             ),

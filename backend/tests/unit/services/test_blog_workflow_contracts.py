@@ -46,6 +46,8 @@ def service(*, session=None, existing=None, active_count=0, event=None, version=
     redis = AsyncMock()
     redis.set.return_value = True
     sut = BlogService(session_repo, version_repo, budget_service, task_queue, redis)
+    sut._quota_repo = AsyncMock()
+    sut._quota_repo.consume_daily_slot.return_value = True
     sut._outbox = AsyncMock()
     sut._outbox.get_undispatched_for_aggregate.return_value = event
     sut._outbox.enqueue.return_value = SimpleNamespace(id=9)

@@ -100,3 +100,21 @@ async def test_terminal_generation_failure_updates_state_and_worker_counter(e2e,
     await process_delivery()
     await assert_status(e2e, session_id, "FAILED")
     assert counter._value.get() == before + 1
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+async def test_redis_lua_limiter_rejects_after_window_capacity(e2e):
+    from src.services.rate_limiter import RedisRateLimiter
+
+    limiter = RedisRateLimiter(e2e.redis)
+    key = e2e.queue_key + ":limit-check"
+    try:
+        first = await limiter.check(key, limit=1, window_sec=60)
+        second = await limiter.check(key, limit=1, window_sec=60)
+        assert first.allowed is True
+        assert first.remaining == 0
+        assert second.allowed is False
+        assert second.reset_at_unix >= first.reset_at_unix - 1
+    finally:
+        await e2e.redis.delete(key)

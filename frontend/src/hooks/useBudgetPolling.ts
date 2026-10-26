@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getBudget, type BudgetSnapshot } from '../lib/api/blogs';
 
-export function useBudgetPolling(intervalMs = 10_000) {
+export function useBudgetPolling(intervalMs = 40_000) {
   const [budget, setBudget] = useState<BudgetSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

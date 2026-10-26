@@ -198,3 +198,16 @@ def valid_blog_request():
 def invalid_blog_request():
     """Invalid blog request (topic too short)."""
     return {"topic": "AI", "audience": "developers", "tone": "professional"}
+
+
+@pytest.fixture(autouse=True)
+def mock_request_limiter():
+    """HTTP unit tests do not depend on a developer's Redis rate-limit state."""
+    from src.services.rate_limiter import RateLimitResult
+
+    limiter = MagicMock()
+    allowed = RateLimitResult(allowed=True, remaining=19, reset_at_unix=2_000_000_000)
+    limiter.check_service_global = AsyncMock(return_value=allowed)
+    limiter.check_request_rate = AsyncMock(return_value=allowed)
+    with patch("src.api.middleware.rate_limit.get_limiter", AsyncMock(return_value=limiter)):
+        yield limiter

@@ -28,6 +28,11 @@ http_requests_in_progress = Gauge(
     ["method"],
 )
 
+# Request rate-limit metrics
+rate_limit_rejections_total = Counter(
+    "rate_limit_rejections_total", "Rejected requests by rate-limit scope", ["limit_type"]
+)
+
 # Workflow metrics
 blog_generation_duration_seconds = Histogram(
     "blog_generation_duration_seconds",
