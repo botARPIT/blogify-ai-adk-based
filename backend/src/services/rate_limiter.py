@@ -4,13 +4,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from fastapi import Depends, HTTPException
 from redis.asyncio import Redis
+from redis.exceptions import NoScriptError
 
-from src.api.auth import AuthenticatedUser, get_current_user
 from src.config.env_config import config
 from src.core.redis_pool import get_redis_client
-from src.monitoring.metrics import rate_limit_rejections_total
 
 SLIDING_WINDOW_LUA = """
 local key    = KEYS[1]
@@ -56,12 +54,15 @@ PUBLIC_PATHS = frozenset({
 
 
 def is_public_path(path: str) -> bool:
-    return path in PUBLIC_PATHS or path.startswith(("/docs/", "/redoc/", "/openapi.json"))
+    return path in PUBLIC_PATHS or path.startswith((
+        "/docs/", "/redoc/", "/openapi.json", "/api/health/", "/api/v1/health/",
+    ))
 
 
 class RedisRateLimiter:
-    def __init__(self, redis: Redis) -> None:
+    def __init__(self, redis: Redis, *, key_prefix: str = "ratelimit") -> None:
         self._redis = redis
+        self._key_prefix = key_prefix
         self._sha: str | None = None
 
     async def _load_script(self) -> str:
@@ -78,27 +79,25 @@ class RedisRateLimiter:
         sha = await self._load_script()
         now = int(datetime.now(timezone.utc).timestamp())
         member = uuid.uuid4().hex
-        result = await self._redis.evalsha(sha, 1, key, now, window_sec, limit, member)
+        try:
+            result = await self._redis.evalsha(sha, 1, key, now, window_sec, limit, member)
+        except NoScriptError:
+            self._sha = None
+            sha = await self._load_script()
+            result = await self._redis.evalsha(sha, 1, key, now, window_sec, limit, member)
         allowed, remaining, reset_at = bool(result[0]), int(result[1]), int(result[2])
         return RateLimitResult(allowed=allowed, remaining=remaining, reset_at_unix=reset_at)
 
     async def check_request_rate(self, identity: str) -> RateLimitResult:
         return await self.check(
-            key=f"ratelimit:req:{identity}",
+            key=f"{self._key_prefix}:req:{identity}",
             limit=config.rate_limit_requests_per_minute,
             window_sec=60,
         )
 
-    async def check_blog_generation(self, user_id: str) -> RateLimitResult:
-        return await self.check(
-            key=f"ratelimit:blog:{user_id}",
-            limit=config.rate_limit_blogs_per_day,
-            window_sec=86400,
-        )
-
     async def check_service_global(self) -> RateLimitResult:
         return await self.check(
-            key="ratelimit:service:global",
+            key=f"{self._key_prefix}:service:global",
             limit=config.service_rate_limit_requests_per_minute,
             window_sec=60,
         )
@@ -112,28 +111,3 @@ async def get_limiter() -> RedisRateLimiter:
     if _limiter is None:
         _limiter = RedisRateLimiter(await get_redis_client())
     return _limiter
-
-
-async def blog_generation_limit(
-    current_user: AuthenticatedUser = Depends(get_current_user),
-) -> None:
-    if not current_user:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
-    result = await (await get_limiter()).check_blog_generation(current_user.user_id)
-    if not result.allowed:
-        rate_limit_rejections_total.labels(limit_type="blog_generation").inc()
-        raise HTTPException(
-            status_code=429,
-            detail={
-                "error": "Daily blog generation limit exceeded",
-                "limit": config.rate_limit_blogs_per_day,
-                "reset_at": result.reset_at_unix,
-            },
-            headers={
-                "Retry-After": str(result.reset_at_unix),
-                "X-RateLimit-Limit": str(config.rate_limit_blogs_per_day),
-                "X-RateLimit-Remaining": "0",
-                "X-RateLimit-Reset": str(result.reset_at_unix),
-            },
-        )

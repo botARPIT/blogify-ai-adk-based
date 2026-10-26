@@ -3,6 +3,7 @@ export interface ApiErrorShape {
   error_code?: string;
   message?: string;
   request_id?: string;
+  detail?: string | { error_code?: string; message?: string; request_id?: string };
 }
 
 export class ApiError extends Error {
@@ -66,11 +67,12 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (contentType.includes('application/json')) {
       try {
         const payload = (await res.json()) as ApiErrorShape;
+        const detail = typeof payload.detail === 'string' ? undefined : payload.detail;
         throw new ApiError({
-          message: payload.message || `Request failed: ${res.status}`,
+          message: payload.message || detail?.message || (typeof payload.detail === 'string' ? payload.detail : undefined) || `Request failed: ${res.status}`,
           status: res.status,
-          errorCode: payload.error_code || 'UNKNOWN_ERROR',
-          requestId: payload.request_id,
+          errorCode: payload.error_code || detail?.error_code || 'UNKNOWN_ERROR',
+          requestId: payload.request_id || detail?.request_id,
         });
       } catch (error) {
         if (error instanceof ApiError) {
@@ -87,4 +89,38 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     });
   }
   return parseJsonOrText<T>(res);
+}
+
+export async function requestFile(path: string): Promise<{ blob: Blob; filename: string | null }> {
+  const res = await fetch(`${API_BASE}${path}`, { credentials: 'include' });
+  if (!res.ok) {
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      try {
+        const payload = (await res.json()) as ApiErrorShape;
+        const detail = typeof payload.detail === 'string' ? undefined : payload.detail;
+        throw new ApiError({
+          message: payload.message || detail?.message || (typeof payload.detail === 'string' ? payload.detail : undefined) || `Request failed: ${res.status}`,
+          status: res.status,
+          errorCode: payload.error_code || detail?.error_code || 'UNKNOWN_ERROR',
+          requestId: payload.request_id || detail?.request_id,
+        });
+      } catch (error) {
+        if (error instanceof ApiError) throw error;
+      }
+    }
+    throw new ApiError({
+      message: (await res.text()).trim() || `Request failed: ${res.status}`,
+      status: res.status,
+      errorCode: 'UNKNOWN_ERROR',
+    });
+  }
+
+  const disposition = res.headers.get('content-disposition') || '';
+  const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  const regularFilename = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+  const filename = encodedFilename
+    ? decodeURIComponent(encodedFilename)
+    : regularFilename || null;
+  return { blob: await res.blob(), filename };
 }

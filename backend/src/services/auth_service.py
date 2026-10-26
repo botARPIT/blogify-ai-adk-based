@@ -106,3 +106,9 @@ class AuthService:
         if not user or not user.is_active:
             raise ValueError("User not found or inactive")
         return user
+
+    async def get_current_user_from_email(self, email: str) -> AuthUser:
+        user = await self._user_repo.get_by_email(email)
+        if not user or not user.is_active:
+            raise ValueError("User not found or inactive")
+        return user

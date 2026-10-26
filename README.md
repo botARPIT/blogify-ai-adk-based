@@ -1,316 +1,130 @@
-# Blogify AI — Production Blog Generation System
+# Blogify AI
 
-Production-grade, multi-agent blog generation system built on **Google ADK**, **FastAPI**, and **PostgreSQL**. Features a human-in-the-loop review workflow at the outline and final draft stages.
+Blogify AI is an asynchronous, human-reviewed blog-generation system. A FastAPI API records a durable generation request, Redis delivers it to a worker, and a Google ADK workflow produces a draft that a user reviews before publication.
 
-## System Architecture
+## What it demonstrates
 
-![System Architecture](docs/system-architecture.png)
+- Asynchronous API design with polling rather than long-running HTTP requests.
+- A PostgreSQL outbox and Redis delivery queue so generation jobs survive API or worker failures.
+- Worker leases and reaper-based recovery for abandoned work.
+- Human review after the outline and final-editing stages.
+- Versioned REST API, cookie-based local authentication, idempotent generation requests, and per-user quotas.
+- Structured logs, Prometheus metrics, OpenTelemetry tracing, and Grafana dashboards.
 
-> **FastAPI** receives generation requests, enqueues jobs to **Redis**, and a background **Worker** runs the AI pipeline. **PostgreSQL** is the canonical state store. A separate **Reaper** process handles stale-lease recovery and queue reconciliation. Two Human-in-the-Loop gates pause execution for user review before research and before final approval.
+## Demo flow
 
-## Features
+1. Register or sign in, then submit a topic, audience, and tone.
+2. The API creates a session and durable outbox event, then dispatches a job to Redis.
+3. The worker runs the Intent, Outline, Research, Writer, and Editor stages through Google ADK.
+4. Review the generated outline; approving or revising it resumes the workflow.
+5. Review the final draft, then read or export the completed blog.
 
-- 🤖 **Multi-Agent Pipeline** — Intent → Outline → HITL Outline Review → Research → Writer ⟷ Editor → HITL Final Draft Review
-- 👁️ **Human-in-the-Loop (HITL)** — Two mandatory review checkpoints with approve / revise / reject flows
-- 💰 **Budget Enforcement** — Append-only ledger with reserve / commit / release semantics; per-user, per-tenant, and per-service-client daily caps
-- 🚦 **Rate Limiting** — Global and per-user limits backed by Redis
-- 🔄 **Worker Recovery** — Reaper detects stale leases, stale Redis processing entries, and queued-session drift
-- 📊 **Observability** — Prometheus metrics, Grafana dashboards, Tempo distributed tracing (OTLP)
-- 🛡️ **Auth** — Cookie-based browser auth, internal API-key auth (`X-Internal-Api-Key`), admin API-key auth (`X-Admin-Api-Key`)
+## Architecture
 
-## Tech Stack
+### System context
 
-| Layer | Technology |
-|---|---|
-| API | FastAPI (Python 3.11+) |
-| AI Orchestration | Google ADK |
-| Background Worker | Custom async worker (`src.workers.blog_worker`) |
-| Queue | Redis (List/Stream) |
-| Database | PostgreSQL 16 (SQLAlchemy + asyncpg + Alembic) |
-| Frontend | React 19 + TypeScript + Vite |
-| Observability | Prometheus · Grafana · Tempo (OTLP) |
-| Logging | structlog (JSON in stage/prod) |
+![System context: the API records durable work in PostgreSQL, Redis delivers jobs to a worker, and the worker runs the Google ADK workflow.](docs/architecture/SystemArchitecture.png)
 
-## Agent Pipeline
+### Generation workflow
 
-```
-POST /api/v1/blogs/generate
-        │
-        ▼
-   [Intent Agent]
-        │  intent output
-        ▼
-   [Outline Agent]
-        │  generated outline
-        ▼
- ◆ HITL Outline Review ◆   ← user must approve or edit
-        │  approved outline
-        ▼
-   [Research Agent]  (Tavily)
-        │  research sources
-        ▼
-   [Writer Agent]
-        │  writer output
-        ▼
-   [Editor Agent]
-        │  final draft
-        ▼
- ◆ HITL Final Draft Review ◆  ← approve / revision_requested / reject
-        │
-        ▼
-      COMPLETED
-```
+![Workflow: generation is queued, processed through the ADK stages, paused for outline and final reviews, and persisted as a completed blog.](docs/architecture/WorkflowDiagram.png)
 
-### Pipeline Phases & Resume Paths
+### Multi-agent pipeline
 
-| Phase | Trigger | Worker entrypoint | Result state |
-|---|---|---|---|
-| `fresh_generation` | `POST /blogs/generate` | `_execute_fresh_generation` | `AWAITING_OUTLINE_REVIEW` |
-| `resume_outline` | Outline approved by user | `_execute_resume_outline` | `AWAITING_FINAL_REVIEW` |
-| `research_phase` | Stale-worker recovery after outline already consumed | `_execute_research_phase` | `AWAITING_FINAL_REVIEW` |
-| `revision` | Final review → `revision_requested` | `_execute_revision` (runs from `research_phase`) | `AWAITING_FINAL_REVIEW` |
+![Multi-agent pipeline: fresh generation classifies intent and produces a reviewable outline; after human approval, research, writing, and editing produce a final draft for human review.](<docs/architecture/Blogify Content Generation Workflow.png>)
 
-## Setup
+The editable source diagrams and architecture notes are in [docs/architecture](docs/architecture/README.md). The backend architecture reference covers the outbox, lease, recovery, observability, and security decisions in [docs/architecture/backend.md](docs/architecture/backend.md).
+
+## Quick start
 
 ### Prerequisites
 
 - Python 3.11+
-- PostgreSQL 16
-- Redis 7
-- Docker & Docker Compose (recommended)
-- Node.js 20+ (for frontend)
+- Docker and Docker Compose
+- Node.js 20+ and pnpm, if running the frontend locally
+- Google and Tavily API keys for live generation
 
-### Backend Installation
+### Configure and run the backend stack
+
+```bash
+cp backend/.env.dev backend/.env
+# Edit backend/.env and set GOOGLE_API_KEY and TAVILY_API_KEY.
+
+docker compose -f backend/docker-compose.yml up --build
+```
+
+This starts the API at `http://localhost:8000`, PostgreSQL, Redis, the worker, reaper, Prometheus, and Grafana. The API reference is available at `http://localhost:8000/docs`.
+
+### Run the frontend
+
+```bash
+cd frontend
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+For a non-container local backend setup, use the documented scripts in [backend/README.md](backend/README.md).
+
+## API
+
+The canonical API prefix is `/api/v1`.
+
+- Interactive OpenAPI: `http://localhost:8000/docs`
+- Raw OpenAPI document: `http://localhost:8000/openapi.json`
+- Postman collection: [postman/Blogify-AI.postman_collection.json](postman/Blogify-AI.postman_collection.json)
+- Human-facing workflow guide: [docs/API.md](docs/API.md)
+
+The main client flow is:
+
+```text
+POST /auth/register or /auth/login
+POST /blogs/generate
+GET  /blogs/{session_id}/status
+GET  /blogs/{session_id}/outline
+POST /blogs/{session_id}/outline/review
+POST /blogs/{session_id}/final-review
+GET  /blogs/{session_id}/content
+```
+
+## Testing and verification
 
 ```bash
 cd backend
 
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate
+# Unit and API-contract tests
+.venv/bin/pytest tests/unit -q
 
-# Install in editable mode
-pip install -e .
+# Tests that require dedicated PostgreSQL and Redis services
+export BLOGIFY_TEST_DATABASE_URL='postgresql+asyncpg://user:password@localhost:5432/blogify_test'
+export BLOGIFY_TEST_REDIS_URL='redis://localhost:6379/15'
+.venv/bin/pytest tests/e2e -q
 ```
 
-### Configuration
+The lifecycle E2E suite scripts the provider-facing executor, so it exercises the API-to-PostgreSQL/Redis/worker path without calling Google or Tavily. See [backend/tests/e2e/README.md](backend/tests/e2e/README.md) before running it.
 
-```bash
-# Copy the production env template (or .env.dev for local dev)
-cp .env.prod.example .env
+## Operations
+
+- Health: `GET /api/v1/health`, with liveness, readiness, detailed, and startup variants.
+- Metrics: `GET /metrics` (protect this endpoint in non-local environments).
+- Dashboards: Prometheus at `http://localhost:9090`; Grafana at `http://localhost:3001` for the local Compose stack.
+- Database migrations: `bash backend/scripts/init_db.sh`.
+- More detail: [observability](docs/backend/observability.md), [performance plan](docs/backend/performance/slo-sli-and-stress-plan.md), and [Azure deployment runbook](docs/runbooks/azure-vm.md).
+
+## Current limitations
+
+- Generation depends on external model and research providers; provider latency and availability affect completion time.
+- The checked-in deployment path is Docker Compose. Kubernetes and multi-region failover are intentionally out of scope.
+- The project has focused unit, contract, and integration coverage, but capacity claims require a representative deployed load test.
+- Document export requires Pandoc to be available in the API runtime.
+
+## Repository layout
+
+```text
+backend/     FastAPI API, worker, reaper, persistence, monitoring, and tests
+frontend/    React/Vite browser client
+docs/        Architecture, API, operational runbooks, and incident notes
+postman/     Importable API collection
 ```
-
-Required environment variables:
-
-| Variable | Required | Description |
-|---|---|---|
-| `DATABASE_URL` | ✅ | PostgreSQL async connection string |
-| `REDIS_URL` | ✅ | Redis connection string |
-| `GOOGLE_API_KEY` | ✅ | Google Gemini API key |
-| `TAVILY_API_KEY` | ✅ | Tavily search API key |
-| `JWT_SECRET_KEY` | Stage / Prod | Secret for cookie signing |
-| `ADMIN_API_KEY` | Stage / Prod | Admin operator API key |
-| `CORS_ORIGINS` | Stage / Prod | Comma-separated allowed origins |
-
-### Database Migration
-
-```bash
-cd backend
-alembic upgrade head
-```
-
-## Running the Service
-
-### Local Development (Docker Compose)
-
-```bash
-cd backend
-docker compose -f docker-compose.base.yml -f docker-compose.local.yml up
-```
-
-This starts all services:
-
-| Service | Port | Description |
-|---|---|---|
-| `api` | 8000 | FastAPI application |
-| `worker` | — | Blog generation worker (2 replicas) |
-| `reaper` | — | Stale-lease recovery process |
-| `frontend` | 3001 | React + Vite UI |
-| `postgres` | 5432 | PostgreSQL 16 |
-| `redis` | 6379 | Redis 7 |
-| `prometheus` | 9090 | Metrics scraper |
-| `grafana` | 3000 | Dashboards (admin/admin) |
-| `tempo` | 4317 | OTLP trace ingest |
-
-### Running Services Individually
-
-```bash
-# API
-uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
-
-# Worker
-python -m src.workers.blog_worker
-
-# Reaper (separate process — do NOT run inside the worker)
-python -m src.workers.reaper
-```
-
-## API Endpoints
-
-### Health Check
-```bash
-curl http://localhost:8000/api/health
-```
-
-### Generate a Blog
-```bash
-curl -X POST http://localhost:8000/api/v1/blogs/generate \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: my-unique-key-001" \
-  -d '{
-    "topic": "The Future of AI in Healthcare",
-    "audience": "healthcare professionals",
-    "tone": "professional"
-  }'
-# → 202 Accepted { session_id, status }
-```
-
-### Poll Session Status
-```bash
-curl http://localhost:8000/api/v1/blogs/{session_id}/status
-```
-
-### Submit Outline Review
-```bash
-curl -X POST http://localhost:8000/api/v1/blogs/{session_id}/outline/review \
-  -H "Content-Type: application/json" \
-  -d '{"action": "approve", "edited_outline": {...}}'
-```
-
-### Submit Final Draft Review
-```bash
-curl -X POST http://localhost:8000/api/v1/blogs/{session_id}/final-review \
-  -H "Content-Type: application/json" \
-  -d '{"action": "approve"}'
-# action: "approve" | "revision_requested" | "reject"
-```
-
-### Get Final Blog Content
-```bash
-curl http://localhost:8000/api/v1/blogs/{session_id}/content
-```
-
-### Get Budget
-```bash
-curl http://localhost:8000/api/v1/blogs/budget
-```
-
-## Project Structure
-
-```
-.
-├── backend/
-│   ├── src/
-│   │   ├── agents/          # Intent, Outline, Research, Writer, Editor agents + pipeline.py
-│   │   ├── api/             # FastAPI app, auth middleware, routes
-│   │   ├── config/          # Env config, budget config, logging config
-│   │   ├── controllers/     # Command handlers
-│   │   ├── core/            # Database, Redis pool, task queue
-│   │   ├── guards/          # Input validation
-│   │   ├── models/          # ORM models, schemas, repositories
-│   │   ├── monitoring/      # Prometheus metrics
-│   │   ├── services/        # Blog service, budget service, auth service
-│   │   ├── tools/           # Tavily MCP tool
-│   │   └── workers/         # blog_worker.py, executor.py, reaper.py
-│   ├── alembic/             # Database migrations
-│   ├── docs/                # Architecture docs, ADRs, audit reports
-│   ├── tests/               # Unit, integration, smoke tests
-│   ├── docker-compose.base.yml
-│   ├── docker-compose.local.yml
-│   └── docker-compose.prod.yml
-├── frontend/                # React 19 + TypeScript + Vite
-└── docs/                    # Root-level docs (DB schema, deploy runbooks)
-```
-
-## Testing
-
-```bash
-cd backend
-
-# Run full test suite
-pytest
-
-# With coverage
-pytest --cov=src tests/
-
-# Specific suites
-pytest tests/unit/
-pytest tests/integration/
-```
-
-## Observability
-
-### Prometheus Metrics
-
-Access at `http://localhost:9090`
-
-Key metrics include:
-- `blog_generations_total` / `blog_generation_duration_seconds`
-- `agent_invocation_total` / `agent_token_usage` / `agent_cost_usd`
-- `budget_exceeded_total` / `service_client_budget_preflight_total`
-- `rate_limit_rejections_total`
-- HTTP request counts and latency
-
-### Grafana Dashboards
-
-Access at `http://localhost:3000` (default: admin / admin)
-
-Provisioned dashboards:
-- API overview
-- Pipeline overview
-- Budget and review operations
-
-### Distributed Tracing (Tempo)
-
-OTLP traces exported to Tempo at `http://localhost:4317` via `OTEL_EXPORTER_OTLP_ENDPOINT`.
-Each blog generation job creates a root span (`pipeline_executor.execute`) that captures
-`job_phase`, `user_id`, and `adk_session_id`. All Google ADK agent invocations are
-automatically recorded as child spans — providing full end-to-end visibility into the
-multi-agent pipeline without per-agent instrumentation.
-
-Query all worker traces in Grafana Explore (TraceQL):
-```
-{resource.service.name="blogify-worker"}
-```
-
-**Trace list + span waterfall for a complete blog generation (14 ADK agent spans):**
-
-![Trace list and span waterfall in Grafana Tempo](backend/docs/images/tracing-trace-list-waterfall.png)
-
-**Full agent hierarchy for a 55s blog generation — 26 auto-instrumented ADK spans:**
-
-![26-span ADK agent waterfall](backend/docs/images/tracing-agent-waterfall-26spans.png)
-
-**Error tracking: failed agent spans captured with full stack trace and status ERROR:**
-
-![Error span detail showing RESOURCE_EXHAUSTED on invoke_agent](backend/docs/images/tracing-error-span-detail.png)
-
-## Environment Profiles
-
-| Profile | Rate Limits | Log Format | CORS |
-|---|---|---|---|
-| `local` / `dev` | Relaxed | text | Permissive |
-| `stage` | Moderate | JSON | Specific domains |
-| `prod` | Strict | JSON | Explicit whitelist |
-
-## Architecture Documentation
-
-Detailed architecture references are in `backend/docs/`:
-
-- [`ARCHITECTURE-blogify.md`](backend/docs/ARCHITECTURE-blogify.md) — **Current architecture source of truth**
-- [`ADR-2026-06-17-pipeline-phase-and-loop-semantics.md`](backend/docs/ADR-2026-06-17-pipeline-phase-and-loop-semantics.md) — Phase/loop naming decisions
-- [`ADR-2026-06-17-redis-queue-recovery-reconciliation.md`](backend/docs/ADR-2026-06-17-redis-queue-recovery-reconciliation.md) — Queue recovery design
-- [`ADR-2026-05-30-worker-recovery-versioned-state.md`](backend/docs/ADR-2026-05-30-worker-recovery-versioned-state.md) — Worker recovery and versioned state
 
 ## License
 

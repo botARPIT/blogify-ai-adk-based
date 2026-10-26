@@ -61,7 +61,7 @@ export function useOutlineReview(sessionId: string | undefined) {
               status: response.new_status,
               current_stage: response.current_stage,
               feedback_text: payload.feedback_text || null,
-              outline: response.outline,
+              outline: payload.edited_outline || current.outline,
             }
           : current,
       );

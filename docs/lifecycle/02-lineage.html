@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>02 · Lineage — Blogify Lifecycle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  #list { margin-top: 1.2rem; }
+  .head-row {
+    display: grid; grid-template-columns: 1.1fr 1.6fr 1.2fr 0.9fr 46px;
+    gap: .8rem; padding: 0 0.85rem 0.5rem;
+    font-family: var(--mono); font-size: .58rem; letter-spacing: .16em; text-transform: uppercase; color: var(--paper-faint);
+    border-bottom: var(--rule);
+  }
+  @media (max-width:720px){ .head-row{ display:none; } }
+  .counts { display:flex; gap:.9rem; flex-wrap:wrap; margin-top:.5rem; font-family:var(--mono); font-size:.62rem; color:var(--paper-faint); }
+  .counts b { color:var(--paper); }
+</style>
+</head>
+<body>
+<div class="grain"></div>
+<div class="wrap">
+
+<header class="top">
+  <div class="brand"><span class="dot"></span><b>Blogify</b><span class="tag cyan">02 · LINEAGE</span></div>
+  <nav class="tabs">
+    <a href="index.html">Index</a>
+    <a href="01-timeline.html">01 · Timeline</a>
+    <a href="02-lineage.html" aria-current="page">02 · Lineage</a>
+    <a href="03-orm.html">03 · ORM</a>
+    <a href="04-findings.html">04 · Findings</a>
+  </nav>
+</header>
+
+<main>
+
+<section>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.2rem">
+    <span class="tag cyan">ORIGIN → GUARD → SANITIZE → QUEUE → ADK → DB → CONSUMER</span>
+  </div>
+  <h1 class="display" style="font-size:clamp(2rem,5vw,3.6rem)">Where did that <em>go</em>?</h1>
+  <p class="lede" style="margin-top:1rem">
+    Every value that enters the system, hop by hop. Expand a row to see the full chain — a hop drawn
+    <span style="color:var(--rust)">dashed red</span> is where the value stops: dropped, overwritten, or
+    written to a place nobody ever reads it from.
+  </p>
+</section>
+
+<section>
+  <header>
+    <div class="controls">
+      <input class="search" id="q" type="search" placeholder="filter fields… e.g. outline, budget, token" autocomplete="off">
+      <button class="btn" data-f="all" aria-pressed="true">All</button>
+      <button class="btn" data-tone="rust" data-f="dropped" aria-pressed="false">Dropped / lost</button>
+      <button class="btn" data-f="orphan" aria-pressed="false">Written, never read</button>
+      <button class="btn" data-tone="amber" data-f="hitl" aria-pressed="false">HITL related</button>
+      <button class="btn" data-f="money" aria-pressed="false">Budget / tokens</button>
+    </div>
+    <div class="counts" id="counts"></div>
+  </header>
+
+  <div class="head-row">
+    <span>Field</span><span>Journey</span><span>Terminal store</span><span>State</span><span></span>
+  </div>
+  <div id="list"></div>
+</section>
+
+<section>
+  <header><h3 class="sub">Aggregate</h3><h2 class="sec" style="margin-top:.4rem">The three buckets</h2></header>
+  <div class="split-3">
+    <div class="panel">
+      <div class="cap"><span class="t" style="color:var(--lime)">Survives intact</span></div>
+      <div class="body">
+        <p style="font-size:.85rem;color:var(--paper-dim);margin-top:0">Reaches a consumer that actually uses it.</p>
+        <ul class="tight">
+          <li><code>topic</code> → outline agent → draft</li>
+          <li><code>audience</code> → outline agent</li>
+          <li><code>blog_outline</code> → research agent</li>
+          <li><code>research_data</code> → editor agent</li>
+          <li><code>blog_draft</code> → editor agent</li>
+          <li><code>editor_review</code> → <code>final_content</code></li>
+          <li><code>adk_session_id</code> → Redis session key</li>
+          <li><code>invocation_id</code> + <code>confirmation_request_id</code> → ADK resume</li>
+          <li><code>BlogJob.phase</code> → executor dispatch</li>
+        </ul>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="cap"><span class="t" style="color:var(--amber)">Written, never read</span></div>
+      <div class="body">
+        <p style="font-size:.85rem;color:var(--paper-dim);margin-top:0">Persisted correctly, but no code path consumes it. Deleting the column would change no behaviour.</p>
+        <ul class="tight">
+          <li><code>intent_result</code> — no column, snapshot only</li>
+          <li><code>approved_outline</code> — no agent interpolates it</li>
+          <li><code>outline_feedback</code> — <b>never reaches the LLM</b> (F-09)</li>
+          <li><code>outline_review_result</code> — wiped on revision (F-10)</li>
+          <li><code>tone</code> — stored, echoed, never applied (F-04)</li>
+          <li><code>editor_review.sources_section</code> — not persisted</li>
+          <li><code>CostInfo.research_sources</code> — always <code>[]</code></li>
+          <li><code>agent_runs.latency_ms</code> / <code>completed_at</code> — always NULL (F-08)</li>
+          <li><code>failure_reason</code> — overwritten by rejection text</li>
+        </ul>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="cap"><span class="t" style="color:var(--rust)">Lost in transit</span></div>
+      <div class="body">
+        <p style="font-size:.85rem;color:var(--paper-dim);margin-top:0">Created, persisted, then destroyed — or never recorded at all.</p>
+        <ul class="tight">
+          <li>Pre-approval outline — overwritten twice (F-06)</li>
+          <li><code>outline_review_agent</code> tokens — unmetered (F-03)</li>
+          <li>All revision spend — skipped by cost recorder (F-05)</li>
+          <li>Account <code>reserved_usd</code> on revision — no open reservation (F-05)</li>
+          <li>Full ADK event stream — dropped after cost extraction</li>
+          <li>Reservation on abandoned outline review — never released (F-15)</li>
+          <li>Topic validity flag — discarded by tuple unpack (F-01)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="note bad">
+    <b>The pattern.</b> Nothing here is a race condition or a distributed-systems problem. Every
+    break is a <em>silent drop at a boundary</em> — a tuple unpack that discards a validity flag, a
+    dict lookup that misses an author name, a guard that checks <code>status == COMPLETED</code> and
+    concludes "already recorded" when it means "already billed once, but this is a new run".
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <p style="margin:0">Part 2 of 4 · narrative at <a href="../blog-generation-lifecycle.md">docs/blog-generation-lifecycle.md</a> §14, §17</p>
+</footer>
+
+</div>
+
+<script>
+const D = (o) => Object.assign({ k:[] }, o);
+
+const FIELDS = [
+
+/* ── request side ─────────────────────────────────────────── */
+D({ name:"topic", sub:"string · 3–500", tags:["hitl"],
+  journey:`<span class="to">request</span> → Pydantic → InputGuard → <span class="drop">sanitize_topic (flag dropped)</span> → job → <span class="to">adk state</span> → <span class="write">2 columns + snapshot</span> → outline agent → draft`,
+  store:"blog_sessions.topic · blog_versions.title (fallback) · snapshot.topic",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>GenerateRequest.topic</code>"],
+    ["Guard","Pydantic 3–500 · InputGuard 3–500, no <code>\\x00 \\n \\r \\t</code>"],
+    ["Sanitize","<code>sanitize_topic</code> — needs 10+ chars, returns <code>(False,\"\",msg)</code>"],
+    ["Job","<code>BlogJob.topic</code>"],
+    ["ADK","<code>state[\"topic\"]</code> + the initial user message"],
+    ["DB","<code>blog_sessions.topic</code> · <code>snapshot.topic</code> · <code>blog_versions.title</code> as fallback"],
+    ["Consumer","<code>outline_agent</code> via <code>{intent_result}</code> chain; the initial message text"],
+    ["DEAD","Validity flag discarded at <code>pipeline.py:509</code> — a 3–9 char topic becomes <code>\"\"</code> and the LLM writes about nothing (F-01)"],
+  ]}),
+
+D({ name:"audience", sub:"string · ≤255", tags:[],
+  journey:`<span class="to">request</span> → Pydantic → InputGuard → <span class="drop">sanitize_audience (silent substitute)</span> → job → <span class="to">adk state</span> → <span class="write">column + snapshot</span> → outline agent`,
+  store:"blog_sessions.audience · snapshot.audience",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>GenerateRequest.audience</code>, default <code>\"general readers\"</code>"],
+    ["Guard","≤255 chars"],
+    ["Sanitize","<code>sanitize_audience</code> — 38 injection patterns; <b>one match ⇒ replaced wholesale</b> by <code>\"general readers\"</code>, silently; >200 chars truncated"],
+    ["Job","<code>BlogJob.audience</code>"],
+    ["ADK","<code>state[\"audience\"]</code> + the initial message"],
+    ["DB","<code>blog_sessions.audience</code> · <code>snapshot.audience</code> — the <em>unsanitised</em> original"],
+    ["Consumer","<code>outline_agent</code>"],
+    ["DEAD","Column is 255 wide but sanitization truncates at 200 — and the substituted audience never surfaces to the user (F-02)"],
+  ]}),
+
+D({ name:"tone", sub:"Tone enum", tags:["orphan"],
+  journey:`<span class="to">request</span> → Pydantic enum → InputGuard → job → <span class="write">column</span> → <span class="drop">nothing. ever.</span>`,
+  store:"blog_sessions.tone (read-back only)",
+  verdict:"orphan",
+  hops:[
+    ["Origin","<code>GenerateRequest.tone</code>, 8 legal values"],
+    ["Guard","must parse as <code>Tone</code>; coerced lower before the check"],
+    ["Job","<code>BlogJob.tone</code> — carried across Redis for no reason"],
+    ["ADK","<span class='drop'>absent — never enters the 10-key state</span>"],
+    ["DB","<code>blog_sessions.tone</code>"],
+    ["Consumer","<span class='drop'>none. No agent instruction mentions it. <code>writer_agent</code> and <code>editor_agent</code> are tone-agnostic by construction.</span>"],
+    ["DEAD","Whole chain from <code>blog_session_repository.py:39</code> onward is write-only (F-04)"],
+  ]}),
+
+D({ name:"idempotency_key", sub:"header or body · ≤255", tags:[],
+  journey:`<span class="to">header</span> → header wins → <span class="write">column</span> → dedup lookup → <span class="to">409 / return existing</span>`,
+  store:"blog_sessions.idempotency_key",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>Idempotency-Key</code> header, else <code>body.idempotency_key</code>, else null"],
+    ["Guard","≤255 via Pydantic"],
+    ["Dedup","<code>get_by_idempotency_key</code> — terminal ⇒ <b>409 SESSION_TERMINAL</b>; non-terminal ⇒ return the existing row and do nothing"],
+    ["DB","<code>uq_blog_sessions_idempotency(user_id, idempotency_key)</code>"],
+    ["Client","Minted once per attempt in a ref and <b>reset only on success</b>, so a retry reuses it"],
+    ["Consumer","<code>blog_service.py:47-57</code>"],
+    ["GOTCHA","Postgres treats NULLs as distinct — a client that omits the key gets <b>no dedup at all</b>"],
+  ]}),
+
+D({ name:"user_id", sub:"int · from JWT sub", tags:["money"],
+  journey:`<span class="to">cookie</span> → AuthMiddleware → <span class="write">FK everywhere</span> → budget locks, rate limits, quota, ownership`,
+  store:"blog_sessions.user_id · budget_accounts · user_blog_quotas · budget_ledger",
+  verdict:"survives",
+  hops:[
+    ["Origin","HS256 cookie <code>blogify_access_token</code> → <code>payload[\"sub\"]</code>"],
+    ["Guard","HMAC compare + <code>aud</code> + <code>iss</code> + <code>exp</code> checks; failure logs <code>auth_token_invalid</code> and leaves the request anonymous"],
+    ["Keys","<code>ratelimit:blog:{user_id}</code> · <code>budget_lock:{user_id}</code>"],
+    ["DB","FK on 5 tables"],
+    ["Consumer","every repository call is tenant-scoped by this"],
+  ]}),
+
+D({ name:"X-Requested-With", sub:"CSRF header", tags:["dropped"],
+  journey:`<span class="to">frontend</span> → <span class="drop">sent on every mutation</span> → <span class="drop">never checked</span>`,
+  store:"nowhere",
+  verdict:"dropped",
+  hops:[
+    ["Origin","<code>base.ts:49-51</code> attaches <code>X-Requested-With: XMLHttpRequest</code> to every non-GET"],
+    ["Intended","<code>ensure_csrf_header()</code> in <code>api/auth.py:129</code> would 403 on any mutating request without it"],
+    ["DEAD","<b>Zero call sites.</b> The guard is defined and never invoked, so the header is decorative (F-31)"],
+  ]}),
+
+/* ── identifiers ──────────────────────────────────────────── */
+D({ name:"BlogSession.id", sub:"int · PK", tags:[],
+  journey:`<span class="to">sequence</span> → <span class="write">blog_sessions.id</span> → public handle → every route, every FK, the frontend's whole world`,
+  store:"blog_sessions.id + 4 FKs",
+  verdict:"survives",
+  hops:[
+    ["Origin","Postgres sequence, assigned at <code>flush()</code>"],
+    ["Response","<code>GenerateResponse.session_id</code> — the only identifier the client keeps"],
+    ["FK","blog_versions · agent_runs · budget_ledger · session_reservations · session_leases · research_sources"],
+    ["Redis","embedded in the job payload and in the processing zset member"],
+    ["Consumer","all routes; ownership re-checked per request"],
+  ]}),
+
+D({ name:"adk_session_id", sub:"uuid4 str", tags:[],
+  journey:`<span class="to">generated in the API</span> → <span class="write">2 columns</span> → names the Redis key → <span class="to">ADK conversation</span>`,
+  store:"blog_sessions.adk_session_id · blog_versions.adk_session_id · Redis `adk:session:{id}`",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>str(uuid.uuid4())</code> at <code>blog_service.py:64</code> — <b>not</b> by ADK"],
+    ["Redis","<code>SET adk:session:{id} … EX 86400</code>"],
+    ["Reuse","Every phase reuses the same id: resume, research_phase, revision all address the same conversation"],
+    ["Client","Returned in <code>GenerateResponse</code> — <b>and never read by the frontend</b>"],
+    ["Ownership","<code>get_session</code> compares <code>user_id</code> and <code>app_name</code>; a mismatch returns <code>None</code> rather than raising"],
+  ]}),
+
+D({ name:"BlogJob.phase", sub:"str enum", tags:[],
+  journey:`<span class="to">API sets it</span> → <span class="write">Redis payload</span> → <span class="to">dispatch</span> → also persisted to <code>blog_sessions.job_phase</code> for reaper recovery`,
+  store:"Redis payload + blog_sessions.job_phase + blog_versions.job_phase",
+  verdict:"survives",
+  hops:[
+    ["Values","<code>fresh_generation</code> · <code>resume_outline</code> · <code>research_phase</code> · <code>revision</code>"],
+    ["Dispatch","<code>executor.py:75-84</code> — a 4-way if/elif, else <code>ValueError</code>"],
+    ["Admissions","<code>_validate_phase_state</code> enforces per-phase preconditions before the lease is granted"],
+    ["Persisted","Mirrored to two columns so the reaper can rebuild the job after a crash"],
+    ["Heuristic","<code>_recovery_phase_for_session</code> downgrades <code>resume_outline</code>+<code>current_stage='research'</code> → <code>research_phase</code>"],
+  ]}),
+
+D({ name:"invocation_id", sub:"str · ADK handle", tags:["hitl"],
+  journey:`<span class="to">extracted from a paused event</span> → <span class="write">2 columns</span> → <span class="to">replayed into run_async</span> → <span class="drop">not in the Redis payload</span>`,
+  store:"blog_sessions.invocation_id · blog_versions.invocation_id",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>_extract_pause_metadata</code> walks events in reverse for <code>adk_request_confirmation</code> and reads <code>event.invocation_id</code>"],
+    ["Written","<code>_handle_outline_pause</code> → session + version"],
+    ["Consumed","<code>resume_pipeline</code> passes it to <code>runner.run_async</code> — this is what makes ADK continue the <em>same</em> invocation"],
+    ["Gap","<code>submit_outline_review</code> builds the job <b>without</b> it. Safe only because <code>_hydrate_job</code> reads it back from the version row"],
+    ["Required","<code>_validate_phase_state</code> refuses <code>resume_outline</code> without it"],
+  ]}),
+
+D({ name:"confirmation_request_id", sub:"str · tool-call id", tags:["hitl"],
+  journey:`<span class="to">function_call.id</span> → <span class="write">2 columns</span> → <span class="to">FunctionResponse.id</span> — the binding that answers the pause`,
+  store:"blog_sessions.confirmation_request_id · blog_versions.confirmation_request_id",
+  verdict:"survives",
+  hops:[
+    ["Origin","The ADK function-call id captured at <code>pipeline.py:409</code>"],
+    ["Replay","<code>_build_confirmation_message</code> constructs a <code>types.FunctionResponse(id=…, name='adk_request_confirmation')</code>"],
+    ["Why it matters","This is what makes the user's approval land on the <em>right</em> paused tool call rather than starting a fresh conversation"],
+    ["Required","<code>_validate_phase_state</code> refuses <code>resume_outline</code> without it"],
+  ]}),
+
+D({ name:"state_snapshot", sub:"JSONB · 10 keys", tags:["hitl"],
+  journey:`<span class="to">seeded at creation</span> → <span class="write">JSONB</span> → <span class="to">pushed back into Redis before every phase</span> → <span class="drop">overwritten wholesale, not merged</span>`,
+  store:"blog_versions.state_snapshot",
+  verdict:"survives",
+  hops:[
+    ["Seed","Written at <code>blog_service.py:76-87</code> before any LLM runs — the 10 keys, all empty"],
+    ["Push","<code>_sync_session_state</code> copies it into Redis, overwriting. This is the recovery mechanism after a Redis flush"],
+    ["Rewrites","<code>_build_state_snapshot</code> returns a <b>fresh dict</b>; <code>update_version_state</code> assigns it whole"],
+    ["Merge loss","<code>outline_review_result</code> is <code>result.confirmation_payload or {}</code> → <b>wiped on the first revision</b> (F-10)"],
+    ["Unsanitised","<code>topic</code> and <code>audience</code> are copied from the job, i.e. the <em>raw</em> Postgres values, so the snapshot is not a faithful mirror of ADK state"],
+  ]}),
+
+D({ name:"active_blog_version_id", sub:"int FK · unindexed", tags:[],
+  journey:`<span class="to">set at creation</span> → <span class="write">blog_sessions</span> → <span class="to">the pointer every version read follows</span> → <span class="drop">repointed on each revision</span>`,
+  store:"blog_sessions.active_blog_version_id",
+  verdict:"survives",
+  hops:[
+    ["Set","<code>create_initial_version</code> — a circular FK to blog_versions, so both rows must flush in one TX"],
+    ["Read","<code>get_active_for_session</code> joins through it — every executor call"],
+    ["Repointed","<code>create_revision_from_active</code> + <code>sync_active_version_fields</code>"],
+    ["GOTCHA","<b>No index</b> on this column. Every active-version read is a join on an unindexed FK (F-23)"],
+    ["Also","<code>/content</code> and <code>/detail</code> use <em>latest</em> (max version_number), not <em>active</em> — two different notions"],
+  ]}),
+
+/* ── agent outputs ────────────────────────────────────────── */
+D({ name:"intent_result", sub:"IntentSchema", tags:["orphan"],
+  journey:`<span class="to">intent_classifier</span> → <span class="write">adk state + snapshot</span> → <span class="to">outline agent</span> → <span class="drop">invisible in every API response</span>`,
+  store:"state_snapshot.intent_result — no dedicated column",
+  verdict:"orphan",
+  hops:[
+    ["Origin","<code>output_key=\"intent_result\"</code>, <code>output_schema=IntentSchema</code>"],
+    ["Consumed","<code>outline_agent</code>: \"based on the topic and audience from intent result: <code>{intent_result}</code>\" — the only consumer"],
+    ["Persisted","Inside <code>state_snapshot</code> only. There is no <code>intent_result</code> column"],
+    ["DEAD","After the outline agent, the classification is never read again and never surfaces in <code>/detail</code>, <code>/status</code>, or <code>/content</code>"],
+  ]}),
+
+D({ name:"blog_outline", sub:"OutlineSchema", tags:["hitl"],
+  journey:`<span class="to">outline agent</span> → <span class="write">2 columns + snapshot</span> → <span class="to">review tool overwrites it</span> → <span class="to">research agent reads the approved form</span>`,
+  store:"blog_versions.outline_data · blog_sessions.outline_data · snapshot.blog_outline",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>output_key=\"blog_outline\"</code>, validated by <code>OutlineSchema</code>: title ≤120, 3–7 sections, 80–300 words each"],
+    ["Title extraction","<code>_extract_title</code> promotes <code>outline[\"title\"]</code> into <code>blog_versions.title</code>"],
+    ["OVERWRITTEN","<code>review_generated_outline</code> sets <code>state[\"blog_outline\"] = approved_outline</code> on confirm — so the generated outline is replaced by the approved one"],
+    ["Also overwritten","<code>submit_outline_review</code> writes <code>outline_data = approved_outline</code> too"],
+    ["DEAD","<b>The pre-approval outline is unrecoverable from both stores</b> (F-06)"],
+    ["Consumed","<code>outline_review_agent</code> and <code>research_agent</code>"],
+  ]}),
+
+D({ name:"approved_outline", sub:"dict", tags:["hitl","orphan"],
+  journey:`<span class="to">user's edit</span> → <span class="write">3 places</span> → <span class="drop">no agent interpolates it</span>`,
+  store:"blog_versions.approved_outline · snapshot.approved_outline · Redis state",
+  verdict:"orphan",
+  hops:[
+    ["Origin","<code>OutlineFrontendRequest.edited_outline</code> from the review screen"],
+    ["Validated twice","<code>OutlineSchema.model_validate</code> in the route path, in the tool, and again in <code>_build_confirmation_message</code>"],
+    ["Preference","<code>_build_state_snapshot</code> writes <code>result.outline or job.approved_outline or {}</code> — i.e. the <em>generated</em> outline wins (F-07)"],
+    ["DEAD","Persisted as the source of truth, yet <code>research_agent</code> reads <code>{blog_outline}</code>, not <code>{approved_outline}</code>. The two agree only because the tool overwrites one with the other"],
+  ]}),
+
+D({ name:"outline_feedback", sub:"str", tags:["hitl","orphan"],
+  journey:`<span class="to">user's guidance text</span> → <span class="write">2 columns + snapshot</span> → <span class="drop">never reaches a prompt</span>`,
+  store:"blog_versions.feedback_text · snapshot.outline_feedback",
+  verdict:"dropped",
+  hops:[
+    ["Origin","Free-text \"Guidance For Final Generation\" textarea"],
+    ["Enforcement","<code>FinalReviewRequest</code> requires it non-empty for <code>revision_requested</code> and forbids it otherwise"],
+    ["Persisted","Snapshot key <code>outline_feedback</code>, and the snapshot is pushed into Redis state"],
+    ["DEAD","<b>No agent instruction references <code>{outline_feedback}</code>.</b> <code>writer_agent</code> has no state variables at all; <code>editor_agent</code> reads only draft + research (F-09)"],
+    ["Also","<code>sanitize_feedback()</code> exists in <code>sanitization.py</code> and has <b>zero call sites</b> — the text is persisted unsanitised (F-32). Inert only because nothing reads it"],
+    ["Risk","Fixing F-09 without first wiring <code>sanitize_feedback</code> turns this into a prompt-injection vector"],
+  ]}),
+
+D({ name:"outline_review_result", sub:"ADK output_key", tags:["hitl","orphan"],
+  journey:`<span class="to">outline_review_agent output</span> → <span class="write">snapshot</span> → <span class="drop">wiped to {} on the first revision</span>`,
+  store:"state_snapshot.outline_review_result",
+  verdict:"dropped",
+  hops:[
+    ["Origin","<code>output_key=\"outline_review_result\"</code> on the checkpoint agent"],
+    ["Declared","In the 10-key contract and seeded empty at version creation"],
+    ["Consumed","Nothing — no agent interpolates it"],
+    ["DEAD","<code>_build_state_snapshot</code> writes <code>result.confirmation_payload or {}</code>, and a phase-resume run has no payload → <b>the record of the human's outline decision is erased</b> on the first revision (F-10)"],
+  ]}),
+
+D({ name:"research_data", sub:"JSONB", tags:[],
+  journey:`<span class="to">research agent</span> → <span class="to">Tavily</span> → <span class="write">JSONB + N source rows</span> → <span class="to">editor agent</span>`,
+  store:"blog_versions.research_data · research_sources (url, title, snippet)",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>research_topic</code> → <code>{topic, summary, total_sources, sources[{title,url,content[:500],score}]}</code>"],
+    ["Normalised","<code>_normalize_research_data</code> accepts a dict <em>or</em> a JSON string, so a stringified blob still parses"],
+    ["Split","<code>sources[]</code> → individual <code>research_sources</code> rows; <code>summary</code>, <code>total_sources</code>, <code>research_method</code> stay inside the JSONB only"],
+    ["DEAD","<b>Never deduplicated.</b> Re-research inserts N more rows every time, inflating the <code>sources_count</code> the UI reports (F-19)"],
+    ["Editor","Reads <code>{research_data}</code> to decide citation mode vs plain mode"],
+  ]}),
+
+D({ name:"blog_draft", sub:"markdown text", tags:[],
+  journey:`<span class="to">writer agent</span> → <span class="write">draft_content</span> → <span class="to">editor agent</span> → <span class="drop">superseded by final_content</span>`,
+  store:"blog_versions.draft_content · snapshot.blog_draft",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>output_key=\"blog_draft\"</code>, 16384 max output tokens, 800–1200 word target"],
+    ["Reads nothing","The writer's instruction interpolates <b>no</b> state variable — it works from conversation context only"],
+    ["Consumed","<code>editor_agent</code>: \"Review the blog draft: <code>{blog_draft}</code>\" — the only reader"],
+    ["Final","<code>final_content = editor_review.final_blog if approved else draft</code>"],
+    ["Kept","<code>draft_content</code> is retained even after approval — useful for diffing"],
+  ]}),
+
+D({ name:"editor_review", sub:"EditorReviewSchema", tags:[],
+  journey:`<span class="to">editor agent</span> → <span class="write">JSONB</span> → <span class="to">decides final_content</span>`,
+  store:"blog_versions.editor_review · snapshot.editor_review",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>{approved, feedback, final_blog, sources_section}</code>"],
+    ["Branch","<code>_finalize_result</code>: approved ⇒ <code>final_content = final_blog</code>, else <code>final_content = draft</code>"],
+    ["Citation mode","Real sources present ⇒ keep <code>[N]</code> markers, append a Sources section with real URLs only"],
+    ["Plain mode","No real sources ⇒ strip every <code>[N]</code>, invent nothing"],
+    ["DEAD","<code>sources_section</code> is never persisted separately"],
+    ["Loop","On <code>approved=false</code> the LoopAgent re-runs the writer — and those tokens are skipped by the cost recorder (F-05)"],
+  ]}),
+
+D({ name:"final_content", sub:"text", tags:[],
+  journey:`<span class="to">derived from draft + review</span> → <span class="write">2 columns</span> → <span class="to">GET /content</span>`,
+  store:"blog_versions.final_content · blog_sessions.final_content",
+  verdict:"survives",
+  hops:[
+    ["Derived","<code>pipeline.py:464-468</code>"],
+    ["Sync","Only written to the session column when <code>result.final_content</code> is truthy — the pause path skips the session sync"],
+    ["Read","<code>/content</code> prefers the latest version and falls back to the session column"],
+    ["Gate","<code>/detail</code> computes <code>has_content = status == 'COMPLETED' and bool(content)</code> — so content is withheld until the human approves"],
+  ]}),
+
+/* ── cost fields ──────────────────────────────────────────── */
+D({ name:"total_tokens", sub:"int · per stage", tags:["money"],
+  journey:`<span class="to">Event.usage_metadata</span> → <span class="drop">author must be in STAGE_BY_AUTHOR</span> → <span class="write">agent_runs + ledger + session</span>`,
+  store:"agent_runs.total_tokens · blog_sessions.budget_spent_tokens · budget_ledger.tokens",
+  verdict:"survives",
+  hops:[
+    ["Origin","<code>_usage_from_event</code> checks <code>event.usage_metadata</code> then <code>event.content.usage_metadata</code>"],
+    ["Attribution","<code>STAGE_BY_AUTHOR</code> maps 5 author names to 5 stages. Any other author is silently skipped"],
+    ["DEAD","<b><code>outline_review_agent</code> is absent from the map</b> — its tokens never appear anywhere (F-03)"],
+    ["Fallback","Only if <em>no</em> stage matched does a single <code>CostInfo(stage='full_pipeline')</code> aggregate everything"],
+    ["Order","Forced to <code>[intent, outline, research, writer, editor]</code> regardless of event order"],
+    ["DEAD","Stages already <code>COMPLETED</code> for the session are skipped entirely — so revision and loop-iteration-2 tokens are lost (F-05)"],
+  ]}),
+
+D({ name:"cost_usd", sub:"Numeric(12,8)", tags:["money"],
+  journey:`<span class="to">get_model_cost()</span> → <span class="write">agent_runs + ledger</span> → <span class="drop">but the reservation used a different formula</span>`,
+  store:"agent_runs.cost_usd · budget_ledger.amount_usd · blog_sessions.budget_spent_usd",
+  verdict:"survives",
+  hops:[
+    ["Actual","<code>(tokens/1000) × MODEL_PRICING[model]</code> = 50k tokens → <b>$0.001</b>"],
+    ["Reservation","<code>50000 × 0.00002 = <b>$1.00</b></code> — the same price table used as <em>per token</em>. 1000× over (F-11)"],
+    ["Model name","Not stored — <code>agent_runs</code> has no <code>model_name</code> column, so historical pricing cannot be recomputed"],
+    ["LEDGER","<code>sum(budget_ledger)</code> ≠ balance delta: the RELEASE row records <code>actual</code> rather than <code>reserved − actual</code> (F-16)"],
+    ["Account","On revision, <code>release_excess</code> finds no open reservation and returns — so revision spend never reaches <code>budget_accounts</code> (F-05)"],
+  ]}),
+
+D({ name:"latency_ms", sub:"int · nullable", tags:["money","orphan"],
+  journey:`<span class="to">existing.started_at delta</span> → <span class="write">agent_runs.latency_ms</span> → <span class="drop">always NULL in practice</span>`,
+  store:"agent_runs.latency_ms",
+  verdict:"dropped",
+  hops:[
+    ["Intended","Computed in the <code>if existing:</code> branch of <code>_commit_costs</code>"],
+    ["DEAD","The create path passes no <code>latency_ms</code>; the update path is unreachable because the <code>status == COMPLETED</code> skip fires first (F-08)"],
+    ["Knock-on","<code>blog_generation_duration_seconds</code> is observed only inside <code>if latency_ms is not None</code> — so <b>that histogram is never populated</b>"],
+    ["Also","<code>agent_runs.completed_at</code> is likewise never set on the create path, so <code>get_duration_ms</code> returns <code>None</code> and the detail view shows blank timings"],
+  ]}),
+
+D({ name:"ADK event stream", sub:"list[Event]", tags:["dropped"],
+  journey:`<span class="to">run_async yields</span> → <span class="write">in-memory list</span> → <span class="drop">discarded after cost extraction</span>`,
+  store:"nowhere durable",
+  verdict:"dropped",
+  hops:[
+    ["Origin","<code>_run_runner</code> accumulates every event in a Python list"],
+    ["Used for","exactly two things: <code>_extract_costs_from_events</code> and <code>_extract_pause_metadata</code>"],
+    ["DEAD","Then dropped. No event is persisted, so the full transcript of a run — tool calls, partial chunks, function responses — is unrecoverable"],
+    ["Cost","A few hundred objects held in RAM per concurrent job; bounded by <code>Semaphore(3)</code>"],
+    ["Forensics","Debugging a bad run means reading structlog lines, not replaying the conversation"],
+  ]}),
+
+];
+
+/* ────────────────────────────────────────────────────────────
+   RENDER
+   ──────────────────────────────────────────────────────────── */
+const list = document.getElementById('list');
+const verdictTag = { survives:['lime','SURVIVES'], orphan:['amber','ORPHAN'], dropped:['rust','LOST'] };
+
+FIELDS.forEach(f => {
+  const d = document.createElement('details');
+  d.className = 'row-acc';
+  d.dataset.verdict = f.verdict;
+  d.dataset.tags = (f.tags || []).join(' ');
+  const [tone, label] = verdictTag[f.verdict];
+
+  d.innerHTML = `
+    <summary>
+      <span class="f">${f.name}<small>${f.sub}</small></span>
+      <span class="m">${f.journey}</span>
+      <span class="m" style="font-size:.64rem;line-height:1.5">${f.store}</span>
+      <span><span class="tag ${tone}" style="font-size:.54rem">${label}</span></span>
+      <span class="caret">▶</span>
+    </summary>
+    <div class="body">
+      <div class="hop">
+        ${f.hops.map(h => `<div class="h ${h[0]==='DEAD'||h[0]==='GOTCHA'||h[0]==='RISK'?'dead':''}"><b>${h[0]}</b>${h[1]}</div>`).join('')}
+      </div>
+    </div>`;
+  list.appendChild(d);
+});
+
+/* filters */
+const q = document.getElementById('q');
+const btns = [...document.querySelectorAll('#laneToggles button, .controls .btn[data-f]')];
+let mode = 'all';
+
+function apply() {
+  const term = q.value.trim().toLowerCase();
+  let shown = 0;
+  const tally = { survives:0, orphan:0, dropped:0 };
+  FIELDS.forEach((f, i) => {
+    const d = list.children[i];
+    const hay = (f.name + ' ' + f.sub + ' ' + f.store + ' ' + f.hops.map(h => h.join(' ')).join(' ')).toLowerCase();
+    const okTerm = !term || hay.includes(term);
+    const okMode = mode === 'all' || f.verdict === mode || (f.tags || []).includes(mode);
+    const show = okTerm && okMode;
+    d.style.display = show ? '' : 'none';
+    if (show) { shown++; tally[f.verdict]++; }
+  });
+  document.getElementById('counts').innerHTML =
+    `<span><b>${shown}</b> / ${FIELDS.length} fields</span>` +
+    `<span style="color:var(--lime)">survives <b>${tally.survives}</b></span>` +
+    `<span style="color:var(--amber)">orphan <b>${tally.orphan}</b></span>` +
+    `<span style="color:var(--rust)">lost <b>${tally.dropped}</b></span>`;
+}
+
+btns.forEach(b => b.addEventListener('click', () => {
+  if (!b.dataset.f) return;
+  btns.forEach(x => x.setAttribute('aria-pressed', 'false'));
+  b.setAttribute('aria-pressed', 'true');
+  mode = b.dataset.f;
+  apply();
+}));
+q.addEventListener('input', apply);
+apply();
+</script>
+</body>
+</html>

@@ -28,7 +28,7 @@ async def health_check():
 @router.get("/health/live")
 async def liveness_check():
     """
-    Kubernetes liveness probe endpoint.
+    Platform liveness probe endpoint.
 
     Returns 200 if the application is running.
     Failure triggers container restart.
@@ -39,7 +39,7 @@ async def liveness_check():
 @router.get("/health/ready")
 async def readiness_check(response: Response):
     """
-    Kubernetes readiness probe endpoint.
+    Platform readiness probe endpoint.
 
     Returns 200 if the application can accept traffic.
     Returns 503 if dependencies are not ready.

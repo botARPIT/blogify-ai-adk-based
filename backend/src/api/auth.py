@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from src.config.env_config import config
 from src.config.logging_config import get_logger
 from src.services.local_auth_service import AUTH_COOKIE_NAME, LocalAuthService
 
@@ -93,7 +92,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     def _is_public_route(self, path: str) -> bool:
         if path == "/metrics":
-            return config.metrics_public
+            return True
         if path in self.PUBLIC_ROUTES:
             return True
         return any(path.startswith(prefix) for prefix in self.PUBLIC_PREFIXES)

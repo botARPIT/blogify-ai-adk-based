@@ -32,6 +32,15 @@ class AgentRunRepository:
         )
         return list(result.scalars().all())
 
+    async def get_latest_for_session(self, blog_session_id: int) -> AgentRun | None:
+        result = await self._session.execute(
+            select(AgentRun)
+            .where(AgentRun.blog_session_id == blog_session_id)
+            .order_by(AgentRun.started_at.desc(), AgentRun.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_completed_stages(self, blog_session_id: int) -> set[str]:
         """Return the set of stage names that completed successfully.
 
@@ -79,6 +88,8 @@ class AgentRunRepository:
         cost_usd: float = 0.0,
         latency_ms: int | None = None,
         output_snapshot: dict | None = None,
+        started_at: datetime | None = None,
+        completed_at: datetime | None = None,
     ) -> AgentRun:
         run = AgentRun(
             blog_session_id=blog_session_id,
@@ -88,6 +99,8 @@ class AgentRunRepository:
             cost_usd=Decimal(str(cost_usd)),
             latency_ms=latency_ms,
             output_snapshot=output_snapshot,
+            started_at=started_at or datetime.now(timezone.utc),
+            completed_at=completed_at,
         )
         self._session.add(run)
         await self._session.flush()

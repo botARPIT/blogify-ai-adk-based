@@ -1,62 +1,13 @@
-"""Model configurations for ADK agents."""
+"""Agent runtime configuration.
+
+Model identity lives in :mod:`src.llm.model_configs` and model construction in
+:mod:`src.llm.factory`. This module keeps only runtime knobs that are not model
+selection.
+"""
 
 import asyncio
-from dataclasses import dataclass
 
 from google.genai import types
-
-
-@dataclass
-class ModelConfig:
-    """Configuration for an LLM model."""
-
-    name: str
-    temperature: float = 0.7
-    max_output_tokens: int | None = None
-    retry_attempts: int = 3
-
-
-INTENT_MODEL = ModelConfig(
-    name="gemini-2.5-flash",
-    temperature=0.7,
-    max_output_tokens=8192,
-    retry_attempts=3,
-)
-
-OUTLINE_MODEL = ModelConfig(
-    name="gemini-2.5-flash",
-    temperature=0.7,
-    max_output_tokens=8192,
-    retry_attempts=3,
-)
-
-RESEARCH_MODEL = ModelConfig(
-    name="gemini-2.5-flash",
-    temperature=0.7,
-    max_output_tokens=8192,
-    retry_attempts=3,
-)
-
-WRITER_MODEL = ModelConfig(
-    name="gemini-2.5-flash",
-    temperature=0.7,
-    max_output_tokens=16384,
-    retry_attempts=3,
-)
-
-EDITOR_MODEL = ModelConfig(
-    name="gemini-2.5-flash",
-    temperature=0.7,
-    max_output_tokens=8192,
-    retry_attempts=3,
-)
-
-CHATBOT_MODEL = ModelConfig(
-    name="gemini-2.5-flash",
-    temperature=0.7,
-    max_output_tokens=4096,
-    retry_attempts=3,
-)
 
 
 def _get_default_retry_config() -> types.HttpRetryOptions:

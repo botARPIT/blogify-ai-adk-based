@@ -8,10 +8,10 @@ from src.models.orm_models import ResearchSource
 
 class ResearchSourcesRepository:
     def __init__(self, session: AsyncSession) -> None:
-        self.session = session
+        self._session = session
 
     def session(self) -> AsyncSession:
-        return self.session
+        return self._session
 
     async def create(
         self,
@@ -26,8 +26,8 @@ class ResearchSourcesRepository:
             title=title,
             snippet=snippet,
         )
-        self.session.add(source)
-        await self.session.flush()
+        self._session.add(source)
+        await self._session.flush()
         return source
 
     async def create_many(
@@ -43,28 +43,28 @@ class ResearchSourcesRepository:
                 title=src.get("title"),
                 snippet=src.get("snippet") or src.get("content"),
             )
-            self.session.add(source)
+            self._session.add(source)
             created.append(source)
-        await self.session.flush()
+        await self._session.flush()
         return created
 
     async def get_for_session(self, blog_session_id: int) -> list[ResearchSource]:
-        result = await self.session.execute(
+        result = await self._session.execute(
             select(ResearchSource).where(ResearchSource.blog_session_id == blog_session_id)
         )
         return list(result.scalars().all())
 
     async def count_for_session(self, blog_session_id: int) -> int:
-        result = await self.session.execute(
+        result = await self._session.execute(
             select(ResearchSource).where(ResearchSource.blog_session_id == blog_session_id)
         )
         return len(list(result.scalars().all()))
 
     async def delete_for_session(self, blog_session_id: int) -> None:
-        result = await self.session.execute(
+        result = await self._session.execute(
             select(ResearchSource).where(ResearchSource.blog_session_id == blog_session_id)
         )
         sources = result.scalars().all()
         for source in sources:
-            await self.session.delete(source)
-        await self.session.flush()
+            await self._session.delete(source)
+        await self._session.flush()

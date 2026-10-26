@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>03 · ORM — Blogify Lifecycle</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<style>
+  .erd-note { padding: .8rem .95rem; border-top: var(--rule-soft); font-family: var(--mono); font-size: .68rem; color: var(--paper-dim); }
+  .gantt .txrow .lane { height: 68px; }
+  .gantt .bar { height: 24px; top: 6px; }
+  .gantt .bar.rd { top: 36px; }
+  .smx td.pick { cursor: pointer; text-align: center; }
+  .smx td.pick:hover { background: rgba(79,214,196,.08); color: var(--paper); }
+  .smx td.here { outline: 1px solid var(--cyan); outline-offset: -1px; }
+  .smx th.rowh { text-align: left; color: var(--paper); }
+  .proj { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px,1fr)); border: var(--rule); }
+  .proj .c { border-right: var(--rule-soft); padding: .8rem .85rem; }
+  .proj .c:last-child { border-right: none; }
+  .proj .c b { display: block; font-family: var(--display); font-size: 2rem; line-height: 1; color: var(--cyan); }
+  .proj .c span { font-family: var(--mono); font-size: .56rem; letter-spacing: .14em; text-transform: uppercase; color: var(--paper-faint); }
+</style>
+</head>
+<body>
+<div class="grain"></div>
+<div class="wrap">
+
+<header class="top">
+  <div class="brand"><span class="dot"></span><b>Blogify</b><span class="tag cyan">03 · ORM</span></div>
+  <nav class="tabs">
+    <a href="index.html">Index</a>
+    <a href="01-timeline.html">01 · Timeline</a>
+    <a href="02-lineage.html">02 · Lineage</a>
+    <a href="03-orm.html" aria-current="page">03 · ORM</a>
+    <a href="04-findings.html">04 · Findings</a>
+  </nav>
+</header>
+
+<main>
+
+<section>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.2rem">
+    <span class="tag amber">POSTGRES 16</span><span class="tag cyan">SQLALCHEMY 2.0 ASYNC</span>
+    <span class="tag violet">ASYNCPG</span><span class="tag lime">10 TABLES</span><span class="tag">HEAD e1f2a3b4c5d6</span>
+  </div>
+  <h1 class="display" style="font-size:clamp(2rem,5vw,3.6rem)">The persistence <em>substrate</em>.</h1>
+  <p class="lede" style="margin-top:1rem">
+    Ten tables, eight of which participate in a single generation. Click a table to see what it holds
+    and when it changes. Then the part that actually causes incidents: <strong>six transaction
+    boundaries, four of which straddle two stores</strong>, and one of which holds a database connection
+    open across every LLM call.
+  </p>
+</section>
+
+<!-- ══ ROW PROJECTION ══════════════════════════════════════ -->
+<section>
+  <header><h3 class="sub">One blog, no revisions, no failures</h3><h2 class="sec" style="margin-top:.4rem">Row projection</h2></header>
+  <div class="proj">
+    <div class="c"><b>1</b><span>blog_sessions</span></div>
+    <div class="c"><b>1</b><span>blog_versions</span></div>
+    <div class="c"><b>1</b><span>budget_accounts</span></div>
+    <div class="c"><b>1</b><span>session_reservations</span></div>
+    <div class="c"><b>1</b><span>user_blog_quotas</span></div>
+    <div class="c"><b>1</b><span>session_leases</span></div>
+    <div class="c"><b>8</b><span>budget_ledger</span></div>
+    <div class="c"><b>5</b><span>agent_runs</span></div>
+    <div class="c"><b>≈5</b><span>research_sources</span></div>
+    <div class="c"><b>0</b><span>auth_users</span></div>
+  </div>
+  <div class="note">
+    <b>Ledger arithmetic:</b> 1 GRANT (registration) + 1 RESERVE + up to 5 COMMIT + 1 RELEASE = 8.
+    Agent runs: one row per metered stage — <code>intent, outline, research, writer, editor</code>.
+    Note what is <em>missing</em>: a row for the outline review agent, whose tokens are nonetheless
+    spent (F-03), and any row at all for a second revision (F-05).
+  </div>
+</section>
+
+<!-- ══ ERD ════════════════════════════════════════════════ -->
+<section>
+  <header>
+    <h3 class="sub">Schema</h3><h2 class="sec" style="margin-top:.4rem">Click a table</h2>
+    <p class="mono" style="font-size:.66rem;color:var(--paper-faint);margin:.8rem 0 0">
+      <span style="color:var(--amber)">PK</span> primary &nbsp;·&nbsp;
+      <span style="color:var(--cyan)">FK</span> foreign &nbsp;·&nbsp;
+      <span style="color:var(--amber)">*</span> grows with revisions &nbsp;·&nbsp;
+      <span style="color:var(--cyan)">✦</span> unindexed
+    </p>
+  </header>
+  <div class="erd" id="erd"></div>
+</section>
+
+<!-- ══ TRANSACTIONS ═══════════════════════════════════════ -->
+<section>
+  <header>
+    <h3 class="sub">Durability</h3><h2 class="sec" style="margin-top:.4rem">Six commit boundaries</h2>
+    <p class="lede" style="margin-top:.8rem;font-size:.92rem">
+      Green is Postgres, violet is Redis, hatched amber is a window where the connection is held
+      but nothing is written. There is no distributed transaction, no outbox, and no 2PC — the design
+      answers that by making Postgres authoritative and Redis advisory, then reconciling with a reaper.
+    </p>
+  </header>
+
+  <div class="panel">
+    <div class="cap"><span class="t">Transaction Gantt</span><span class="tag amber">TX-2 holds a pooled connection for 30–90 s</span></div>
+    <div class="body gantt" style="padding:0">
+      <div id="gantt"></div>
+      <div class="axis">
+        <div style="border-right:var(--rule-soft);background:var(--ink-800)"></div>
+        <div class="ticks" id="gticks"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="split" style="margin-top:1.1rem">
+    <div class="panel">
+      <div class="cap"><span class="t">The idle window</span><span class="tag rust">TX-2</span></div>
+      <div class="body">
+        <p style="font-size:.86rem;color:var(--paper-dim);margin-top:0">
+          <code class="mono">blog_worker.py:84</code> opens a session, then <code class="mono">:86</code>
+          runs the entire ADK pipeline — five to ten Gemini calls plus a Tavily round trip. The
+          connection sits idle the whole time.
+        </p>
+        <ul class="tight">
+          <li><code>pool_size=10, max_overflow=20</code> · <code>pool_pre_ping=True</code></li>
+          <li><code>Semaphore(3)</code> × 2 replicas = 6 concurrent jobs → 6 idle connections</li>
+          <li>No <code>READ COMMITTED</code> blocking today, because no other transaction touches those rows while the lease is held</li>
+          <li>But a third concurrent phase for the same session would block on the same rows for the full duration</li>
+        </ul>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="cap"><span class="t">Redis is outside every commit</span><span class="tag violet">ordering</span></div>
+      <div class="body">
+        <ul class="tight">
+          <li><b>LPUSH before COMMIT</b> — a worker can dequeue before the row is visible; it then blocks on <code>SELECT … FOR UPDATE</code></li>
+          <li>If TX-A fails, the job is <b>orphaned in Redis</b>. The worker's lease acquire returns false, the job is acked and dropped — <b>silently</b></li>
+          <li>The reaper cannot rescue it: <code>get_queued_without_active_leases</code> needs a row to exist</li>
+          <li><b>ZREM ack correctly follows</b> the commit (<code>blog_worker.py:87→88</code>)</li>
+          <li>Lease release runs in a <b>fourth</b> transaction, after the ack</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══ STATE MACHINE ═════════════════════════════════════ -->
+<section>
+  <header><h3 class="sub">Control</h3><h2 class="sec" style="margin-top:.4rem">The status state machine</h2>
+    <p class="lede" style="margin-top:.8rem;font-size:.92rem">Enforced in the repository layer, not by convention. Click any cell to highlight the row.</p>
+  </header>
+  <div class="panel">
+    <div class="cap"><span class="t">Valid transitions — <code>orm_models.py:52-73</code></span><span class="tag amber">InvalidStateTransition → HTTP 409</span></div>
+    <div class="scroll">
+      <table class="grid smx" id="smx"></table>
+    </div>
+  </div>
+  <div class="note">
+    <b>One documented bypass.</b> <code>recover_stale_processing_session</code>
+    (<code>blog_session_repository.py:178-208</code>) skips the validator because stale-lease recovery
+    is a separate control path from user/worker workflow moves. It is the only way to reach
+    <code>PROCESSING → QUEUED</code>.
+  </div>
+</section>
+
+<!-- ══ WRITE MATRIX ══════════════════════════════════════ -->
+<section>
+  <header><h3 class="sub">Write amplification</h3><h2 class="sec" style="margin-top:.4rem">Who writes which columns, when</h2></header>
+  <div class="panel">
+    <div class="cap"><span class="t">Column-level write map</span></div>
+    <div class="scroll">
+      <table class="grid">
+        <thead><tr><th>Table</th><th>TX-A<br>create</th><th>TX-1<br>lease</th><th>pause<br>persist</th><th>success<br>persist</th><th>outline<br>review</th><th>final<br>review</th><th>reaper</th></tr></thead>
+        <tbody id="wmat"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ══ MIGRATIONS ════════════════════════════════════════ -->
+<section>
+  <header><h3 class="sub">Schema history</h3><h2 class="sec" style="margin-top:.4rem">Migration chain &amp; drift</h2></header>
+  <div class="split">
+    <div class="panel">
+      <div class="cap"><span class="t">Linear chain, head <code>e1f2a3b4c5d6</code></span></div>
+      <div class="body">
+        <div class="arrow-chain" style="flex-direction:column;align-items:stretch;gap:.35rem">
+          <div><b style="color:var(--paper)">b0d04a975349</b> <span style="color:var(--paper-faint)">base · 8 tables</span></div>
+          <div><b style="color:var(--paper)">367700a374ec</b> <span style="color:var(--paper-faint)">session_reservations.created_at server_default</span></div>
+          <div><b style="color:var(--paper)">a1b2c3d4e5f6</b> <span style="color:var(--paper-faint)">blog_sessions.job_phase</span></div>
+          <div><b style="color:var(--paper)">c2d4e6f8a9b1</b> <span style="color:var(--paper-faint)">blog_versions + circular FK active_blog_version_id</span></div>
+          <div><b style="color:var(--paper)">d4e5f6a7b8c9</b> <span style="color:var(--paper-faint)">blog_versions.user_action</span></div>
+          <div><b style="color:var(--paper)">e1f2a3b4c5d6</b> <span style="color:var(--paper-faint)">user_blog_quotas</span></div>
+        </div>
+        <p style="font-size:.82rem;color:var(--paper-dim);margin:.9rem 0 0">
+          <code class="mono">alembic/env.py:14,25</code> imports <code class="mono">Base.metadata</code>
+          from <code class="mono">orm_models.py</code>, so autogenerate <em>would</em> catch drift.
+          CI runs <code class="mono">alembic upgrade head</code> on a fresh PG16 and never
+          <code class="mono">alembic check</code> — so nothing gates it.
+        </p>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="cap"><span class="t">Live drift</span><span class="tag rust">ungated</span></div>
+      <div class="body">
+        <ul class="tight">
+          <li><code>agent_runs.blog_session_id</code> — ORM declares <code>ondelete="CASCADE"</code>, the migration created the FK with <b>no ondelete</b></li>
+          <li><code>user_blog_quotas.id</code> — migration omits <code>autoincrement</code>, so Postgres emits a bare <code>integer PRIMARY KEY</code> with no sequence</li>
+          <li><code>user_blog_quotas</code> carries <code>server_default</code>s the ORM does not declare — invisible because <code>compare_server_default</code> is unset</li>
+          <li>FK/constraint naming differs (e.g. <code>fk_blog_sessions_active_blog_version_id</code>) — would emit spurious diffs</li>
+          <li>Redundant non-unique indexes shadow existing unique constraints on <code>budget_accounts.user_id</code>, <code>user_blog_quotas.user_id</code>, <code>session_reservations.blog_session_id</code></li>
+          <li><code>docs/database-schema.md</code> documents ~20 tables, <b>10 of which no longer exist</b> (F-24)</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <p style="margin:0">Part 3 of 4 · narrative at <a href="../blog-generation-lifecycle.md">docs/blog-generation-lifecycle.md</a> §13, §15, §16</p>
+</footer>
+
+</div>
+
+<script>
+/* ── ERD DATA ───────────────────────────────────────────── */
+const T = (name, note, cols) => ({name, note, cols});
+const c = (n, t, kind, extra) => ({n, t, kind, extra});
+
+const TABLES = [
+  T("auth_users", "the tenant boundary · created at registration, never touched again by the pipeline", [
+    c("id","int","pk"), c("email","varchar(255)","uq"), c("password_hash","varchar(255)",""),
+    c("display_name","varchar(255)",""), c("is_active","bool",""),
+    c("created_at","timestamptz","def"), c("last_login_at","timestamptz",""),
+  ]),
+  T("budget_accounts", "THE budget source of truth · 1 row per user · O(1) atomic mutations", [
+    c("id","int","pk"), c("user_id","int","fk"),
+    c("balance_usd","numeric(12,8)","def"), c("reserved_usd","numeric(12,8)","def"),
+    c("total_granted_usd","numeric(12,8)","def"), c("total_spent_usd","numeric(12,8)","def"),
+    c("last_updated_at","timestamptz",""), c("created_at","timestamptz",""),
+  ]),
+  T("user_blog_quotas", "separate gate from budget · checked BEFORE any money moves", [
+    c("id","int","pk","no autoincrement in migration"),
+    c("user_id","int","fk"), c("blogs_used","int","def"), c("blogs_limit","int","def"),
+    c("created_at","timestamptz",""), c("updated_at","timestamptz",""),
+  ]),
+  T("blog_sessions", "the aggregate root · every lifecycle decision reads this row first", [
+    c("id","int","pk"), c("user_id","int","fk"),
+    c("topic","varchar(500)",""), c("audience","varchar(255)",""), c("tone","varchar(100)","orphan"),
+    c("status","varchar(50)","sm"), c("current_stage","varchar(50)",""), c("job_phase","varchar(50)",""),
+    c("active_blog_version_id","int","fk","✦ unindexed · circular"),
+    c("adk_session_id","varchar(255)",""), c("invocation_id","varchar(255)",""), c("confirmation_request_id","varchar(255)",""),
+    c("outline_data","jsonb",""), c("final_content","text",""),
+    c("budget_reserved_tokens","int","def"), c("budget_spent_tokens","int","def"),
+    c("budget_reserved_usd","numeric(12,8)","def"), c("budget_spent_usd","numeric(12,8)","def"),
+    c("reap_count","int","def"), c("idempotency_key","varchar(255)","uq"),
+    c("created_at","timestamptz",""), c("updated_at","timestamptz",""),
+    c("completed_at","timestamptz",""), c("failed_at","timestamptz",""), c("failure_reason","text","orphan"),
+  ]),
+  T("blog_versions", "fork-on-write snapshot chain · 1 + R rows · the durable answer to \"what did we generate\"", [
+    c("id","int","pk"), c("blog_session_id","int","fk","cascade"),
+    c("version_number","int","uq"), c("status","varchar(50)","sm"), c("job_phase","varchar(50)",""),
+    c("title","varchar(255)",""), c("outline_data","jsonb",""), c("approved_outline","jsonb","orphan"),
+    c("research_data","jsonb",""), c("draft_content","text",""), c("final_content","text",""),
+    c("editor_review","jsonb",""), c("feedback_text","text","orphan"),
+    c("user_action","varchar(50)",""), c("adk_session_id","varchar(255)",""),
+    c("invocation_id","varchar(255)",""), c("confirmation_request_id","varchar(255)",""),
+    c("state_snapshot","jsonb",""), c("created_from","varchar(50)",""),
+    c("created_at","timestamptz",""), c("updated_at","timestamptz",""),
+    c("completed_at","timestamptz",""), c("failed_at","timestamptz",""),
+  ]),
+  T("agent_runs", "per-stage cost ledger · 1 row per metered stage per SESSION — never per version", [
+    c("id","int","pk"), c("blog_session_id","int","fk","cascade in ORM only"),
+    c("stage_name","varchar(100)","no-uq"), c("status","varchar(50)",""),
+    c("total_tokens","int","def"), c("cost_usd","numeric(12,8)","def"),
+    c("latency_ms","int","orphan","always NULL"), c("output_snapshot","jsonb",""),
+    c("error_message","text","orphan"), c("started_at","timestamptz",""), c("completed_at","timestamptz","orphan","always NULL"),
+  ]),
+  T("budget_ledger", "append-only audit trail · explicitly NOT queried for balance", [
+    c("id","int","pk"), c("user_id","int","fk"), c("blog_session_id","int","fk"),
+    c("agent_run_id","int","fk"), c("entry_type","varchar(50)",""),
+    c("tokens","int","def","negative on RESERVE/COMMIT"), c("amount_usd","numeric(12,8)","def","negative on RESERVE/COMMIT"),
+    c("note","varchar(255)",""), c("created_at","timestamptz",""),
+  ]),
+  T("session_reservations", "the single open hold · released_at IS NULL is the 'still held' predicate", [
+    c("id","int","pk"), c("blog_session_id","int","fk","cascade · unique"),
+    c("reserved_usd","numeric(12,8)",""), c("reserved_tokens","int",""),
+    c("created_at","timestamptz","def"), c("released_at","timestamptz","","NULL ⇒ still held"),
+  ]),
+  T("research_sources", "★ grows with re-research · never deduplicated", [
+    c("id","int","pk"), c("blog_session_id","int","fk","cascade"),
+    c("url","text",""), c("title","text",""), c("snippet","text",""), c("created_at","timestamptz",""),
+  ]),
+  T("session_leases", "append-only ownership audit trail · 1 row per acquisition", [
+    c("id","int","pk"), c("blog_session_id","int","fk"), c("lease_owner","varchar(255)",""),
+    c("lease_expires_at","timestamptz",""), c("lease_version","int","def"),
+    c("last_heartbeat_at","timestamptz",""), c("started_at","timestamptz",""),
+    c("ended_at","timestamptz","","NULL ⇒ held"), c("release_reason","varchar(50)",""),
+  ]),
+];
+
+const KIND = { pk:['pk','PK'], fk:['fk','FK'], uq:['pk','UQ'], "no-uq":['fk','⚠'], sm:['grow','SM'], def:['','def'], orphan:['fk','⚠'], cascade:['fk','↧'], "": ['',''] };
+
+const erd = document.getElementById('erd');
+TABLES.forEach(t => {
+  const el = document.createElement('div');
+  el.className = 'tbl';
+  const cols = t.cols.map(col => {
+    const [cls, badge] = KIND[col.kind] || ['',''];
+    return `<div class="c"><span class="${cls}">${col.kind==='pk'?'●':col.kind==='fk'?'◆':col.kind==='sm'?'◈':''}</span><span>${col.n}${col.extra?'<span style="color:var(--rust)"> '+col.extra+'</span>':''}</span><span class="t">${col.t}</span></div>`;
+  }).join('');
+  el.innerHTML = `<div class="th"><b>${t.name}</b><span>${t.cols.length} cols</span></div><div class="cols">${cols}</div>`;
+  el.addEventListener('click', () => {
+    const on = el.classList.contains('on');
+    document.querySelectorAll('.tbl').forEach(x => x.classList.remove('on','hot'));
+    if (!on) { el.classList.add('on','hot'); showNote(t); }
+    else document.getElementById('erdnote').innerHTML = defaultNote;
+  });
+  erd.appendChild(el);
+});
+
+const defaultNote = `<b>Pick a table.</b> Hover for columns; click for its lifecycle role. Amber flags mark columns that are written but never read, or constraints that only exist in one of {ORM, migration}.`;
+document.getElementById('erd').insertAdjacentHTML('afterend',
+  `<div class="panel" style="margin-top:.9rem"><div class="cap"><span class="t">Table notes</span></div><div class="erd-note" id="erdnote">${defaultNote}</div></div>`);
+
+function showNote(t) {
+  document.getElementById('erdnote').innerHTML =
+    `<b style="color:var(--paper)">${t.name}</b> — ${t.note}`;
+}
+
+/* ── GANTT ──────────────────────────────────────────────── */
+const TXS = [
+  { l:"TX-A", s:"api · POST /generate", pg:[8,22.5], rd:[20,22.5], rdL:"LPUSH",
+    note:"one request · quota row, session, v1, account, ledger RESERVE, reservation, budget columns, then LPUSH" },
+  { l:"TX-1", s:"worker · lease", pg:[25,30], rd:null,
+    note:"SELECT FOR UPDATE held · lease insert · → PROCESSING · version fork if revision · job hydration" },
+  { l:"TX-2", s:"worker · pipeline", pg:[30,67], idle:[30,40.5],
+    note:"HELD OPEN across all LLM calls · then sources, agent_runs, 5 ledger COMMITs, budget columns, version, session, account settle, quota +1" },
+  { l:"—",   s:"HUMAN WAIT", pg:null, rd:null, wait:[42.5,51],
+    note:"outline review · unbounded · reservation NOT settled on this path" },
+  { l:"TX-C", s:"api · /outline/review", pg:[50,53], rd:[52,53], rdL:"LPUSH",
+    note:"version → QUEUED · session → QUEUED · job payload carries only {session_id, phase}" },
+  { l:"TX-1", s:"worker · lease (2)", pg:[53.5,56.5], rd:[53.5,55.5], rdL:"RPOP+ZADD",
+    note:"resume_outline admissions · invocation + confirmation ids required" },
+  { l:"TX-2", s:"worker · resume", pg:[56.5,67], idle:[56.5,62],
+    note:"replay paused tool → research → loop(writer, editor)" },
+  { l:"TX-4", s:"worker · ack + release", pg:[67,68.2], rd:[67,68], rdL:"ZREM",
+    note:"ack correctly AFTER commit · lease release in its own transaction" },
+  { l:"TX-R", s:"reaper (every 60 s)", pg:[20,100], rd:[20,100], rdL:"LPUSH if needed", danger:true,
+    note:"stale leases · queue reconciliation · queued-session sweep · MAX_REAP_COUNT=3" },
+];
+
+const g = document.getElementById('gantt');
+TXS.forEach(t => {
+  const row = document.createElement('div');
+  row.className = 'txrow';
+  let bars = '';
+  if (t.pg) {
+    const idle = t.idle ? `<div class="bar idle" style="left:${t.idle[0]}%;width:calc(${t.idle[1]-t.idle[0]}% - 3px)" title="connection held, nothing written">idle · no DB traffic</div>` : '';
+    bars += `<div class="bar pg" style="left:${t.pg[0]}%;width:calc(${t.pg[1]-t.pg[0]}% - 3px)" title="${t.note}">postgres</div>` + idle;
+  }
+  if (t.wait) bars += `<div class="bar idle" style="left:${t.wait[0]}%;width:calc(${t.wait[1]-t.wait[0]}% - 3px)" title="${t.note}">human wait — reservation still held</div>`;
+  if (t.rd) bars += `<div class="bar ${t.danger?'danger':'rd'}" style="left:${t.rd[0]}%;width:calc(${t.rd[1]-t.rd[0]}% - 3px)" title="${t.note}">redis · ${t.rdL||''}</div>`;
+  row.innerHTML = `<div class="lab"><b>${t.l}</b>${t.s}</div><div class="lane">${bars}</div>`;
+  g.appendChild(row);
+});
+const gt = document.getElementById('gticks');
+[0,10,20,30,40,50,60,70,80,90].forEach(p => {
+  const t = document.createElement('span');
+  t.className = 'tick'; t.style.left = p + '%';
+  t.textContent = p === 0 ? 'generate' : p === 24 ? 'pause' : p === 50 ? 'review' : p === 90 ? 'final' : '';
+  gt.appendChild(t);
+});
+
+/* ── STATE MACHINE ──────────────────────────────────────── */
+const STATES = ["QUEUED","PROCESSING","AWAITING_OUTLINE_REVIEW","AWAITING_FINAL_REVIEW","COMPLETED","FAILED","REJECTED","CANCELLED"];
+const ALLOW = {
+  "QUEUED":["PROCESSING","FAILED","CANCELLED"],
+  "PROCESSING":["AWAITING_OUTLINE_REVIEW","AWAITING_FINAL_REVIEW","FAILED","CANCELLED"],
+  "AWAITING_OUTLINE_REVIEW":["QUEUED","FAILED","CANCELLED"],
+  "AWAITING_FINAL_REVIEW":["COMPLETED","QUEUED","FAILED","REJECTED","CANCELLED"],
+  "COMPLETED":[], "FAILED":[], "REJECTED":[], "CANCELLED":[],
+};
+const smx = document.getElementById('smx');
+smx.innerHTML =
+  `<thead><tr><th class="rowh">from \\ to</th>${STATES.map(s=>`<th style="text-align:center">${s.replace('AWAITING_','↳ ')}</th>`).join('')}</tr></thead>` +
+  `<tbody>${STATES.map(f => `<tr><th class="rowh">${f.replace('AWAITING_','↳ ')}</th>${STATES.map(t => {
+    const ok = f===t || ALLOW[f].includes(t);
+    const tone = f===t ? 'style="color:var(--ink-500)"' : ok ? 'style="color:var(--cyan)"' : 'style="color:var(--ink-700)"';
+    return `<td class="pick" ${tone} data-f="${f}">${f===t?'—':ok?'●':'×'}</td>`;
+  }).join('')}</tr>`).join('')}</tbody>`;
+smx.querySelectorAll('td.pick').forEach(td => td.addEventListener('click', () => {
+  smx.querySelectorAll('td.here').forEach(x => x.classList.remove('here'));
+  td.closest('tr').querySelectorAll('td').forEach(x => x.classList.add('here'));
+}));
+
+/* ── WRITE MATRIX ───────────────────────────────────────── */
+const WM = [
+  ["blog_sessions",["INSERT","status→PROCESSING","status→AWAITING_OUTLINE_REVIEW","status→AWAITING_FINAL_REVIEW","status→QUEUED","status→COMPLETED/REJECTED","status→QUEUED·FAILED"]],
+  ["blog_versions",  ["INSERT v1","status→PROCESSING","→AWAITING_OUTLINE_REVIEW","→AWAITING_FINAL_REVIEW","→QUEUED","→COMPLETED/REJECTED","—"]],
+  ["agent_runs",     ["—","—","INSERT ×≤5","INSERT ×(skipped on revision)","—","—","—"]],
+  ["research_sources",["—","—","INSERT ×N","INSERT ×N (duplicate)","—","—","—"]],
+  ["budget_ledger",  ["INSERT RESERVE","—","INSERT COMMIT ×≤5","INSERT RELEASE","—","—","—"]],
+  ["budget_accounts",["UPDATE reserved","—","—","UPDATE settle","—","—","—"]],
+  ["session_reservations",["INSERT","—","—","UPDATE released_at","—","—","—"]],
+  ["user_blog_quotas",["INSERT","—","—","UPDATE +1","—","—","—"]],
+  ["session_leases", ["—","INSERT / UPDATE","—","—","—","—","UPDATE ended_at"]],
+];
+document.getElementById('wmat').innerHTML = WM.map(([t, cs]) =>
+  `<tr><td class="strong">${t}</td>${cs.map(x => `<td style="font-size:.66rem">${x==='—'?'<span style="color:var(--ink-600)">·</span>':x}</td>`).join('')}</tr>`
+).join('');
+</script>
+</body>
+</html>

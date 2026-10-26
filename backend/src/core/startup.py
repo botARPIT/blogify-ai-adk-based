@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
+from sqlalchemy import text
+
 from src.config.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -51,11 +53,12 @@ class RuntimeManager:
     """Manages application runtime and health checks."""
 
     _instance: Optional["RuntimeManager"] = None
-    _start_time: datetime = field(default_factory=datetime.utcnow)
+    _start_time: datetime
 
     def __new__(cls) -> "RuntimeManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._start_time = datetime.utcnow()
         return cls._instance
 
     @property
@@ -96,7 +99,7 @@ class RuntimeManager:
             from src.core.database import AsyncSessionFactory
 
             async with AsyncSessionFactory() as session:
-                await session.execute("SELECT 1")
+                await session.execute(text("SELECT 1"))
             return HealthCheckResult(
                 name="database",
                 status="healthy",

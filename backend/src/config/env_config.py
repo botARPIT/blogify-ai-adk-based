@@ -79,9 +79,8 @@ class BaseConfig(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     # Rate limiting
-    rate_limit_blogs_per_day: int = 10
-    rate_limit_requests_per_minute: int = 20
-    service_rate_limit_requests_per_minute: int = 120
+    rate_limit_requests_per_minute: int = 120
+    service_rate_limit_requests_per_minute: int = 600
     service_rate_limit_blog_generations_per_day: int = 1000
 
     # Concurrency
@@ -94,6 +93,7 @@ class BaseConfig(BaseSettings):
     # Monitoring
     enable_metrics: bool = True
     metrics_public: bool = True
+    metrics_bearer_token: str | None = Field(default=None, validation_alias="METRICS_BEARER_TOKEN")
     metrics_port: int = 9090
     enable_datadog: bool = False
     datadog_api_key: str | None = None
@@ -164,6 +164,12 @@ def get_config() -> BaseConfig:
     config_class = config_map.get(env, DevelopmentConfig)
     return config_class()
 
+def get_llm_api_key() -> str | None:
+    "Get LLM API key"
+    return os.getenv("LLM_API_KEY")
+
+def get_llm_base_url() -> str | None:
+    return os.getenv("OLLAMA_BASE_URL")
 
 # Global config instance
 config = get_config()

@@ -1,6 +1,6 @@
 """Schema-based input validation for blog generation requests."""
 
-from src.models.schemas import Tone
+from src.models.orm_models import BlogToneValue as Tone
 
 
 class InputGuard:

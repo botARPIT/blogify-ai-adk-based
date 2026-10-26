@@ -17,6 +17,17 @@ FROM python:3.11-slim as production
 
 WORKDIR /app
 
+# Pandoc converts saved Markdown to DOCX; XeLaTeX is Pandoc's PDF engine.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pandoc \
+    texlive-xetex \
+    texlive-fonts-recommended \
+    lmodern \
+    fonts-lmodern \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+RUN pandoc --version && xelatex --version
+
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash appuser
 
@@ -40,7 +51,7 @@ USER appuser
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)" || exit 1
 
 # Expose port
 EXPOSE 8000

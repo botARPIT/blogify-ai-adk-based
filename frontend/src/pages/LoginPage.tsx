@@ -37,32 +37,39 @@ const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="animate-in state-shell">
-      <div className="state-card auth-card">
-        <h1 className="page-title">Sign in to Blogify</h1>
+    <div className="auth-screen page-enter">
+      <Link to="/" className="auth-brand brand-lockup" aria-label="Blogify home"><span className="brand-mark">b.</span><span>blogify<span className="brand-ai">ai</span></span></Link>
+      <div className="auth-panel">
+        <span className="auth-overline">WELCOME BACK</span>
+        <h1>Sign in to your account</h1>
+        <p className="auth-intro">Pick up your writing right where you left it.</p>
         <form className="auth-form" onSubmit={handleSubmit}>
           <div>
-            <label className="eyebrow-label">Email</label>
-            <input className="brutalist-input" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <label htmlFor="login-email">Email</label>
+            <input id="login-email" className="brutalist-input" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
           <div>
-            <label className="eyebrow-label">Password</label>
+            <label htmlFor="login-password">Password</label>
             <input
+              id="login-password"
               className="brutalist-input"
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              required
             />
           </div>
-          {error ? <p className="text-error">{error}</p> : null}
-          <button className="brutalist-button" type="submit" disabled={loading}>
-            {loading ? 'Signing In...' : 'Sign In'}
+          {error ? <p className="auth-error" role="alert">{error}</p> : null}
+          <button className="button button-auth" type="submit" disabled={loading}>
+            {loading ? 'Signing in…' : 'Continue with email'}
           </button>
         </form>
-        <p className="text-center text-muted mt-4">
-          Don't have an account? <Link to="/signup" className="text-link">Sign up</Link>
+        <p className="auth-switch">
+          New to Blogify? <Link to="/signup">Create an account <span aria-hidden="true">↗</span></Link>
         </p>
       </div>
+      <span className="auth-footer-note">Your ideas, your voice. ✳</span>
     </div>
   );
 };

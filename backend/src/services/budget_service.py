@@ -3,15 +3,11 @@
 from decimal import Decimal
 
 from src.config.budget_config import ESTIMATED_TOKENS_PER_BLOG
-from src.config.logging_config import get_logger
 from src.models.orm_models import BudgetEntryType
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.budget_account_repository import BudgetAccountRepository
 from src.models.repositories.budget_repository import BudgetRepository
 from src.models.repositories.session_reservation_repository import SessionReservationRepository
-from src.monitoring.metrics import budget_exceeded_total
-
-logger = get_logger(__name__)
 
 
 class BudgetService:
@@ -47,11 +43,7 @@ class BudgetService:
         estimated_usd = Decimal(str(ESTIMATED_TOKENS_PER_BLOG)) * Decimal("0.00002")
         estimated_tokens = ESTIMATED_TOKENS_PER_BLOG
 
-        try:
-            await self._account_repo.apply_reserve(user_id=user_id, amount_usd=estimated_usd)
-        except Exception:
-            budget_exceeded_total.labels(budget_type="per_user").inc()
-            raise
+        await self._account_repo.apply_reserve(user_id=user_id, amount_usd=estimated_usd)
 
         await self._budget_repo.write_entry(
             user_id=user_id,
@@ -114,34 +106,23 @@ class BudgetService:
             await self._session_repo.session.flush()
 
     async def release_excess(self, *, user_id: int, blog_session_id: int) -> None:
-        """Release the unspent portion of the reservation after a successful run.
+        """Release the unspent portion of the reservation after a terminal outcome.
 
-        Reads actual cost from the budget_ledger (summing COMMIT entries) rather
-        than blog_sessions.budget_spent_usd. The session column is a denormalized
-        cache that may not reflect in-flight flush state when this method is called
-        within the same SQLAlchemy transaction as commit_stage — causing a stale
-        read and a zero deduction. The ledger is always consistent because
-        commit_stage writes COMMIT entries via flush() in the same session/tx.
+        Reads reserved_usd from session_reservations to avoid stale-session bugs.
         """
         reservation = await self._reservation_repo.get_by_session(blog_session_id)
         if not reservation:
-            logger.warning(
-                "release_excess_no_active_reservation",
-                blog_session_id=blog_session_id,
-                user_id=user_id,
-            )
             return
 
         reserved_usd = reservation.reserved_usd
+        reserved_tokens = reservation.reserved_tokens
 
-        # Read actual cost from the authoritative ledger, not the derived session column.
-        # COMMIT entries are stored as negative values; abs() converts to deductible amount.
-        committed_usd = await self._budget_repo.get_committed_for_session(blog_session_id)
-        actual_usd = abs(committed_usd)
-
-        committed_tokens = await self._budget_repo.get_committed_tokens_for_session(blog_session_id)
-        actual_tokens = abs(committed_tokens)
-
+        # The ledger is authoritative even when the session's cached totals
+        # are stale in the same transaction. COMMIT entries are negative.
+        actual_usd = abs(await self._budget_repo.get_committed_for_session(blog_session_id))
+        actual_tokens = abs(await self._budget_repo.get_committed_tokens_for_session(blog_session_id))
+        released_usd = max(Decimal("0"), reserved_usd - actual_usd)
+        released_tokens = max(0, reserved_tokens - actual_tokens)
         await self._account_repo.apply_commit(
             user_id=user_id,
             reserved_usd=reserved_usd,
@@ -155,18 +136,9 @@ class BudgetService:
             blog_session_id=blog_session_id,
             agent_run_id=None,
             entry_type=BudgetEntryType.RELEASE,
-            tokens=actual_tokens,
-            amount_usd=actual_usd,
-            note="Excess budget released after successful generation",
-        )
-
-        logger.info(
-            "release_excess_committed",
-            blog_session_id=blog_session_id,
-            user_id=user_id,
-            reserved_usd=str(reserved_usd),
-            actual_usd=str(actual_usd),
-            actual_tokens=actual_tokens,
+            tokens=released_tokens,
+            amount_usd=released_usd,
+            note="Excess budget released after terminal workflow outcome",
         )
 
     async def release_all(self, *, user_id: int, blog_session_id: int) -> None:

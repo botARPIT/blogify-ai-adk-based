@@ -59,10 +59,8 @@ def mock_redis():
     redis.zadd = AsyncMock(return_value=1)
     redis.zrem = AsyncMock(return_value=1)
     redis.zrangebyscore = AsyncMock(return_value=[])
-    redis.zrange = AsyncMock(return_value=[])
-    redis.lrange = AsyncMock(return_value=[])
-    redis.evalsha = AsyncMock(return_value=[1, 999, 9999999999])
-    redis.eval = AsyncMock(return_value=None)
+    redis.evalsha = AsyncMock(return_value=None)
+    redis.eval = AsyncMock(return_value=1)
     redis.script_load = AsyncMock(return_value="test_sha")
     redis.keys = AsyncMock(return_value=[])
     
@@ -75,8 +73,6 @@ def mock_redis():
     patchers = [
         patch('src.core.redis_pool.get_redis_client', side_effect=mock_get_redis_client),
         patch('src.core.task_queue.get_redis_client', side_effect=mock_get_redis_client),
-        patch('src.services.rate_limiter.get_redis_client', side_effect=mock_get_redis_client),
-        patch('src.api.routes.blog_routes.get_redis_client', side_effect=mock_get_redis_client),
     ]
     for p in patchers:
         p.start()
@@ -108,16 +104,20 @@ def mock_session_factory(mock_db_session):
 def test_client():
     """Create test client.
 
-    The autouse ``mock_redis`` and ``mock_session_factory`` fixtures already
-    patch ``get_redis_client`` (in every module that imports it) and
-    ``AsyncSessionFactory``.  Do **not** re-patch either of these here —
+    The autouse ``mock_session_factory`` fixture already patches
+    ``AsyncSessionFactory`` with a proper ``AsyncMock`` that supports
+    ``__aenter__`` / ``__aexit__``.  Do **not** re-patch it here —
     doing so replaces the working ``AsyncMock`` with a bare ``MagicMock``
     whose async-context-manager protocol swallows awaits, causing the
     async generator inside ``get_db_session`` to deadlock and hang.
     """
-    from src.api.main import app
+    with patch("src.core.redis_pool.get_redis_client", new_callable=AsyncMock):
+        from src.api.main import app
 
-    return TestClient(app)
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -198,3 +198,16 @@ def valid_blog_request():
 def invalid_blog_request():
     """Invalid blog request (topic too short)."""
     return {"topic": "AI", "audience": "developers", "tone": "professional"}
+
+
+@pytest.fixture(autouse=True)
+def mock_request_limiter():
+    """HTTP unit tests do not depend on a developer's Redis rate-limit state."""
+    from src.services.rate_limiter import RateLimitResult
+
+    limiter = MagicMock()
+    allowed = RateLimitResult(allowed=True, remaining=19, reset_at_unix=2_000_000_000)
+    limiter.check_service_global = AsyncMock(return_value=allowed)
+    limiter.check_request_rate = AsyncMock(return_value=allowed)
+    with patch("src.api.middleware.rate_limit.get_limiter", AsyncMock(return_value=limiter)):
+        yield limiter

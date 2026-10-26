@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -16,6 +17,10 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
+)
+from sqlalchemy import (
+    Enum as SQLAlchemyEnum,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -44,6 +49,7 @@ class BlogSessionStatus(StrEnum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     REJECTED = "REJECTED"
+    AGENT_REJECTED = "AGENT_REJECTED"
     CANCELLED = "CANCELLED"
 
     # ── State machine constants ────────────────────────────────────
@@ -56,6 +62,7 @@ class BlogSessionStatus(StrEnum):
                 cls.AWAITING_OUTLINE_REVIEW,
                 cls.AWAITING_FINAL_REVIEW,
                 cls.FAILED,
+                cls.AGENT_REJECTED,
                 cls.CANCELLED,
             },
             cls.AWAITING_OUTLINE_REVIEW: {cls.QUEUED, cls.FAILED, cls.CANCELLED},
@@ -69,6 +76,7 @@ class BlogSessionStatus(StrEnum):
             cls.COMPLETED: set(),
             cls.FAILED: set(),
             cls.REJECTED: set(),
+            cls.AGENT_REJECTED: set(),
             cls.CANCELLED: set(),
         }
 
@@ -78,16 +86,20 @@ class BlogSessionStatus(StrEnum):
 
     @classmethod
     def terminal_states(cls) -> frozenset[BlogSessionStatus]:
-        return frozenset({cls.COMPLETED, cls.FAILED, cls.REJECTED, cls.CANCELLED})
+        return frozenset(
+            {cls.COMPLETED, cls.FAILED, cls.REJECTED, cls.AGENT_REJECTED, cls.CANCELLED}
+        )
 
     @classmethod
     def active_states(cls) -> frozenset[BlogSessionStatus]:
-        return frozenset({
-            cls.QUEUED,
-            cls.PROCESSING,
-            cls.AWAITING_OUTLINE_REVIEW,
-            cls.AWAITING_FINAL_REVIEW,
-        })
+        return frozenset(
+            {
+                cls.QUEUED,
+                cls.PROCESSING,
+                cls.AWAITING_OUTLINE_REVIEW,
+                cls.AWAITING_FINAL_REVIEW,
+            }
+        )
 
     @classmethod
     def validate_transition(
@@ -139,7 +151,6 @@ class LeaseEventType:
 
 class BlogJobPhase(StrEnum):
     FRESH_GENERATION = "fresh_generation"
-    RESUME_OUTLINE = "resume_outline"
     REVISION = "revision"
     RESEARCH_PHASE = "research_phase"
 
@@ -156,6 +167,21 @@ class FinalReviewAction(StrEnum):
     REJECTED = "rejected"
 
 
+class BlogToneValue(StrEnum):
+    """Curated tone identifiers exposed by the tone catalog API."""
+
+    PRACTICAL = "practical"
+    PROFESSIONAL = "professional"
+    TECHNICAL = "technical"
+    CONVERSATIONAL = "conversational"
+    FRIENDLY = "friendly"
+    PERSUASIVE = "persuasive"
+    INFORMATIVE = "informative"
+    STORYTELLING = "storytelling"
+    ACADEMIC = "academic"
+    THOUGHT_PROVOKING = "thought-provoking"
+
+
 class AuthUser(Base):
     __tablename__ = "auth_users"
 
@@ -166,6 +192,28 @@ class AuthUser(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class UserBlogQuota(Base):
+    """UTC calendar-day generation counter, serialized per user in PostgreSQL."""
+
+    __tablename__ = "user_blog_quotas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("auth_users.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    blogs_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    blogs_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=5, server_default="5")
+    usage_date: Mapped[date] = mapped_column(
+        Date, nullable=False, server_default=func.current_date()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, server_default=func.now()
+    )
 
 
 class BlogSession(Base):
@@ -184,6 +232,8 @@ class BlogSession(Base):
     )
 
     adk_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Legacy ADK-confirmation columns retained for a backwards-compatible schema
+    # migration. The snapshot-based workflow runtime no longer reads or writes them.
     invocation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confirmation_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
@@ -218,6 +268,27 @@ class BlogSession(Base):
     )
 
 
+class ToneCatalog(Base):
+    """Curated writing tones available to clients when creating a blog."""
+
+    __tablename__ = "tone_catalog"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    value: Mapped[BlogToneValue] = mapped_column(
+        SQLAlchemyEnum(
+            BlogToneValue,
+            name="blog_tone_value",
+            values_callable=lambda enum_cls: [member.value for member in enum_cls],
+            validate_strings=True,
+        ),
+        unique=True,
+        nullable=False,
+    )
+    label: Mapped[str] = mapped_column(String(80), nullable=False)
+    description: Mapped[str] = mapped_column(String(255), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+
+
 class BlogVersion(Base):
     __tablename__ = "blog_versions"
 
@@ -238,6 +309,7 @@ class BlogVersion(Base):
     feedback_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     user_action: Mapped[str | None] = mapped_column(String(50), nullable=True)
     adk_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # See BlogSession: these are inactive compatibility columns pending migration.
     invocation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confirmation_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     state_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -250,9 +322,42 @@ class BlogVersion(Base):
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("blog_session_id", "version_number", name="uq_blog_versions_session_version"),
+        UniqueConstraint(
+            "blog_session_id", "version_number", name="uq_blog_versions_session_version"
+        ),
         Index("ix_blog_versions_session", "blog_session_id"),
         Index("ix_blog_versions_status", "status"),
+    )
+
+
+class WorkflowOutboxEvent(Base):
+    """Durable work notification committed with its lifecycle state change."""
+
+    __tablename__ = "workflow_outbox_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    aggregate_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    locked_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_workflow_outbox_claim", "status", "available_at", "locked_until", "id"),
+        Index(
+            "uq_workflow_outbox_one_active_per_blog",
+            "aggregate_id",
+            unique=True,
+            postgresql_where=text("status IN ('PENDING', 'PROCESSING')"),
+            sqlite_where=text("status IN ('PENDING', 'PROCESSING')"),
+        ),
     )
 
 
@@ -274,6 +379,31 @@ class AgentRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_agent_runs_session", "blog_session_id"),)
+
+
+class BlogReviewEvent(Base):
+    """Audit record for a human outline or final-content decision."""
+
+    __tablename__ = "blog_review_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    blog_session_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("blog_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    blog_version_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("blog_versions.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewer_user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("auth_users.id", ondelete="CASCADE"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    feedback_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        Index("ix_blog_review_events_session_created", "blog_session_id", "created_at"),
+        Index("ix_blog_review_events_version", "blog_version_id"),
+    )
 
 
 class BudgetLedger(Base):
@@ -355,7 +485,9 @@ class SessionReservation(Base):
     )
     reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False)
     reserved_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, server_default= func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_session_reservations_session", "blog_session_id"),)

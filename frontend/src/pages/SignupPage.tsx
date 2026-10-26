@@ -38,18 +38,20 @@ const SignupPage: React.FC = () => {
   };
 
   return (
-    <div className="animate-in state-shell">
-      <div className="state-card auth-card">
-        <h1 className="page-title">Create your Blogify account.</h1>
-        <p className="page-subtitle">
-          Sign up to start creating AI-powered blog posts.
-        </p>
+    <div className="auth-screen page-enter">
+      <Link to="/" className="auth-brand brand-lockup" aria-label="Blogify home"><span className="brand-mark">b.</span><span>blogify<span className="brand-ai">ai</span></span></Link>
+      <div className="auth-panel">
+        <span className="auth-overline">MAKE ROOM FOR GOOD IDEAS</span>
+        <h1>Create your account</h1>
+        <p className="auth-intro">A thoughtful process for getting from idea to article.</p>
         <form className="auth-form" onSubmit={handleSubmit}>
           <div>
-            <label className="eyebrow-label">Email</label>
+            <label htmlFor="signup-email">Email</label>
             <input 
+              id="signup-email"
               className="brutalist-input" 
               type="email" 
+              autoComplete="email"
               value={email} 
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@example.com"
@@ -57,20 +59,24 @@ const SignupPage: React.FC = () => {
             />
           </div>
           <div>
-            <label className="eyebrow-label">Display Name (optional)</label>
+            <label htmlFor="signup-name">Display name (optional)</label>
             <input 
+              id="signup-name"
               className="brutalist-input" 
               type="text" 
+              autoComplete="name"
               value={displayName} 
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Your name"
             />
           </div>
           <div>
-            <label className="eyebrow-label">Password</label>
+            <label htmlFor="signup-password">Password</label>
             <input
+              id="signup-password"
               className="brutalist-input"
               type="password"
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="8-100 characters"
@@ -80,15 +86,16 @@ const SignupPage: React.FC = () => {
             />
             <span className="text-xs text-muted">Must be 8-100 characters</span>
           </div>
-          {error ? <p className="text-error">{error}</p> : null}
-          <button className="brutalist-button" type="submit" disabled={loading}>
-            {loading ? 'Creating Account...' : 'Sign Up'}
+          {error ? <p className="auth-error" role="alert">{error}</p> : null}
+          <button className="button button-auth" type="submit" disabled={loading}>
+            {loading ? 'Creating your account…' : 'Continue with email'}
           </button>
         </form>
-        <p className="text-center text-muted mt-4">
-          Already have an account? <Link to="/login" className="text-link">Sign in</Link>
+        <p className="auth-switch">
+          Already have an account? <Link to="/login">Sign in <span aria-hidden="true">↗</span></Link>
         </p>
       </div>
+      <span className="auth-footer-note">Your ideas, your voice. ✳</span>
     </div>
   );
 };

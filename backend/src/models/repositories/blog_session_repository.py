@@ -1,11 +1,11 @@
 """BlogSessionRepository — V1 simplified repository."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from sqlalchemy import exists, select
+from sqlalchemy import Date, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models.orm_models import BlogSession, BlogSessionStatus, SessionLease
+from src.models.orm_models import BlogSession, BlogSessionStatus
 
 
 class BlogSessionRepository:
@@ -32,6 +32,7 @@ class BlogSessionRepository:
             audience=audience,
             tone=tone,
             status=BlogSessionStatus.QUEUED,
+            job_phase="fresh_generation",
             adk_session_id=adk_session_id,
             idempotency_key=idempotency_key,
         )
@@ -69,6 +70,111 @@ class BlogSessionRepository:
         )
         return list(result.scalars().all())
 
+    async def list_for_user(
+        self,
+        user_id: int,
+        *,
+        page: int,
+        page_size: int,
+        statuses: list[BlogSessionStatus] | None = None,
+        search: str | None = None,
+    ) -> tuple[list[BlogSession], int]:
+        conditions = [BlogSession.user_id == user_id]
+        if statuses:
+            conditions.append(BlogSession.status.in_([status.value for status in statuses]))
+        if search:
+            pattern = f"%{search.strip()}%"
+            conditions.append(
+                or_(BlogSession.topic.ilike(pattern), BlogSession.audience.ilike(pattern))
+            )
+
+        total = await self._session.scalar(select(func.count(BlogSession.id)).where(*conditions))
+        result = await self._session.execute(
+            select(BlogSession)
+            .where(*conditions)
+            .order_by(BlogSession.created_at.desc(), BlogSession.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        return list(result.scalars().all()), int(total or 0)
+
+    async def get_insights_for_user(
+        self,
+        user_id: int,
+        *,
+        since: datetime,
+    ) -> dict:
+        conditions = [BlogSession.user_id == user_id, BlogSession.created_at >= since]
+        unsuccessful_statuses = [
+            BlogSessionStatus.FAILED.value,
+            BlogSessionStatus.REJECTED.value,
+            BlogSessionStatus.AGENT_REJECTED.value,
+            BlogSessionStatus.CANCELLED.value,
+        ]
+        non_failed_conditions = [
+            *conditions,
+            BlogSession.status.notin_(unsuccessful_statuses),
+        ]
+        summary = await self._session.execute(
+            select(
+                func.sum(case((BlogSession.status.notin_(unsuccessful_statuses), 1), else_=0)),
+                func.sum(
+                    case((BlogSession.status == BlogSessionStatus.COMPLETED.value, 1), else_=0)
+                ),
+                func.sum(
+                    case(
+                        (
+                            BlogSession.status.in_(
+                                [
+                                    *unsuccessful_statuses,
+                                ]
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                BlogSession.status.notin_(unsuccessful_statuses),
+                                BlogSession.budget_spent_usd,
+                            ),
+                            else_=0,
+                        )
+                    ),
+                    0,
+                ),
+            ).where(*conditions)
+        )
+        total_generated, completed_count, failed_count, total_cost_usd = summary.one()
+
+        daily_result = await self._session.execute(
+            select(
+                cast(BlogSession.created_at, Date).label("day"),
+                func.count(BlogSession.id).label("generated_count"),
+                func.coalesce(func.sum(BlogSession.budget_spent_usd), 0).label("cost_usd"),
+            )
+            .where(*non_failed_conditions)
+            .group_by(cast(BlogSession.created_at, Date))
+            .order_by(cast(BlogSession.created_at, Date))
+        )
+        recent_result = await self._session.execute(
+            select(BlogSession)
+            .where(*non_failed_conditions)
+            .order_by(BlogSession.created_at.desc(), BlogSession.id.desc())
+            .limit(12)
+        )
+        return {
+            "total_generated": int(total_generated or 0),
+            "completed_count": int(completed_count or 0),
+            "failed_count": int(failed_count or 0),
+            "total_cost_usd": float(total_cost_usd or 0),
+            "daily": list(daily_result.all()),
+            "blog_costs": list(recent_result.scalars().all()),
+        }
+
     async def count_active_for_user(self, user_id: int) -> int:
         active = [s.value for s in BlogSessionStatus.active_states()]
         result = await self._session.execute(
@@ -78,32 +184,6 @@ class BlogSessionRepository:
             )
         )
         return len(result.scalars().all())
-
-    async def get_queued_without_active_leases(
-        self,
-        *,
-        older_than_seconds: int = 30,
-        limit: int = 100,
-    ) -> list[BlogSession]:
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=older_than_seconds)
-        active_lease_exists = exists(
-            select(SessionLease.id).where(
-                SessionLease.blog_session_id == BlogSession.id,
-                SessionLease.ended_at.is_(None),
-            )
-        )
-
-        result = await self._session.execute(
-            select(BlogSession)
-            .where(
-                BlogSession.status == BlogSessionStatus.QUEUED.value,
-                BlogSession.updated_at < cutoff,
-                ~active_lease_exists,
-            )
-            .order_by(BlogSession.updated_at.asc())
-            .limit(limit)
-        )
-        return list(result.scalars().all())
 
     async def update_status(
         self,
@@ -172,8 +252,6 @@ class BlogSessionRepository:
         *,
         outline_data: dict | None = None,
         final_content: str | None = None,
-        invocation_id: str | None = None,
-        confirmation_request_id: str | None = None,
         adk_session_id: str | None = None,
         active_blog_version_id: int | None = None,
     ) -> None:
@@ -185,10 +263,6 @@ class BlogSessionRepository:
             blog_session.outline_data = outline_data
         if final_content is not None:
             blog_session.final_content = final_content
-        if invocation_id is not None:
-            blog_session.invocation_id = invocation_id
-        if confirmation_request_id is not None:
-            blog_session.confirmation_request_id = confirmation_request_id
         if adk_session_id is not None:
             blog_session.adk_session_id = adk_session_id
         if active_blog_version_id is not None:
@@ -196,21 +270,6 @@ class BlogSessionRepository:
 
         blog_session.updated_at = datetime.now(timezone.utc)
         await self._session.flush()
-
-    async def save_outline(
-        self,
-        session_id: int,
-        outline_data: dict,
-        invocation_id: str,
-        confirmation_request_id: str,
-    ) -> None:
-        blog_session = await self.get_by_id(session_id)
-        if blog_session:
-            blog_session.outline_data = outline_data
-            blog_session.invocation_id = invocation_id
-            blog_session.confirmation_request_id = confirmation_request_id
-            blog_session.updated_at = datetime.now(timezone.utc)
-            await self._session.flush()
 
     async def save_final_content(self, session_id: int, content: str) -> None:
         blog_session = await self.get_by_id(session_id)
@@ -241,5 +300,21 @@ class BlogSessionRepository:
         blog_session.status = BlogSessionStatus.FAILED
         blog_session.failure_reason = reason
         blog_session.failed_at = datetime.now(timezone.utc)
+        blog_session.updated_at = datetime.now(timezone.utc)
+        await self._session.flush()
+
+    async def mark_agent_rejected(self, session_id: int, reason: str) -> None:
+        """Persist a terminal rejection made by the automated intent gate."""
+        blog_session = await self.get_by_id(session_id)
+        if not blog_session:
+            return
+
+        current = BlogSessionStatus(blog_session.status)
+        BlogSessionStatus.validate_transition(current, BlogSessionStatus.AGENT_REJECTED)
+
+        blog_session.status = BlogSessionStatus.AGENT_REJECTED
+        blog_session.current_stage = "intent_rejected"
+        blog_session.job_phase = None
+        blog_session.failure_reason = reason
         blog_session.updated_at = datetime.now(timezone.utc)
         await self._session.flush()

@@ -13,15 +13,15 @@ ingester:
 
 compactor:
   compaction:
-    block_retention: 24h
+    block_retention: 72h
 
 storage:
   trace:
     backend: local
     wal:
-      path: /tmp/tempo/wal
+      path: /var/tempo/wal
     local:
-      path: /tmp/tempo/blocks
+      path: /var/tempo/blocks
 
 querier:
   frontend_worker:

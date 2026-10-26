@@ -66,12 +66,12 @@ const OutlineReviewPage = () => {
         feedback_text: feedback,
       });
       if (action === 'approve') {
-        toast.success('Outline approved', { description: decision.message });
+        toast.success('Outline approved', { description: decision.message || 'Research and writing are moving ahead.' });
         navigate(`/sessions/${sessionId}/progress`, { replace: true });
         return;
       }
-      toast.success('Outline updated', { description: decision.message });
-      setLocalOutline(decision.outline);
+      toast.success('Outline saved', { description: decision.message || 'Your changes are saved. Approve when you’re ready to continue.' });
+      setLocalOutline(decision.outline || localOutline);
     } catch (err) {
       console.error('Failed to submit outline review: ', err);
       const message = err instanceof Error ? err.message : 'Failed to submit outline review';
@@ -81,7 +81,7 @@ const OutlineReviewPage = () => {
   };
 
   return (
-    <div className="animate-in">
+    <div className="animate-in workspace-content review-page">
       <SessionHeader
         sessionId={sessionId || String(outlineView.session_id)}
         title="Outline Review"
@@ -89,54 +89,19 @@ const OutlineReviewPage = () => {
         status={session?.status || outlineView.status}
       />
 
-      <div className="bento-grid">
-        <div style={{ gridColumn: '1 / -1' }}>
-          <OutlineEditor value={localOutline} onChange={setLocalOutline} />
-        </div>
-
-        <div className="bento-card">
-          <h2 className="section-title">Guidance For Final Generation</h2>
-          <p className="text-secondary mb-md">
-            Use this space to specify what data, examples, metrics, or angles the final draft must include.
-          </p>
-          <textarea
-            className="brutalist-input"
-            rows={6}
-            placeholder="Include exact details, data requests, examples, or exclusions for the final article."
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            style={{ width: '100%', fontSize: '1rem' }}
-          />
+      <div className="review-layout">
+        <div className="review-main"><OutlineEditor value={localOutline} onChange={setLocalOutline} />
+        <section className="bento-card guidance-card">
+          <span className="eyebrow">A NOTE FOR THE WRITING STAGE</span><h2 className="section-title">What should we keep in mind?</h2>
+          <p className="text-secondary mb-md">Call out examples, details, or angles you want the final article to include.</p>
+          <label className="sr-only" htmlFor="outline-feedback">Guidance for writing</label>
+          <textarea id="outline-feedback" className="field-input guidance-input" rows={4} maxLength={3000} placeholder="A source to include, an example to use, or a point to handle carefully…" value={feedback} onChange={(e) => setFeedback(e.target.value)} />
           {validationError ? (
-            <p style={{ color: 'var(--error-color)', marginBottom: 'var(--spacing-sm)' }}>{validationError}</p>
+            <p className="inline-alert" role="alert">{validationError}</p>
           ) : null}
-          <div style={{ display: 'flex', gap: 'var(--spacing-sm)', flexWrap: 'wrap' }}>
-            <button
-              className="brutalist-button secondary"
-              onClick={() => handleAction('revise')}
-              disabled={submitting}
-            >
-              Save Changes
-            </button>
-            <button
-              className="brutalist-button"
-              onClick={() => handleAction('approve')}
-              disabled={submitting}
-            >
-              Approve & Continue
-            </button>
-          </div>
-        </div>
-
-        <div className="bento-card">
-          <h2 className="section-title">Checkpoint Rules</h2>
-          <ul style={{ paddingLeft: '1.25rem', display: 'grid', gap: '0.5rem' }}>
-            <li>Keep the outline between 3 and 7 sections.</li>
-            <li>Each section must carry a clear goal and word target.</li>
-            <li>The writing pipeline resumes only after approval.</li>
-            <li>Saved revisions keep the session in the outline review state.</li>
-          </ul>
-        </div>
+          <div className="review-actions"><button className="button button-quiet" onClick={() => void handleAction('revise')} disabled={submitting}>{submitting ? 'Saving…' : 'Save changes'}</button><button className="button button-primary" onClick={() => void handleAction('approve')} disabled={submitting}>{submitting ? 'Working…' : <>Approve outline <span aria-hidden="true">↗</span></>}</button></div>
+        </section></div>
+        <aside className="review-aside"><section className="checkpoint-card"><span className="checkpoint-icon">✳</span><span className="eyebrow">YOUR FIRST CHECKPOINT</span><h2>Make the shape feel right.</h2><p>We’ll wait here until you approve. Your outline and guidance travel with the article.</p><div className="checkpoint-rule"><span>03–07</span><small>sections</small><i /><span>80–300</span><small>words each</small></div></section></aside>
       </div>
     </div>
   );

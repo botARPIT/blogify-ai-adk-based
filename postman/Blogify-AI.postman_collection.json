@@ -1,0 +1,108 @@
+{
+  "info": {
+    "_postman_id": "8c8f16aa-4f22-4e9f-93a5-8b9c8b0f7a11",
+    "name": "Blogify AI API",
+    "description": "Core Blogify AI API workflow. Run Register or Login first; Postman keeps the auth cookie for subsequent requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8000" },
+    { "key": "sessionId", "value": "1" },
+    { "key": "idempotencyKey", "value": "postman-demo-generation-001" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        { "name": "API health", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/health" } },
+        { "name": "Liveness", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/health/live" } },
+        { "name": "Readiness", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/health/ready" } },
+        { "name": "Detailed health", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/health/detailed" } },
+        { "name": "Startup health", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/health/startup" } },
+        { "name": "OpenAPI document", "request": { "method": "GET", "url": "{{baseUrl}}/openapi.json" } }
+      ]
+    },
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "X-Requested-With", "value": "XMLHttpRequest" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"demo@example.com\",\n  \"password\": \"change-me-123\",\n  \"display_name\": \"Demo User\"\n}" },
+            "url": "{{baseUrl}}/api/v1/auth/register"
+          }
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "X-Requested-With", "value": "XMLHttpRequest" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"demo@example.com\",\n  \"password\": \"change-me-123\"\n}" },
+            "url": "{{baseUrl}}/api/v1/auth/login"
+          }
+        },
+        { "name": "Current user", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/auth/me" } },
+        { "name": "Logout", "request": { "method": "POST", "header": [ { "key": "X-Requested-With", "value": "XMLHttpRequest" } ], "url": "{{baseUrl}}/api/v1/auth/logout" } }
+      ]
+    },
+    {
+      "name": "Blogs",
+      "item": [
+        {
+          "name": "Generate blog",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }, { "key": "X-Requested-With", "value": "XMLHttpRequest" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"topic\": \"How durable workflows improve AI products\",\n  \"audience\": \"backend engineers\",\n  \"tone\": \"technical\"\n}" },
+            "url": "{{baseUrl}}/api/v1/blogs/generate"
+          }
+        },
+        { "name": "List blogs", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/?page=1&page_size=12" } },
+        { "name": "Insights", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/insights?days=30" } },
+        { "name": "Budget", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/budget" } },
+        { "name": "Session status", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}/status" } },
+        { "name": "Session detail", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}/detail" } },
+        { "name": "Session", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}" } },
+        { "name": "Outline", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}/outline" } },
+        { "name": "Final content", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}/content" } },
+        { "name": "Latest version", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}/versions/latest" } },
+        {
+          "name": "Submit outline review",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "X-Requested-With", "value": "XMLHttpRequest" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"approved_outline\": {\n    \"title\": \"How durable workflows improve AI products\",\n    \"sections\": [\n      {\"id\": \"intro\", \"heading\": \"Introduction\", \"goal\": \"Set context\", \"target_words\": 100},\n      {\"id\": \"design\", \"heading\": \"Design\", \"goal\": \"Explain the design\", \"target_words\": 120},\n      {\"id\": \"tradeoffs\", \"heading\": \"Trade-offs\", \"goal\": \"Explain trade-offs\", \"target_words\": 100}\n    ],\n    \"estimated_total_words\": 500\n  },\n  \"feedback_text\": null\n}" },
+            "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}/outline-review"
+          }
+        },
+        {
+          "name": "Submit frontend outline decision",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "X-Requested-With", "value": "XMLHttpRequest" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"action\": \"approve\",\n  \"edited_outline\": {\n    \"title\": \"How durable workflows improve AI products\",\n    \"sections\": [\n      {\"id\": \"intro\", \"heading\": \"Introduction\", \"goal\": \"Set context\", \"target_words\": 100},\n      {\"id\": \"design\", \"heading\": \"Design\", \"goal\": \"Explain the design\", \"target_words\": 120},\n      {\"id\": \"tradeoffs\", \"heading\": \"Trade-offs\", \"goal\": \"Explain trade-offs\", \"target_words\": 100}\n    ],\n    \"estimated_total_words\": 500\n  }\n}" },
+            "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}/outline/review"
+          }
+        },
+        {
+          "name": "Submit final review",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" }, { "key": "X-Requested-With", "value": "XMLHttpRequest" } ],
+            "body": { "mode": "raw", "raw": "{\n  \"action\": \"approved\",\n  \"feedback_text\": null\n}" },
+            "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}/final-review"
+          }
+        },
+        { "name": "Export PDF", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/blogs/{{sessionId}}/export?format=pdf" } }
+      ]
+    },
+    {
+      "name": "Tone catalog",
+      "item": [
+        { "name": "List tones", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/tones" } }
+      ]
+    }
+  ]
+}

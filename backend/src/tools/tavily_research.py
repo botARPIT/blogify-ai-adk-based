@@ -5,9 +5,12 @@ import json
 import os
 from typing import Any
 
-from tavily import TavilyClient
+from google.adk.tools.function_tool import FunctionTool
+from google.adk.tools.tool_context import ToolContext
+from tavily import TavilyClient  # type: ignore[import-untyped]
 
 from src.config.logging_config import get_logger
+from src.core.workflow_state_keys import RESEARCH_TOOL_DATA_KEY
 from src.monitoring.circuit_breaker import CircuitBreaker
 
 logger = get_logger(__name__)
@@ -29,7 +32,11 @@ def _get_tavily_client() -> TavilyClient:
     return _tavily_client
 
 
-async def research_topic(topic: str, max_results: int = 5) -> dict[str, Any]:
+async def research_topic(
+    topic: str,
+    max_results: int = 5,
+    tool_context: ToolContext | None = None,
+) -> dict[str, Any]:
     """
     Research a topic using Tavily API with deep research capability.
 
@@ -42,62 +49,65 @@ async def research_topic(topic: str, max_results: int = 5) -> dict[str, Any]:
     Returns:
         Dictionary containing research results and sources
     """
+    logger.info("researching_topic", topic=topic[:50], max_results=max_results)
+    client: TavilyClient | None = None
+    tavily_error: Exception | None = None
+
     try:
-        logger.info("researching_topic", topic=topic[:50], max_results=max_results)
-
         client = _get_tavily_client()
-
-        # Try simple search first (faster, works with basic plan)
-        try:
-            response = client.search(query=topic, max_results=max_results)
-
-            results = response.get("results", [])
-
-            formatted_results = {
-                "topic": topic,
-                "summary": response.get("answer", f"Research results for: {topic}"),
-                "total_sources": len(results),
-                "sources": [
-                    {
-                        "title": r.get("title", ""),
-                        "url": r.get("url", ""),
-                        "content": r.get("content", "")[:500],  # Truncate for storage
-                        "score": r.get("score", 0.0),
-                    }
-                    for r in results
-                ],
+        response = client.search(query=topic, max_results=max_results)
+        results = response.get("results", [])
+        sources = [
+            {
+                "title": result.get("title", ""),
+                "url": result.get("url", ""),
+                "content": result.get("content", "")[:500],
+                "score": result.get("score", 0.0),
+                "provider": "tavily",
             }
+            for result in results
+            if result.get("url")
+        ]
+        if sources:
+            logger.info("research_completed", sources_found=len(sources), provider="tavily")
+            return _capture_tool_result(tool_context, {
+                "topic": topic,
+                "summary": response.get("answer") or f"Research results for: {topic}",
+                "total_sources": len(sources),
+                "sources": sources,
+                "provider": "tavily",
+            })
+        tavily_error = ValueError("Tavily returned no usable sources")
+    except Exception as exc:
+        tavily_error = exc
+        logger.warning("tavily_search_failed", error=str(exc))
 
-            logger.info("research_completed", sources_found=len(results))
-            return formatted_results
+    if client is not None:
+        try:
+            return _capture_tool_result(tool_context, await _deep_research(client, topic))
+        except Exception as deep_error:
+            logger.warning("deep_research_not_available", error=str(deep_error))
 
-        except Exception as search_error:
-            logger.warning("simple_search_failed", error=str(search_error))
+    error = f"Tavily: {type(tavily_error).__name__}"
+    logger.error("research_failed", error=error, topic=topic[:50])
+    return _capture_tool_result(tool_context, {
+        "topic": topic,
+        "summary": f"Research failed for: {topic}",
+        "total_sources": 0,
+        "sources": [],
+        "provider": "tavily",
+        "error": error,
+    })
 
-            # Fallback: try deep research if available
-            try:
-                return await _deep_research(client, topic)
-            except Exception as deep_error:
-                logger.warning("deep_research_not_available", error=str(deep_error))
 
-                # Return empty results if all methods fail
-                return {
-                    "topic": topic,
-                    "summary": f"Unable to research: {topic}",
-                    "total_sources": 0,
-                    "sources": [],
-                    "error": str(search_error),
-                }
-
-    except Exception as e:
-        logger.error("research_failed", error=str(e), topic=topic[:50])
-        return {
-            "topic": topic,
-            "summary": f"Research failed for: {topic}",
-            "total_sources": 0,
-            "sources": [],
-            "error": str(e),
-        }
+def _capture_tool_result(
+    tool_context: ToolContext | None,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Expose the exact tool payload to the deterministic workflow node."""
+    if tool_context is not None:
+        tool_context.state[RESEARCH_TOOL_DATA_KEY] = result
+    return result
 
 
 async def _deep_research(client: TavilyClient, topic: str) -> dict[str, Any]:
@@ -154,10 +164,6 @@ async def _deep_research(client: TavilyClient, topic: str) -> dict[str, Any]:
         logger.debug("research_polling", status=status, elapsed=elapsed)
 
     raise TimeoutError(f"Research timed out after {max_wait} seconds")
-
-
-# ADK Function Tool wrapper for agent use
-from google.adk.tools import FunctionTool
 
 
 @FunctionTool

@@ -12,7 +12,8 @@ const STATUS_LABELS: Record<string, string> = {
   revision_requested: 'Revision Requested',
   completed: 'Completed',
   failed: 'Failed',
-  rejected: 'Rejected',
+  rejected: 'Rejected by you',
+  agent_rejected: 'Blocked by safety check',
   cancelled: 'Cancelled',
 };
 
@@ -22,32 +23,15 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
   const isFailure =
     normalizedStatus === 'failed' ||
     normalizedStatus === 'cancelled' ||
-    normalizedStatus === 'rejected';
-  const color = isFailure
-    ? 'var(--error-color)'
-    : isAttention
-      ? 'var(--accent-color)'
-      : 'var(--text-primary)';
+    normalizedStatus === 'rejected' ||
+    normalizedStatus === 'agent_rejected';
+  const badgeClass = isFailure ? 'status-failure' : isAttention ? 'status-attention' : normalizedStatus === 'completed' ? 'status-done' : '';
 
   return (
     <span
-      className="brutalist-label"
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: '0.5rem',
-        color,
-        margin: 0,
-      }}
+      className={`status-badge ${badgeClass}`}
+      aria-label={`Status: ${STATUS_LABELS[normalizedStatus] || status}`}
     >
-      <span
-        style={{
-          width: '10px',
-          height: '10px',
-          background: color,
-          display: 'inline-block',
-        }}
-      />
       {STATUS_LABELS[normalizedStatus] || status}
     </span>
   );

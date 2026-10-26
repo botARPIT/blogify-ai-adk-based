@@ -1,11 +1,9 @@
 """Pydantic schemas for V1 API contract and agent I/O."""
 
-import re
-from datetime import datetime
-from enum import Enum
+from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, Field, StrictBool, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Agent I/O schemas (used by ADK agents - NOT part of API contract)
@@ -13,10 +11,11 @@ from pydantic import BaseModel, EmailStr, Field, field_validator, model_validato
 
 
 class IntentSchema(BaseModel):
-    """Intent classification result."""
+    """Boolean gate for safe, unambiguous blog-generation requests."""
 
-    status: str = Field(description="CLEAR | UNCLEAR_TOPIC | MULTI_TOPIC | MISSING_AUDIENCE")
-    message: str = Field(description="Message explaining the classification")
+    intent_clear: StrictBool = Field(
+        description="True only when the request is safe and its topic, audience, and tone are clear"
+    )
 
 
 class SectionSchema(BaseModel):
@@ -37,12 +36,21 @@ class OutlineSchema(BaseModel):
 
 
 class ResearchSourceSchema(BaseModel):
-    """Research source from Tavily."""
+    """Evidence returned by the research agent's search tool."""
 
-    title: str
-    url: str
-    content: str
+    title: str = Field(min_length=1, max_length=500)
+    url: str = Field(min_length=1, max_length=2_048)
+    content: str = Field(min_length=1, max_length=2_000)
     score: float = Field(ge=0.0, le=1.0)
+    provider: str = Field(default="tavily", min_length=1, max_length=100)
+
+    @field_validator("url")
+    @classmethod
+    def require_http_url(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized.startswith(("https://", "http://")):
+            raise ValueError("source URL must use http or https")
+        return normalized
 
 
 class ResearchDataSchema(BaseModel):
@@ -50,8 +58,22 @@ class ResearchDataSchema(BaseModel):
 
     topic: str
     summary: str
-    sources: list[ResearchSourceSchema]
-    total_sources: int
+    sources: list[ResearchSourceSchema] = Field(min_length=1)
+    total_sources: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def require_matching_source_count(self) -> "ResearchDataSchema":
+        if self.total_sources != len(self.sources):
+            raise ValueError("total_sources must match the number of validated sources")
+        return self
+
+
+class ResearchSourceView(BaseModel):
+    """A safe, clickable research source returned with the finished blog."""
+
+    title: str
+    url: str
+    provider: str
 
 
 class EditorReviewSchema(BaseModel):
@@ -61,6 +83,14 @@ class EditorReviewSchema(BaseModel):
     feedback: str = Field(description="Specific issues if not approved, empty if approved")
     final_blog: str = Field(description="Polished blog content if approved")
     sources_section: str = Field(description="Formatted sources/references section")
+
+    @model_validator(mode="after")
+    def require_consistent_decision_payload(self) -> "EditorReviewSchema":
+        if self.approved and not self.final_blog.strip():
+            raise ValueError("approved reviews must include final_blog")
+        if not self.approved and (self.final_blog.strip() or self.sources_section.strip()):
+            raise ValueError("rejected reviews must not include final content or sources")
+        return self
 
 
 class FinalBlogSchema(BaseModel):
@@ -82,37 +112,10 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=8)
     display_name: str | None = None
 
-    @field_validator("email")
-    @classmethod
-    def normalize_email(cls, v: str) -> str:
-        return v.strip().lower()
-
-    @field_validator("password")
-    @classmethod
-    def password_strength(cls, v: str) -> str:
-        if not re.search(r"[A-Z]", v):
-            raise ValueError("Password must contain at least one uppercase letter")
-        if not re.search(r"[a-z]", v):
-            raise ValueError("Password must contain at least one lowercase letter")
-        if not re.search(r"\d", v):
-            raise ValueError("Password must contain at least one digit")
-        return v
-
-    @field_validator("display_name")
-    @classmethod
-    def validate_display_name(cls, v: str | None) -> str | None:
-        if v is not None:
-            v = v.strip()
-            if len(v) < 1:
-                raise ValueError("Display name cannot be empty")
-            if len(v) > 100:
-                raise ValueError("Display name must be 100 characters or fewer")
-        return v
-
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str = Field(min_length=1)
+    password: str
 
 
 class TokenResponse(BaseModel):
@@ -120,6 +123,16 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user_id: int
     email: str
+
+
+class ToneOptionResponse(BaseModel):
+    value: str
+    label: str
+    description: str
+
+
+class ToneCatalogResponse(BaseModel):
+    items: list[ToneOptionResponse]
 
 
 class UserResponse(BaseModel):
@@ -131,21 +144,10 @@ class UserResponse(BaseModel):
     last_login_at: datetime | None
 
 
-class Tone(str, Enum):
-    PROFESSIONAL = "professional"
-    PRACTICAL = "practical"
-    TECHNICAL = "technical"
-    EXECUTIVE = "executive"
-    CASUAL = "casual"
-    INSPIRATIONAL = "inspirational"
-    PERSUASIVE = "persuasive"
-    AUTHORITATIVE = "authoritative"
-
-
 class GenerateRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=500)
     audience: str = Field(default="general readers", max_length=255)
-    tone: Tone = Tone.PROFESSIONAL
+    tone: str = Field(default="professional", max_length=100)
     idempotency_key: str | None = Field(default=None, max_length=255)
 
 
@@ -243,6 +245,16 @@ class SessionInfo(BaseModel):
     current_version_number: int | None = None
 
 
+class HumanReviewEventView(BaseModel):
+    event_id: int
+    session_id: int
+    version_id: int | None = None
+    reviewer_user_id: str
+    action: str
+    feedback_text: str | None = None
+    created_at: datetime
+
+
 class BlogVersionMetrics(BaseModel):
     version_id: int = 1
     version_number: int = 1
@@ -262,8 +274,8 @@ class BlogSessionMetrics(BaseModel):
     total_words: int
     outline: dict | None = None
     latest_version: BlogVersionMetrics | None = None
-    agent_runs: list[AgentRunMetrics] = []
-    review_events: list = []
+    agent_runs: list[AgentRunMetrics] = Field(default_factory=list)
+    review_events: list[HumanReviewEventView] = Field(default_factory=list)
 
 
 class BlogSessionDetail(BaseModel):
@@ -291,12 +303,46 @@ class BlogSessionListItem(BaseModel):
     current_stage: str | None
     created_at: datetime
     completed_at: datetime | None
+    cost_usd: float
+
+
+class BlogSessionPage(BaseModel):
+    items: list[BlogSessionListItem]
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+
+
+class DailyBlogInsight(BaseModel):
+    date: date
+    generated_count: int
+    cost_usd: float
+
+
+class BlogCostInsight(BaseModel):
+    session_id: int
+    topic: str
+    status: str
+    created_at: datetime
+    cost_usd: float
+
+
+class BlogInsightsResponse(BaseModel):
+    days: int
+    total_generated: int
+    completed_count: int
+    failed_count: int
+    total_cost_usd: float
+    daily: list[DailyBlogInsight]
+    blog_costs: list[BlogCostInsight]
 
 
 class BudgetResponse(BaseModel):
     balance_usd: float
     balance_tokens: int
     daily_blog_limit_left: int
+    daily_blog_limit: int
 
 
 class SessionStatusResponse(BaseModel):
@@ -315,6 +361,7 @@ class BlogContentView(BaseModel):
     content_markdown: str
     word_count: int
     sources_count: int = 0
+    sources: list[ResearchSourceView] = Field(default_factory=list)
     topic: str
     audience: str | None = None
     status: str
