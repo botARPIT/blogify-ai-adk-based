@@ -81,10 +81,14 @@ async def _refresh_postgres_state() -> None:
             workflow_outbox_events_by_status.labels(status=str(status)).set(count)
 
         oldest_pending = await session.execute(
-            text(
-                "SELECT COALESCE(EXTRACT(EPOCH FROM NOW() - MIN(created_at)), 0) "
-                "FROM workflow_outbox_events WHERE status = 'PENDING' "
-                "AND available_at <= NOW()"
+            select(
+                func.coalesce(
+                    func.extract("epoch", func.now() - func.min(WorkflowOutboxEvent.created_at)),
+                    0,
+                )
+            ).where(
+                WorkflowOutboxEvent.status == "PENDING",
+                WorkflowOutboxEvent.available_at <= func.now(),
             )
         )
         workflow_outbox_oldest_pending_seconds.set(float(oldest_pending.scalar_one()))
