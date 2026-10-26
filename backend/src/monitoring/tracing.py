@@ -21,7 +21,7 @@ try:
     from opentelemetry.instrumentation.redis import RedisInstrumentor
     from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
     from opentelemetry.sdk.resources import Resource
-    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.trace import Status, StatusCode
 
@@ -32,12 +32,168 @@ except ImportError:
         "opentelemetry_not_installed", message="Install opentelemetry packages for tracing"
     )
 
+    class SpanProcessor:  # type: ignore[no-redef]
+        """Import-safe fallback when OpenTelemetry is not installed."""
+
+
+    ReadableSpan = Any  # type: ignore[misc, assignment]
+
 
 # Global tracer
 _tracer = None
 _provider_initialized = False
 _clients_instrumented = False
 
+
+if OTEL_AVAILABLE:
+
+    class PrometheusSpanProcessor(SpanProcessor):
+        """Translate low-cardinality ADK spans into Prometheus metrics."""
+
+        _stage_by_agent = {
+            "intent_classifier": "intent",
+            "outline_agent": "outline",
+            "research_agent": "research",
+            "writer_agent": "writer",
+            "editor_agent": "editor",
+        }
+
+        def on_start(self, span, parent_context=None) -> None:
+            pass
+
+        def on_end(self, span: ReadableSpan) -> None:
+            try:
+                from src.monitoring.metrics import (
+                    adk_tool_calls_total,
+                    adk_tool_duration_seconds,
+                    agent_invocations_total,
+                    blog_generation_duration_seconds,
+                    database_queries_total,
+                    database_query_duration_seconds,
+                    llm_call_duration_seconds,
+                    llm_calls_total,
+                    llm_tokens_total,
+                    redis_command_duration_seconds,
+                    redis_commands_total,
+                )
+
+                outcome = (
+                    "failure"
+                    if span.status.status_code == StatusCode.ERROR
+                    else "success"
+                )
+                duration = max(0, span.end_time - span.start_time) / 1_000_000_000
+                attributes = span.attributes or {}
+                db_system = attributes.get("db.system") or attributes.get(
+                    "db.system.name"
+                )
+                if db_system in {"postgresql", "postgres"}:
+                    operation = _bounded_operation(
+                        attributes.get("db.operation")
+                        or attributes.get("db.operation.name")
+                        or span.name
+                    )
+                    database_queries_total.labels(
+                        operation=operation, outcome=outcome
+                    ).inc()
+                    database_query_duration_seconds.labels(
+                        operation=operation
+                    ).observe(duration)
+                elif db_system == "redis":
+                    command = _bounded_operation(
+                        attributes.get("db.operation")
+                        or attributes.get("db.operation.name")
+                        or span.name
+                    )
+                    redis_commands_total.labels(
+                        command=command, outcome=outcome
+                    ).inc()
+                    redis_command_duration_seconds.labels(command=command).observe(
+                        duration
+                    )
+
+                if span.name.startswith("invoke_agent "):
+                    agent_name = str(
+                        span.attributes.get("gen_ai.agent.name")
+                        or span.name.removeprefix("invoke_agent ")
+                    )
+                    agent_invocations_total.labels(
+                        agent_name=agent_name,
+                        success=str(outcome == "success").lower(),
+                    ).inc()
+                    stage = self._stage_by_agent.get(agent_name)
+                    if stage:
+                        blog_generation_duration_seconds.labels(stage=stage).observe(
+                            duration
+                        )
+                elif span.name == "call_llm":
+                    llm_calls_total.labels(outcome=outcome).inc()
+                    llm_call_duration_seconds.observe(duration)
+                    for attribute, kind in (
+                        ("gen_ai.usage.input_tokens", "input"),
+                        ("gen_ai.usage.output_tokens", "output"),
+                    ):
+                        value = attributes.get(attribute)
+                        if isinstance(value, (int, float)) and value >= 0:
+                            llm_tokens_total.labels(kind=kind).inc(value)
+                elif span.name.startswith("execute_tool "):
+                    tool_name = span.name.removeprefix("execute_tool ")
+                    adk_tool_calls_total.labels(
+                        tool_name=tool_name,
+                        outcome=outcome,
+                    ).inc()
+                    adk_tool_duration_seconds.labels(tool_name=tool_name).observe(
+                        duration
+                    )
+            except Exception:
+                logger.debug("adk_prometheus_span_record_failed", exc_info=True)
+
+        def shutdown(self) -> None:
+            pass
+
+        def force_flush(self, timeout_millis: int = 30000) -> bool:
+            return True
+
+
+def _bounded_operation(value: object) -> str:
+    """Normalize driver operation names and never expose SQL/query text as labels."""
+    operation = str(value).strip().split(maxsplit=1)[0].upper() if value else "OTHER"
+    allowed = {
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "CREATE",
+        "ALTER",
+        "DROP",
+        "BEGIN",
+        "COMMIT",
+        "ROLLBACK",
+        "SET",
+        "GET",
+        "MGET",
+        "MSET",
+        "DEL",
+        "EXISTS",
+        "EVAL",
+        "EVALSHA",
+        "SCRIPT",
+        "SCAN",
+        "EXPIRE",
+        "ZRANGEBYSCORE",
+        "CONNECT",
+        "PUBLISH",
+        "SUBSCRIBE",
+        "ZADD",
+        "ZREM",
+        "ZRANGE",
+        "ZCARD",
+        "LPUSH",
+        "RPOP",
+        "LLEN",
+        "OTHER",
+    }
+    return operation if operation in allowed else "OTHER"
 
 def init_tracing(
     service_name: str | None = None,
@@ -61,9 +217,6 @@ def init_tracing(
 
     service_name = service_name or os.getenv("OTEL_SERVICE_NAME", "blogify-api")
     endpoint = otlp_endpoint or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if not endpoint:
-        logger.info("tracing_disabled", reason="OTEL_EXPORTER_OTLP_ENDPOINT is not configured")
-        return
 
     # Create resource
     resource = Resource.create(
@@ -76,15 +229,17 @@ def init_tracing(
 
     # Create tracer provider
     provider = TracerProvider(resource=resource)
+    provider.add_span_processor(PrometheusSpanProcessor())
 
-    # Add OTLP exporter
-    try:
-        exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
-        processor = BatchSpanProcessor(exporter)
-        provider.add_span_processor(processor)
-        logger.info("otlp_exporter_configured", endpoint=endpoint)
-    except Exception as e:
-        logger.warning("otlp_exporter_failed", error=str(e))
+    if endpoint:
+        try:
+            exporter = OTLPSpanExporter(endpoint=endpoint, insecure=True)
+            provider.add_span_processor(BatchSpanProcessor(exporter))
+            logger.info("otlp_exporter_configured", endpoint=endpoint)
+        except Exception as e:
+            logger.warning("otlp_exporter_failed", error=str(e))
+    else:
+        logger.info("otlp_exporter_disabled", reason="OTEL_EXPORTER_OTLP_ENDPOINT is not configured")
 
     # Set global provider
     trace.set_tracer_provider(provider)

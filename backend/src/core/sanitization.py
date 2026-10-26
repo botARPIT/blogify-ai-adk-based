@@ -162,6 +162,37 @@ def sanitize_audience(audience: str | None) -> str:
     return sanitize_for_llm(audience, strict=True)
 
 
+#: Tone used when the caller supplies nothing usable. Matches the schema default
+#: so an absent tone still renders as a real instruction rather than a blank.
+DEFAULT_TONE = "professional"
+
+
+def sanitize_tone(tone: str | None) -> str:
+    """
+    Sanitize the requested writing tone.
+
+    Args:
+        tone: User-provided tone (a catalog value such as "professional")
+
+    Returns:
+        Sanitized tone string, never empty.
+    """
+    if not tone or not tone.strip():
+        return DEFAULT_TONE
+
+    tone = tone.strip()
+    if len(tone) > 100:
+        tone = tone[:100]
+
+    is_suspicious, _ = detect_injection(tone)
+
+    if is_suspicious:
+        return DEFAULT_TONE
+
+    sanitized = sanitize_for_llm(tone, strict=True)
+    return sanitized or DEFAULT_TONE
+
+
 def sanitize_feedback(feedback: str | None) -> str | None:
     """
     Sanitize approval/rejection feedback.

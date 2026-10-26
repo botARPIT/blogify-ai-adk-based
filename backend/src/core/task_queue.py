@@ -6,8 +6,13 @@ from datetime import datetime, timezone
 
 from src.config.logging_config import get_logger
 from src.core.redis_pool import get_redis_client
+from src.monitoring.metrics import queue_enqueue_failures_total
 
 logger = get_logger(__name__)
+
+
+class QueueFullError(Exception):
+    """Raised when the Redis ready queue has reached its configured capacity."""
 
 
 @dataclass
@@ -19,21 +24,25 @@ class BlogJob:
     audience: str
     tone: str
     phase: str
-    invocation_id: str | None = None
-    confirmation_request_id: str | None = None
+
     approved_outline: dict | None = None
     feedback_text: str | None = None
+    state_snapshot: dict | None = None
     outbox_event_id: int | None = None
     trace_context: dict[str, str] | None = None
+
+    lease_owner: str | None = None
+    lease_version: int | None = None
+
     enqueued_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class TaskQueue:
     QUEUE_KEY = "blogify:tasks"
+    MAX_QUEUE_DEPTH = 500
     PROCESSING_KEY = "blogify:processing"
     NOTIFY_CHANNEL = "blogify:notify"
     VISIBILITY_TIMEOUT_SECONDS = 300
-    
 
     DEQUEUE_SCRIPT = """
     local job = redis.call('RPOP', KEYS[1])
@@ -42,27 +51,51 @@ class TaskQueue:
     return job
     """
 
-    def __init__(self):
-        print("DEBUG [task_queue.py:41] TaskQueue.__init__ called", flush=True)
+    ENQUEUE_SCRIPT = """
+    if redis.call('LLEN', KEYS[1]) >= tonumber(ARGV[1]) then
+        return 0
+    end
+    redis.call('LPUSH', KEYS[1], ARGV[2])
+    return 1
+    """
+
+    def __init__(self) -> None:
         self._dequeue_script_sha: str | None = None
 
     async def _get_script_sha(self) -> str:
-        print("DEBUG [task_queue.py:44] TaskQueue._get_script_sha called", flush=True)
         if self._dequeue_script_sha is None:
             client = await get_redis_client()
             self._dequeue_script_sha = await client.script_load(self.DEQUEUE_SCRIPT)
         return self._dequeue_script_sha
 
     async def enqueue(self, job: BlogJob) -> None:
-        print(f"DEBUG [task_queue.py:50] TaskQueue.enqueue called with job session_id={job.session_id}, phase={job.phase}", flush=True)
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
-        await client.lpush(self.QUEUE_KEY, job_json)
-        await client.publish(self.NOTIFY_CHANNEL, "new_job")
+        try:
+            enqueued = await client.eval(
+                self.ENQUEUE_SCRIPT,
+                1,
+                self.QUEUE_KEY,
+                self.MAX_QUEUE_DEPTH,
+                job_json,
+            )
+        except Exception:
+            queue_enqueue_failures_total.labels(reason="redis_error").inc()
+            raise
+        if not enqueued:
+            queue_enqueue_failures_total.labels(reason="full").inc()
+            raise QueueFullError(f"Redis job queue is full (maximum {self.MAX_QUEUE_DEPTH})")
+        try:
+            await client.publish(self.NOTIFY_CHANNEL, "new_job")
+        except Exception:
+            # The job is already durable in the ready list; count the wake-up
+            # failure so the worker recovery path is visible without treating
+            # the enqueue as rolled back.
+            queue_enqueue_failures_total.labels(reason="notify_error").inc()
+            raise
         logger.info("job_enqueued", session_id=job.session_id, phase=job.phase)
 
     async def dequeue(self, timeout: int = 5) -> BlogJob | None:
-        print(f"DEBUG [task_queue.py:56] TaskQueue.dequeue called with timeout={timeout}", flush=True)
         client = await get_redis_client()
 
         deadline = datetime.now(timezone.utc).timestamp() + self.VISIBILITY_TIMEOUT_SECONDS
@@ -93,14 +126,12 @@ class TaskQueue:
         return BlogJob(**job_data)
 
     async def acknowledge(self, job: BlogJob) -> None:
-        print(f"DEBUG [task_queue.py:86] TaskQueue.acknowledge called with job session_id={job.session_id}", flush=True)
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
         await client.zrem(self.PROCESSING_KEY, job_json)
         logger.info("job_acknowledged", session_id=job.session_id)
 
     async def reclaim_stale(self) -> int:
-        print("DEBUG [task_queue.py:92] TaskQueue.reclaim_stale called", flush=True)
         client = await get_redis_client()
         now = datetime.now(timezone.utc).timestamp()
 
@@ -138,7 +169,6 @@ class TaskQueue:
         return bool(removed)
 
     async def extend_visibility(self, job: BlogJob, additional_seconds: int = 60) -> None:
-        print(f"DEBUG [task_queue.py:113] TaskQueue.extend_visibility called with job session_id={job.session_id}, additional_seconds={additional_seconds}", flush=True)
         client = await get_redis_client()
         job_json = json.dumps(job.__dict__)
         new_deadline = datetime.now(timezone.utc).timestamp() + additional_seconds
@@ -174,5 +204,6 @@ class TaskQueue:
                 pass
             finally:
                 await pubsub.close()
+
 
 task_queue = TaskQueue()

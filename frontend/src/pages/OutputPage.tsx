@@ -87,6 +87,24 @@ const OutputPage: React.FC = () => {
       <article className="bento-card content-frame article-reader" id="article-start">
         <div className="article-meta-line"><span>{content.audience || 'General readers'}</span><span>{content.word_count.toLocaleString()} words</span><span>{content.sources_count} sources</span></div>
         <MarkdownArticle markdown={articleMarkdown} />
+        {content.sources.length > 0 ? (
+          <section className="article-sources" aria-labelledby="article-sources-title">
+            <div className="article-sources-heading">
+              <span className="eyebrow">RESEARCH EVIDENCE</span>
+              <h2 id="article-sources-title">Sources</h2>
+            </div>
+            <ol>
+              {content.sources.map((source, index) => (
+                <li key={`${source.url}-${index}`}>
+                  <a href={source.url} target="_blank" rel="noreferrer noopener">
+                    {source.title}
+                  </a>
+                  <span>{source.provider}</span>
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null}
         <div className="article-endmark" aria-label="End of article"><i /><span>✳</span><i /></div>
       </article>
     </div>

@@ -46,23 +46,23 @@ finally:
     s.close()
 PY
 
-echo "==> [6/7] Checking local Redis (localhost:6479)"
+echo "==> [6/7] Checking local Redis (localhost:6379)"
 python3 - <<'PY'
 import socket, sys
 s = socket.socket()
 try:
     s.settimeout(2)
-    s.connect(("127.0.0.1", 6479))
+    s.connect(("127.0.0.1", 6379))
 except OSError:
-    print("ERROR: Redis is not reachable on localhost:6479. Start the blogify-ai-redis container.")
+    print("ERROR: Redis is not reachable on localhost:6379. Start the blogify-redis container.")
     sys.exit(1)
 finally:
     s.close()
 PY
 
-echo "==> [7/7] Running Alembic migrations and smoke tests"
+echo "==> [7/7] Running Alembic migrations and unit tests"
 alembic upgrade head
-pytest tests/smoke/ -v --tb=short
+pytest tests/unit -q --tb=short
 
 echo ""
 echo "✅  Bootstrap complete. Activate the venv with:"

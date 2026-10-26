@@ -106,7 +106,7 @@ class BudgetService:
             await self._session_repo.session.flush()
 
     async def release_excess(self, *, user_id: int, blog_session_id: int) -> None:
-        """Release the unspent portion of the reservation after a successful run.
+        """Release the unspent portion of the reservation after a terminal outcome.
 
         Reads reserved_usd from session_reservations to avoid stale-session bugs.
         """
@@ -115,11 +115,14 @@ class BudgetService:
             return
 
         reserved_usd = reservation.reserved_usd
+        reserved_tokens = reservation.reserved_tokens
 
         # get actual spends from blog_sessions
         session = await self._session_repo.get_by_id(blog_session_id)
         actual_usd = session.budget_spent_usd if session else Decimal("0")
         actual_tokens = session.budget_spent_tokens if session else 0
+        released_usd = max(Decimal("0"), reserved_usd - actual_usd)
+        released_tokens = max(0, reserved_tokens - actual_tokens)
         await self._account_repo.apply_commit(
             user_id=user_id,
             reserved_usd=reserved_usd,
@@ -133,9 +136,9 @@ class BudgetService:
             blog_session_id=blog_session_id,
             agent_run_id=None,
             entry_type=BudgetEntryType.RELEASE,
-            tokens=actual_tokens,
-            amount_usd=actual_usd,
-            note="Excess budget released after successful generation",
+            tokens=released_tokens,
+            amount_usd=released_usd,
+            note="Excess budget released after terminal workflow outcome",
         )
 
     async def release_all(self, *, user_id: int, blog_session_id: int) -> None:

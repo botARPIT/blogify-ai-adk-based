@@ -20,6 +20,21 @@ SCENARIO_PATH = FIXTURE_ROOT / "scenarios" / "editor_approved.json"
 
 @pytest.mark.asyncio
 async def test_editor_agent_uses_deterministic_fake_llm_and_persists_events(monkeypatch):
+    # Exercise the session store's event serialization without writing to a
+    # developer's running Redis instance through an already-imported client.
+    stored = {}
+
+    class MemoryRedis:
+        async def get(self, key):
+            return stored.get(key)
+
+        async def set(self, key, value, **_kwargs):
+            stored[key] = value
+
+    def redis_client():
+        return MemoryRedis()
+
+    monkeypatch.setattr("src.core.session_store.get_redis_client", redis_client)
     scenario = load_scenario(SCENARIO_PATH)
 
     def fake_model(_config=None):
@@ -50,6 +65,8 @@ async def test_editor_agent_uses_deterministic_fake_llm_and_persists_events(monk
         state={
             "blog_draft": "A deterministic draft for the editor.",
             "research_data": {"sources": [{"title": "Synthetic source"}]},
+            "audience": "general readers",
+            "tone": "professional",
         },
     )
 

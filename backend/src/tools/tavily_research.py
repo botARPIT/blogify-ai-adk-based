@@ -5,12 +5,13 @@ import json
 import os
 from typing import Any
 
-import httpx
-from tavily import TavilyClient
+from google.adk.tools.function_tool import FunctionTool
+from google.adk.tools.tool_context import ToolContext
+from tavily import TavilyClient  # type: ignore[import-untyped]
 
 from src.config.logging_config import get_logger
+from src.core.workflow_state_keys import RESEARCH_TOOL_DATA_KEY
 from src.monitoring.circuit_breaker import CircuitBreaker
-from src.tools.google_search import google_search_topic
 
 logger = get_logger(__name__)
 
@@ -31,7 +32,11 @@ def _get_tavily_client() -> TavilyClient:
     return _tavily_client
 
 
-async def research_topic(topic: str, max_results: int = 5) -> dict[str, Any]:
+async def research_topic(
+    topic: str,
+    max_results: int = 5,
+    tool_context: ToolContext | None = None,
+) -> dict[str, Any]:
     """
     Research a topic using Tavily API with deep research capability.
 
@@ -65,57 +70,44 @@ async def research_topic(topic: str, max_results: int = 5) -> dict[str, Any]:
         ]
         if sources:
             logger.info("research_completed", sources_found=len(sources), provider="tavily")
-            return {
+            return _capture_tool_result(tool_context, {
                 "topic": topic,
-                "summary": response.get("answer", f"Research results for: {topic}"),
+                "summary": response.get("answer") or f"Research results for: {topic}",
                 "total_sources": len(sources),
                 "sources": sources,
                 "provider": "tavily",
-            }
+            })
         tavily_error = ValueError("Tavily returned no usable sources")
     except Exception as exc:
         tavily_error = exc
         logger.warning("tavily_search_failed", error=str(exc))
 
-    google_error: Exception | None = None
-    try:
-        google_results = await google_search_topic(topic, max_results)
-        if google_results.get("sources"):
-            logger.info(
-                "research_completed",
-                sources_found=google_results["total_sources"],
-                provider="google_custom_search",
-            )
-            return google_results
-        raise ValueError("Google Search returned no usable sources")
-    except Exception as exc:
-        google_error = exc
-        logger.warning(
-            "google_search_fallback_failed",
-            error_type=type(exc).__name__,
-            status_code=getattr(getattr(exc, "response", None), "status_code", None),
-        )
-
     if client is not None:
         try:
-            return await _deep_research(client, topic)
+            return _capture_tool_result(tool_context, await _deep_research(client, topic))
         except Exception as deep_error:
             logger.warning("deep_research_not_available", error=str(deep_error))
 
-    google_error_detail = (
-        f"HTTP {google_error.response.status_code}"
-        if isinstance(google_error, httpx.HTTPStatusError)
-        else type(google_error).__name__
-    )
-    error = f"Tavily: {type(tavily_error).__name__}; Google Search: {google_error_detail}"
+    error = f"Tavily: {type(tavily_error).__name__}"
     logger.error("research_failed", error=error, topic=topic[:50])
-    return {
+    return _capture_tool_result(tool_context, {
         "topic": topic,
         "summary": f"Research failed for: {topic}",
         "total_sources": 0,
         "sources": [],
+        "provider": "tavily",
         "error": error,
-    }
+    })
+
+
+def _capture_tool_result(
+    tool_context: ToolContext | None,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Expose the exact tool payload to the deterministic workflow node."""
+    if tool_context is not None:
+        tool_context.state[RESEARCH_TOOL_DATA_KEY] = result
+    return result
 
 
 async def _deep_research(client: TavilyClient, topic: str) -> dict[str, Any]:
@@ -172,10 +164,6 @@ async def _deep_research(client: TavilyClient, topic: str) -> dict[str, Any]:
         logger.debug("research_polling", status=status, elapsed=elapsed)
 
     raise TimeoutError(f"Research timed out after {max_wait} seconds")
-
-
-# ADK Function Tool wrapper for agent use
-from google.adk.tools import FunctionTool
 
 
 @FunctionTool

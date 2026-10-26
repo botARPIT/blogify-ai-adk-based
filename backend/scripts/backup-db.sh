@@ -5,7 +5,7 @@
 set -e
 
 RETENTION_DAYS="${1:-7}"
-BACKUP_DIR="/backups"
+BACKUP_DIR="${BACKUP_DIR:-/backups}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="${BACKUP_DIR}/blogify_${TIMESTAMP}.sql.gz"
 

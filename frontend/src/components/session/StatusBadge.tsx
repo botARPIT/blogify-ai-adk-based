@@ -12,7 +12,8 @@ const STATUS_LABELS: Record<string, string> = {
   revision_requested: 'Revision Requested',
   completed: 'Completed',
   failed: 'Failed',
-  rejected: 'Rejected',
+  rejected: 'Rejected by you',
+  agent_rejected: 'Blocked by safety check',
   cancelled: 'Cancelled',
 };
 
@@ -22,7 +23,8 @@ const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
   const isFailure =
     normalizedStatus === 'failed' ||
     normalizedStatus === 'cancelled' ||
-    normalizedStatus === 'rejected';
+    normalizedStatus === 'rejected' ||
+    normalizedStatus === 'agent_rejected';
   const badgeClass = isFailure ? 'status-failure' : isAttention ? 'status-attention' : normalizedStatus === 'completed' ? 'status-done' : '';
 
   return (

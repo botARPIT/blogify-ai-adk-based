@@ -28,6 +28,7 @@ def event(*, status="PENDING", attempts=0, locked_by=None):
         status=status,
         attempts=attempts,
         locked_by=locked_by,
+        locked_until=datetime.now(timezone.utc) + timedelta(minutes=5) if locked_by else None,
     )
 
 
@@ -133,7 +134,7 @@ async def test_retry_requeues_with_backoff_and_clears_dispatch_lease():
 
 
 @pytest.mark.asyncio
-async def test_retry_at_attempt_limit_marks_event_failed():
+async def test_retry_at_attempt_limit_leaves_claim_for_fenced_failure_write():
     row = event(status="PROCESSING", attempts=4, locked_by="worker-a")
     session = session_with_row(row)
 
@@ -142,10 +143,12 @@ async def test_retry_at_attempt_limit_marks_event_failed():
     )
 
     assert retried is False
-    assert row.status == "FAILED"
+    # The processor must atomically persist the session failure while it still
+    # owns this claim, then mark the outbox FAILED in that same transaction.
+    assert row.status == "PROCESSING"
     assert row.last_error == "provider unavailable"
-    assert row.locked_by is None
-    assert row.locked_until is None
+    assert row.locked_by == "worker-a"
+    assert row.locked_until is not None
     session.flush.assert_awaited_once()
 
 

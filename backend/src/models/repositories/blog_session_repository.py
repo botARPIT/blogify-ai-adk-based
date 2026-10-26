@@ -88,9 +88,7 @@ class BlogSessionRepository:
                 or_(BlogSession.topic.ilike(pattern), BlogSession.audience.ilike(pattern))
             )
 
-        total = await self._session.scalar(
-            select(func.count(BlogSession.id)).where(*conditions)
-        )
+        total = await self._session.scalar(select(func.count(BlogSession.id)).where(*conditions))
         result = await self._session.execute(
             select(BlogSession)
             .where(*conditions)
@@ -110,6 +108,7 @@ class BlogSessionRepository:
         unsuccessful_statuses = [
             BlogSessionStatus.FAILED.value,
             BlogSessionStatus.REJECTED.value,
+            BlogSessionStatus.AGENT_REJECTED.value,
             BlogSessionStatus.CANCELLED.value,
         ]
         non_failed_conditions = [
@@ -118,13 +117,23 @@ class BlogSessionRepository:
         ]
         summary = await self._session.execute(
             select(
+                func.sum(case((BlogSession.status.notin_(unsuccessful_statuses), 1), else_=0)),
                 func.sum(
-                    case((BlogSession.status.notin_(unsuccessful_statuses), 1), else_=0)
+                    case((BlogSession.status == BlogSessionStatus.COMPLETED.value, 1), else_=0)
                 ),
-                func.sum(case((BlogSession.status == BlogSessionStatus.COMPLETED.value, 1), else_=0)),
-                func.sum(case((BlogSession.status.in_([
-                    *unsuccessful_statuses,
-                ]), 1), else_=0)),
+                func.sum(
+                    case(
+                        (
+                            BlogSession.status.in_(
+                                [
+                                    *unsuccessful_statuses,
+                                ]
+                            ),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
                 func.coalesce(
                     func.sum(
                         case(
@@ -243,8 +252,6 @@ class BlogSessionRepository:
         *,
         outline_data: dict | None = None,
         final_content: str | None = None,
-        invocation_id: str | None = None,
-        confirmation_request_id: str | None = None,
         adk_session_id: str | None = None,
         active_blog_version_id: int | None = None,
     ) -> None:
@@ -256,10 +263,6 @@ class BlogSessionRepository:
             blog_session.outline_data = outline_data
         if final_content is not None:
             blog_session.final_content = final_content
-        if invocation_id is not None:
-            blog_session.invocation_id = invocation_id
-        if confirmation_request_id is not None:
-            blog_session.confirmation_request_id = confirmation_request_id
         if adk_session_id is not None:
             blog_session.adk_session_id = adk_session_id
         if active_blog_version_id is not None:
@@ -267,21 +270,6 @@ class BlogSessionRepository:
 
         blog_session.updated_at = datetime.now(timezone.utc)
         await self._session.flush()
-
-    async def save_outline(
-        self,
-        session_id: int,
-        outline_data: dict,
-        invocation_id: str,
-        confirmation_request_id: str,
-    ) -> None:
-        blog_session = await self.get_by_id(session_id)
-        if blog_session:
-            blog_session.outline_data = outline_data
-            blog_session.invocation_id = invocation_id
-            blog_session.confirmation_request_id = confirmation_request_id
-            blog_session.updated_at = datetime.now(timezone.utc)
-            await self._session.flush()
 
     async def save_final_content(self, session_id: int, content: str) -> None:
         blog_session = await self.get_by_id(session_id)
@@ -312,5 +300,21 @@ class BlogSessionRepository:
         blog_session.status = BlogSessionStatus.FAILED
         blog_session.failure_reason = reason
         blog_session.failed_at = datetime.now(timezone.utc)
+        blog_session.updated_at = datetime.now(timezone.utc)
+        await self._session.flush()
+
+    async def mark_agent_rejected(self, session_id: int, reason: str) -> None:
+        """Persist a terminal rejection made by the automated intent gate."""
+        blog_session = await self.get_by_id(session_id)
+        if not blog_session:
+            return
+
+        current = BlogSessionStatus(blog_session.status)
+        BlogSessionStatus.validate_transition(current, BlogSessionStatus.AGENT_REJECTED)
+
+        blog_session.status = BlogSessionStatus.AGENT_REJECTED
+        blog_session.current_stage = "intent_rejected"
+        blog_session.job_phase = None
+        blog_session.failure_reason = reason
         blog_session.updated_at = datetime.now(timezone.utc)
         await self._session.flush()

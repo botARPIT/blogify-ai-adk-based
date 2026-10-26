@@ -62,8 +62,10 @@ jobs:
           TAVILY_API_KEY: test-key
           DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
           REDIS_URL: redis://localhost:6379/0
+          BLOGIFY_TEST_DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+          BLOGIFY_TEST_REDIS_URL: redis://localhost:6379/15
           CORS_ORIGINS: "http://localhost:3000"
-          JWT_SECRET: test-secret
+          JWT_SECRET_KEY: test-secret
           ADMIN_API_KEY: test-admin-key
         run: |
           python -m pytest tests/ -v --cov=src --cov-report=xml
@@ -144,6 +146,10 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: pnpm install --frozen-lockfile
+
+      - name: Check frontend types
+        working-directory: frontend
+        run: pnpm exec tsc --noEmit
 
       - name: Build frontend
         working-directory: frontend

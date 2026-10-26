@@ -29,7 +29,7 @@ const SessionCard: React.FC<SessionCardProps> = ({ session }) => {
   const status = session.status.toLowerCase();
   const href = getRouteForStatus(String(session.session_id), status);
   const isDone = status === 'completed';
-  const isFailed = ['failed', 'rejected', 'cancelled'].includes(status);
+  const isFailed = ['failed', 'rejected', 'agent_rejected', 'cancelled'].includes(status);
   const marker = isDone ? '✓' : isFailed ? '!' : '✳';
 
   return (

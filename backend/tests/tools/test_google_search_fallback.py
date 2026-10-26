@@ -57,35 +57,34 @@ async def test_google_search_requires_its_own_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_tavily_failure_falls_back_to_google(monkeypatch):
+async def test_tavily_failure_returns_no_fabricated_sources(monkeypatch):
     from src.tools import tavily_research
 
     class BrokenTavilyClient:
         def search(self, **_kwargs):
             raise RuntimeError("Tavily unavailable")
 
-    google_result = {
-        "topic": "test topic",
-        "summary": "Google results",
-        "total_sources": 1,
-        "sources": [{"title": "Google source", "url": "https://example.org"}],
-        "provider": "google_custom_search",
-    }
+        def research(self, *_args):
+            raise RuntimeError("Deep research unavailable")
+
     monkeypatch.setattr(tavily_research, "_get_tavily_client", lambda: BrokenTavilyClient())
-    google_fallback = AsyncMock(return_value=google_result)
-    monkeypatch.setattr(tavily_research, "google_search_topic", google_fallback)
-
     result = await tavily_research.research_topic("test topic", max_results=3)
+    assert result["total_sources"] == 0
+    assert result["sources"] == []
+    assert result["error"] == "Tavily: RuntimeError"
 
-    assert result == google_result
-    google_fallback.assert_awaited_once_with("test topic", 3)
 
+@pytest.mark.parametrize("provider,expected_tools", [("google", 2), ("ollama", 1)])
+def test_research_agent_only_exposes_native_search_for_google(monkeypatch, provider, expected_tools):
+    from dataclasses import replace
+    from src.agents import research_agent
+    from src.llm.config import LLMProvider
 
-def test_research_agent_exposes_both_research_tools():
-    from src.agents.research_agent import RESEARCH_INSTRUCTION, create_research_agent
-
-    agent = create_research_agent()
-
-    assert len(agent.tools) == 2
-    assert "google_search_topic" in RESEARCH_INSTRUCTION
-    assert "zero sources" in RESEARCH_INSTRUCTION
+    monkeypatch.setattr(research_agent, "RESEARCH_MODEL", replace(
+        research_agent.RESEARCH_MODEL, provider=LLMProvider(provider),
+    ))
+    monkeypatch.setattr(research_agent, "create_model", lambda _config: "gemini-2.5-flash")
+    agent = research_agent.create_research_agent()
+    assert len(agent.tools) == expected_tools
+    assert "google_search" in research_agent.RESEARCH_INSTRUCTION
+    assert "zero sources" in research_agent.RESEARCH_INSTRUCTION

@@ -16,6 +16,9 @@ from src.llm.model_configs import OUTLINE_MODEL
 OUTLINE_INSTRUCTION = """
 Generate a structured blog outline based on the topic and audience from intent result: {intent_result}
 
+Target audience: {audience}
+Requested tone: {tone}
+
 Requirements:
 - Title: Compelling, max 120 characters, SEO-friendly
 - Sections: 3-7 sections

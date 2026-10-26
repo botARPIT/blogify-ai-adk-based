@@ -41,7 +41,9 @@ class BlogVersionRepository:
         return version
 
     async def get_by_id(self, version_id: int) -> BlogVersion | None:
-        result = await self._session.execute(select(BlogVersion).where(BlogVersion.id == version_id))
+        result = await self._session.execute(
+            select(BlogVersion).where(BlogVersion.id == version_id)
+        )
         return result.scalar_one_or_none()
 
     async def get_active_for_session(
@@ -88,6 +90,8 @@ class BlogVersionRepository:
         snapshot = dict(active_version.state_snapshot or {})
         if feedback_text is not None:
             snapshot["outline_feedback"] = feedback_text
+        snapshot["editor_review"] = {}
+        snapshot["refinement_iterations"] = 0
 
         revision = BlogVersion(
             blog_session_id=blog_session.id,
@@ -103,8 +107,6 @@ class BlogVersionRepository:
             editor_review=active_version.editor_review,
             feedback_text=feedback_text,
             adk_session_id=active_version.adk_session_id or blog_session.adk_session_id,
-            invocation_id=active_version.invocation_id,
-            confirmation_request_id=active_version.confirmation_request_id,
             state_snapshot=snapshot,
             created_from=BlogJobPhase.REVISION.value,
         )
@@ -132,8 +134,6 @@ class BlogVersionRepository:
         feedback_text: str | None = None,
         user_action: str | None = None,
         adk_session_id: str | None = None,
-        invocation_id: str | None = None,
-        confirmation_request_id: str | None = None,
         state_snapshot: dict[str, Any] | None = None,
         completed: bool = False,
         failed: bool = False,
@@ -166,10 +166,6 @@ class BlogVersionRepository:
             version.user_action = user_action
         if adk_session_id is not None:
             version.adk_session_id = adk_session_id
-        if invocation_id is not None:
-            version.invocation_id = invocation_id
-        if confirmation_request_id is not None:
-            version.confirmation_request_id = confirmation_request_id
         if state_snapshot is not None:
             version.state_snapshot = state_snapshot
         if completed:

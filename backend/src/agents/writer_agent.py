@@ -14,6 +14,7 @@ by the application; do not ask the user to provide them again.
 
 Topic: {topic}
 Target audience: {audience}
+Requested tone: {tone}
 Approved outline: {approved_outline}
 Current outline: {blog_outline}
 Research findings and sources: {research_data}
@@ -26,7 +27,8 @@ no approved outline is available. Write a complete blog post that:
 3. CITATIONS: Reference sources using [1], [2], etc. format. [1] maps to
    research_data.sources[0], [2] to sources[1], and so on. Cite only claims
    supported by those results; never invent citations or source URLs.
-4. TONE: Write in an engaging, professional tone for the target audience
+4. TONE: Write in the requested tone ({tone}), calibrated for the target
+   audience ({audience})
 5. LENGTH: Aim for 800-1200 words total, matching section word targets
 
 Human reviewer feedback:

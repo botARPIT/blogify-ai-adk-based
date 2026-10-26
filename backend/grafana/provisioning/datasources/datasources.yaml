@@ -13,24 +13,3 @@ datasources:
     access: proxy
     url: http://tempo:3200
     editable: false
-  - name: Elasticsearch
-    uid: elasticsearch
-    type: elasticsearch
-    access: proxy
-    url: ${ELASTICSEARCH_URL}
-    basicAuth: true
-    basicAuthUser: ${ELASTICSEARCH_GRAFANA_USERNAME}
-    jsonData:
-      index: filebeat-*
-      interval: Daily
-      timeField: '@timestamp'
-      logMessageField: event
-      logLevelField: level
-      dataLinks:
-        - datasourceUid: tempo
-          field: trace_id
-          url: '$${__value.raw}'
-          title: View trace
-    secureJsonData:
-      basicAuthPassword: ${ELASTICSEARCH_GRAFANA_PASSWORD}
-    editable: false

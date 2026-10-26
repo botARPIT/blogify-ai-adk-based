@@ -32,6 +32,15 @@ class AgentRunRepository:
         )
         return list(result.scalars().all())
 
+    async def get_latest_for_session(self, blog_session_id: int) -> AgentRun | None:
+        result = await self._session.execute(
+            select(AgentRun)
+            .where(AgentRun.blog_session_id == blog_session_id)
+            .order_by(AgentRun.started_at.desc(), AgentRun.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_completed_stages(self, blog_session_id: int) -> set[str]:
         """Return the set of stage names that completed successfully.
 

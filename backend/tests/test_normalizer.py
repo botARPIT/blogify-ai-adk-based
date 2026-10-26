@@ -352,18 +352,17 @@ class TestErrorReporting:
 
 class TestIntent:
     def test_valid_intent(self):
-        intent = normalize_intent('{"status": "CLEAR", "message": "Good topic"}')
-        assert intent.status == "CLEAR"
-        assert intent.message == "Good topic"
+        intent = normalize_intent('{"intent_clear": true}')
+        assert intent.intent_clear is True
 
     def test_fenced_intent(self):
-        intent = normalize_intent('```json\n{"status": "CLEAR", "message": "ok"}\n```')
-        assert intent.status == "CLEAR"
+        intent = normalize_intent('```json\n{"intent_clear": true}\n```')
+        assert intent.intent_clear is True
 
     def test_missing_field_fails(self):
         with pytest.raises(NormalizationError) as exc:
-            normalize_intent('{"status": "CLEAR"}')
-        assert "message" in exc.value.field_paths
+            normalize_intent('{"message": "missing gate"}')
+        assert "intent_clear" in exc.value.field_paths
 
     def test_non_json_fails(self):
         with pytest.raises(NormalizationError):
@@ -425,8 +424,10 @@ class TestExtractRawOutput:
     def test_pydantic_model_becomes_json(self):
         from src.models.schemas import IntentSchema
 
-        raw = extract_raw_output(IntentSchema(status="CLEAR", message="m"))
-        assert '"CLEAR"' in raw
+        import json
+
+        raw = extract_raw_output(IntentSchema(intent_clear=True))
+        assert json.loads(raw) == {"intent_clear": True}
 
     def test_adk_content_becomes_text(self):
         from google.genai import types

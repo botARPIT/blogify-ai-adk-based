@@ -15,8 +15,11 @@ from __future__ import annotations
 
 from typing import Any, Final
 
+from src.core.workflow_state_keys import RESEARCH_TOOL_DATA_KEY
+
 TOPIC_KEY: Final = "topic"
 AUDIENCE_KEY: Final = "audience"
+TONE_KEY: Final = "tone"
 INTENT_RESULT_KEY: Final = "intent_result"
 OUTLINE_KEY: Final = "blog_outline"
 APPROVED_OUTLINE_KEY: Final = "approved_outline"
@@ -34,6 +37,7 @@ EDITOR_REVIEW_KEY: Final = "editor_review"
 SESSION_STATE_KEYS: Final[tuple[str, ...]] = (
     TOPIC_KEY,
     AUDIENCE_KEY,
+    TONE_KEY,
     INTENT_RESULT_KEY,
     OUTLINE_KEY,
     APPROVED_OUTLINE_KEY,
@@ -54,6 +58,7 @@ REFINEMENT_ITERATIONS_KEY: Final = "refinement_iterations"
 _EMPTY_BY_KEY: Final[dict[str, Any]] = {
     TOPIC_KEY: "",
     AUDIENCE_KEY: "",
+    TONE_KEY: "",
     INTENT_RESULT_KEY: {},
     OUTLINE_KEY: {},
     APPROVED_OUTLINE_KEY: {},
@@ -65,11 +70,12 @@ _EMPTY_BY_KEY: Final[dict[str, Any]] = {
 }
 
 
-def empty_session_state(topic: str = "", audience: str = "") -> dict[str, Any]:
+def empty_session_state(topic: str = "", audience: str = "", tone: str = "") -> dict[str, Any]:
     """Seed every session key with its empty value."""
     state: dict[str, Any] = {key: _fresh(value) for key, value in _EMPTY_BY_KEY.items()}
     state[TOPIC_KEY] = topic
     state[AUDIENCE_KEY] = audience
+    state[TONE_KEY] = tone
     return state
 
 
@@ -77,6 +83,7 @@ def build_session_state(
     *,
     topic: str,
     audience: str,
+    tone: str = "",
     intent_result: dict[str, Any] | None = None,
     blog_outline: dict[str, Any] | None = None,
     approved_outline: dict[str, Any] | None = None,
@@ -96,6 +103,7 @@ def build_session_state(
     return {
         TOPIC_KEY: topic,
         AUDIENCE_KEY: audience,
+        TONE_KEY: tone,
         INTENT_RESULT_KEY: intent_result or {},
         OUTLINE_KEY: blog_outline or {},
         APPROVED_OUTLINE_KEY: approved_outline or {},
@@ -128,7 +136,9 @@ __all__ = [
     "OUTLINE_REVIEW_RESULT_KEY",
     "REFINEMENT_ITERATIONS_KEY",
     "RESEARCH_DATA_KEY",
+    "RESEARCH_TOOL_DATA_KEY",
     "SESSION_STATE_KEYS",
+    "TONE_KEY",
     "TOPIC_KEY",
     "build_session_state",
     "empty_session_state",

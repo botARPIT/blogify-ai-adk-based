@@ -40,7 +40,12 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
-from src.models.schemas import EditorReviewSchema, IntentSchema, OutlineSchema
+from src.models.schemas import (
+    EditorReviewSchema,
+    IntentSchema,
+    OutlineSchema,
+    ResearchDataSchema,
+)
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -267,6 +272,58 @@ def normalize_editor_review(raw_output: str) -> EditorReviewSchema:
         payload,
         stage="editor",
         agent="editor_agent",
+        output_format="json",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Research
+# ---------------------------------------------------------------------------
+
+
+def normalize_research(raw_output: Any) -> ResearchDataSchema:
+    """Validate the evidence payload emitted by the research tool or agent.
+
+    The workflow prefers the structured payload captured directly from
+    ``research_topic``. A JSON-only agent response remains supported for ADK's
+    native Google Search, whose grounding data is returned through the model
+    rather than a Python function response.
+    """
+    if isinstance(raw_output, dict):
+        return _validate(
+            ResearchDataSchema,
+            raw_output,
+            stage="research",
+            agent="research_agent",
+            output_format="tool_result",
+        )
+
+    text = _strip_fences(extract_raw_output(raw_output))
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise NormalizationError(
+            workflow="blog_generation",
+            stage="research",
+            agent="research_agent",
+            output_format="text",
+            reason=f"expected a JSON evidence object: {exc.msg}",
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise NormalizationError(
+            workflow="blog_generation",
+            stage="research",
+            agent="research_agent",
+            output_format="json",
+            reason=f"expected a JSON object, got {type(payload).__name__}",
+        )
+
+    return _validate(
+        ResearchDataSchema,
+        payload,
+        stage="research",
+        agent="research_agent",
         output_format="json",
     )
 

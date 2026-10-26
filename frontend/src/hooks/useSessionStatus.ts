@@ -5,7 +5,7 @@ import { getRouteForStatus } from '../lib/session-routing';
 
 const ACTIVE_STATUSES = new Set(['queued', 'processing', 'revision_requested', 'queued', 'processing']);
 const PAUSED_STATUSES = new Set(['awaiting_outline_review', 'awaiting_final_review']);
-const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'rejected', 'agent_rejected', 'cancelled']);
 
 function normalizeStatus(status: string): string {
   const upper = status?.toUpperCase();
@@ -17,6 +17,8 @@ function normalizeStatus(status: string): string {
     'REVISION_REQUESTED': 'revision_requested',
     'COMPLETED': 'completed',
     'FAILED': 'failed',
+    'REJECTED': 'rejected',
+    'AGENT_REJECTED': 'agent_rejected',
     'CANCELLED': 'cancelled',
   };
   return statusMap[upper] || status.toLowerCase();

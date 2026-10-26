@@ -36,7 +36,6 @@ class BlogService:
         task_queue: TaskQueue,
         redis_client,
     ) -> None:
-        print("DEBUG [blog_service.py:16] BlogService.__init__ called", flush=True)
         self._session_repo = session_repo
         self._version_repo = version_repo
         self._budget_service = budget_service
@@ -92,7 +91,6 @@ class BlogService:
         tone: str,
         idempotency_key: str | None = None,
     ) -> BlogSession:
-        print(f"DEBUG [blog_service.py:28] BlogService.create_generation called: user_id={user_id}, topic={topic}, audience={audience}, tone={tone}, idempotency_key={idempotency_key}", flush=True)
         if idempotency_key:
             existing = await self._session_repo.get_by_idempotency_key(user_id, idempotency_key)
             if existing:
@@ -135,6 +133,7 @@ class BlogService:
             state_snapshot={
                 "topic": topic,
                 "audience": audience,
+                "tone": tone,
                 "intent_result": {},
                 "blog_outline": {},
                 "approved_outline": {},
@@ -173,11 +172,9 @@ class BlogService:
         return session
 
     async def get_user_sessions(self, user_id: int) -> list[BlogSession]:
-        print(f"DEBUG [blog_service.py:89] BlogService.get_user_sessions called: user_id={user_id}", flush=True)
         return await self._session_repo.get_for_user(user_id)
 
     async def get_session(self, user_id: int, session_id: int) -> BlogSession:
-        print(f"DEBUG [blog_service.py:92] BlogService.get_session called: user_id={user_id}, session_id={session_id}", flush=True)
         session = await self._session_repo.get_by_id(session_id)
         if not session:
             raise ValueError("Session not found")
@@ -194,7 +191,6 @@ class BlogService:
         feedback_text: str | None = None,
         action: str = "approve",
     ) -> BlogSession:
-        print(f"DEBUG [blog_service.py:100] BlogService.submit_outline_review called: user_id={user_id}, session_id={session_id}, approved_outline={approved_outline}, feedback_text={feedback_text}", flush=True)
         session = await self._session_repo.get_by_id_for_update(session_id)
         if not session:
             raise ValueError("Session not found")
@@ -263,7 +259,6 @@ class BlogService:
         action: str,
         feedback_text: str | None = None,
     ) -> BlogSession:
-        print(f"DEBUG [blog_service.py:133] BlogService.submit_final_review called: user_id={user_id}, session_id={session_id}, action={action}, feedback_text={feedback_text}", flush=True)
         session = await self._session_repo.get_by_id_for_update(session_id)
         if not session:
             raise ValueError("Session not found")
@@ -296,28 +291,26 @@ class BlogService:
                     completed=True,
                 )
         elif review_action == FinalReviewAction.REVISION_REQUESTED:
+            if active_version is None:
+                raise ValueError("Revision requested without an active blog version")
+
             session.status = BlogSessionStatus.QUEUED.value
             session.job_phase = BlogJobPhase.REVISION.value
             session.current_stage = "revision_requested"
             session.failure_reason = None
             session.updated_at = datetime.now(timezone.utc)
 
-            if active_version:
-                snapshot = dict(active_version.state_snapshot or {})
-                snapshot["outline_feedback"] = feedback_text or ""
-                await self._version_repo.update_version_state(
-                    active_version.id,
-                    status=BlogSessionStatus.QUEUED.value,
-                    job_phase=BlogJobPhase.REVISION.value,
-                    feedback_text=feedback_text or active_version.feedback_text,
-                    user_action=UserAction.REVISION_REQUESTED.value,
-                    state_snapshot=snapshot,
-                )
+            revision = await self._version_repo.create_revision_from_active(
+                blog_session=session,
+                active_version=active_version,
+                feedback_text=feedback_text or active_version.feedback_text,
+            )
+            revision.user_action = UserAction.REVISION_REQUESTED.value
 
             job = BlogJob(
                 session_id=session.id,
                 user_id=user_id,
-                adk_session_id=session.adk_session_id,
+                adk_session_id=revision.adk_session_id or session.adk_session_id,
                 topic=session.topic,
                 audience=session.audience,
                 tone=session.tone,
@@ -347,5 +340,4 @@ class BlogService:
         return session
 
     async def get_budget(self, user_id: int) -> dict:
-        print(f"DEBUG [blog_service.py:156] BlogService.get_budget called: user_id={user_id}", flush=True)
         return await self._budget_service.get_balance_snapshot(user_id)

@@ -16,12 +16,15 @@ from src.llm.model_configs import EDITOR_MODEL
 EDITOR_INSTRUCTION = """
 Review the blog draft: {blog_draft}
 Research sources: {research_data}
+Target audience: {audience}
+Requested tone: {tone}
 
 Review criteria:
 1. Grammar, spelling, punctuation
 2. Citation accuracy - all [N] references must map to research_data.sources
    in array order ([1] is sources[0]); do not add unsupported citations
-3. Tone consistency and professionalism
+3. Tone consistency with the requested tone ({tone}) for the target audience
+   ({audience})
 4. Word count adherence to outline targets
 5. Content quality and engagement
 

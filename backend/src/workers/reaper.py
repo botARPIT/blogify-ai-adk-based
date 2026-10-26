@@ -3,19 +3,23 @@
 Run as a standalone process: python -m src.workers.reaper
 
 Exactly ONE reaper should run across the entire cluster. Running multiple
-reapers is safe (idempotent DB updates) but wasteful — keep replicas=1 in
-the compose/k8s config.
+reapers is safe (idempotent DB updates) but wasteful — configure one reaper
+process in the active deployment runtime.
 """
 
 import asyncio
 import json
+import os
+
+from prometheus_client import start_http_server
 
 from src.config.logging_config import get_logger
 from src.core.database import AsyncSessionFactory
-from src.core.task_queue import BlogJob, TaskQueue
+from src.core.task_queue import BlogJob, QueueFullError, TaskQueue
 from src.models.orm_models import BlogSessionStatus
 from src.models.repositories.blog_session_repository import BlogSessionRepository
 from src.models.repositories.workflow_outbox_repository import WorkflowOutboxRepository
+from src.monitoring.runtime_metrics import cancel_metrics_task, runtime_metrics_poller
 from src.monitoring.tracing import init_tracing, instrument_clients, instrument_database
 
 logger = get_logger(__name__)
@@ -76,6 +80,10 @@ class Reaper:
                 job_data["outbox_event_id"] = event_id
                 job_data["trace_context"] = payload.get("trace_context")
                 await self._queue.enqueue(BlogJob(**job_data))
+            except QueueFullError:
+                # Keep this and later outbox rows undispatched; retry next relay cycle.
+                logger.info("outbox_dispatch_paused_queue_full", event_id=event_id)
+                break
             except (KeyError, TypeError, ValueError) as exc:
                 logger.error("invalid_outbox_job", event_id=event_id, error=str(exc))
                 continue
@@ -107,6 +115,7 @@ class Reaper:
         if cleaned > 0:
             logger.info("queue_cleaned", count=cleaned)
 
+
 async def main() -> None:
     from src.config.env_config import config
     from src.config.logging_config import setup_logging
@@ -121,9 +130,20 @@ async def main() -> None:
     init_tracing()
     instrument_clients()
     instrument_database(engine)
+    server, _ = start_http_server(
+        int(os.getenv("REAPER_METRICS_PORT", "9102")), addr="0.0.0.0"
+    )
+    metrics_task = asyncio.create_task(
+        runtime_metrics_poller("reaper", include_shared_state=False)
+    )
     logger.info("reaper_starting")
     reaper = Reaper(TaskQueue())
-    await reaper.run_forever()
+    try:
+        await reaper.run_forever()
+    finally:
+        await cancel_metrics_task(metrics_task)
+        server.shutdown()
+        server.server_close()
 
 
 if __name__ == "__main__":

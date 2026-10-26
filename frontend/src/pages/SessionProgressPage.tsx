@@ -20,13 +20,14 @@ const SessionProgressPage = () => {
   }
 
   const currentSession = session!;
-  const isFailureState = ['failed', 'rejected', 'cancelled'].includes(currentSession.status);
+  const isFailureState = ['failed', 'rejected', 'agent_rejected', 'cancelled'].includes(currentSession.status);
   const statusMessage: Record<string, string> = {
     queued: 'The request is accepted and waiting for a worker slot.',
     processing: 'Agents are actively moving through the current drafting stage.',
     revision_requested: 'A revision loop was requested and the drafting process is resuming.',
     failed: 'This session hit an execution error and needs operator attention.',
     rejected: 'This session was explicitly rejected by the reviewer and will not resume.',
+    agent_rejected: 'The automated intent gate blocked this request before outline or research began.',
     cancelled: 'This session was cancelled before completion.',
   };
 
@@ -41,6 +42,7 @@ const SessionProgressPage = () => {
 
       {currentSession.status === 'failed' ? <div className="workflow-error-banner" role="alert"><span>!</span><div><strong>This run stopped before it finished.</strong><p>Review the session detail for stage logs and try a new story when you’re ready. You can refresh this page to check whether the status changed.</p></div></div> : null}
       {currentSession.status === 'rejected' ? <div className="workflow-notice"><span>↗</span><div><strong>This draft was rejected.</strong><p>The session is complete and will not resume. Its outline and review history remain available in the detail view.</p></div></div> : null}
+      {currentSession.status === 'agent_rejected' ? <div className="workflow-notice"><span>!</span><div><strong>This request was blocked by the intent gate.</strong><p>No outline, research, or draft was generated. The session detail retains the intent-agent audit record.</p></div></div> : null}
       <div className="progress-page-grid">
         <StageTimeline status={currentSession.status} currentStage={currentSession.current_stage} currentAgent={currentSession.current_agent} />
 
@@ -86,7 +88,7 @@ const SessionProgressPage = () => {
           </div>
           {isFailureState ? (
             <p className="text-secondary" style={{ marginTop: 'var(--spacing-sm)' }}>
-              Rejections and cancellations are final. Failed runs can be inspected from session details; create a fresh session to try again.
+              Intent-gate and human-review rejections are final. Failed runs can be inspected from session details; create a fresh session to try again.
             </p>
           ) : null}
         </div>

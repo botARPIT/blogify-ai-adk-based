@@ -49,11 +49,12 @@ class TestJobPersistence:
 
         await queue.enqueue(job)
 
-        mock_redis.lpush.assert_called_once()
-        call_args = mock_redis.lpush.call_args
-        assert call_args[0][0] == "blogify:tasks"
+        mock_redis.eval.assert_awaited_once()
+        call_args = mock_redis.eval.call_args
+        assert call_args.args[2] == "blogify:tasks"
+        assert call_args.args[3] == TaskQueue.MAX_QUEUE_DEPTH
 
-        enqueued_job = json.loads(call_args[0][1])
+        enqueued_job = json.loads(call_args.args[4])
         assert enqueued_job["session_id"] == 1
         assert enqueued_job["user_id"] == 1
         assert enqueued_job["topic"] == "Test Topic"
@@ -161,8 +162,8 @@ class TestJobEnqueueDetails:
 
         await queue.enqueue(job)
 
-        call_args = mock_redis.lpush.call_args
-        enqueued_job = json.loads(call_args[0][1])
+        call_args = mock_redis.eval.call_args
+        enqueued_job = json.loads(call_args.args[4])
 
         assert "session_id" in enqueued_job
         assert "user_id" in enqueued_job
@@ -204,4 +205,4 @@ class TestJobEnqueueDetails:
         await queue.enqueue(job1)
         await queue.enqueue(job2)
 
-        assert mock_redis.lpush.call_count == 2
+        assert mock_redis.eval.await_count == 2

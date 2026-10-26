@@ -1,19 +1,11 @@
-"""Auth routes — registration, login, current user."""
+"""HTTP boundary for local registration and cookie authentication."""
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.auth import AuthenticatedUser, get_current_user
-from src.core.database import get_db_session
-from src.models.repositories.auth_user_repository import AuthUserRepository
-from src.models.repositories.budget_account_repository import BudgetAccountRepository
-from src.models.repositories.budget_repository import BudgetRepository
-from src.models.schemas import (
-    AuthMeResponse,
-    LoginRequest,
-    RegisterRequest,
-    UserResponse,
-)
+from src.api.dependencies import get_auth_service
+from src.models.orm_models import AuthUser
+from src.models.schemas import AuthMeResponse, LoginRequest, RegisterRequest, UserResponse
 from src.services.auth_service import AuthService
 from src.services.local_auth_service import LocalAuthService
 
@@ -21,93 +13,59 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 local_auth = LocalAuthService()
 
 
+def _user_response(user: AuthUser) -> UserResponse:
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+    )
+
+
 @router.post("/register", response_model=AuthMeResponse, status_code=201)
 async def register(
-    body: RegisterRequest, response: Response, session: AsyncSession = Depends(get_db_session)
-):
-    user_repo = AuthUserRepository(session)
-    budget_repo = BudgetRepository(session)
-    account_repo = BudgetAccountRepository(session)
-    auth_service = AuthService(user_repo, budget_repo, account_repo)
-
+    body: RegisterRequest, response: Response, service: AuthService = Depends(get_auth_service)
+) -> AuthMeResponse:
     try:
-        user = await auth_service.register(
-            email=body.email,
-            password=body.password,
-            display_name=body.display_name,
-        )
-        token = await auth_service.login(body.email, body.password)
-        local_auth.set_auth_cookie(response, token)
-        return AuthMeResponse(
-            authenticated=True,
-            user=UserResponse(
-                id=user.id,
-                email=user.email,
-                display_name=user.display_name,
-                is_active=user.is_active,
-                created_at=user.created_at,
-                last_login_at=user.last_login_at,
-            ),
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        user = await service.register(body.email, body.password, body.display_name)
+        local_auth.set_auth_cookie(response, await service.login(body.email, body.password))
+        return AuthMeResponse(authenticated=True, user=_user_response(user))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/login", response_model=AuthMeResponse)
 async def login(
-    body: LoginRequest, response: Response, session: AsyncSession = Depends(get_db_session)
-):
-    user_repo = AuthUserRepository(session)
-    budget_repo = BudgetRepository(session)
-    account_repo = BudgetAccountRepository(session)
-    auth_service = AuthService(user_repo, budget_repo, account_repo)
-
+    body: LoginRequest, response: Response, service: AuthService = Depends(get_auth_service)
+) -> AuthMeResponse:
     try:
-        token = await auth_service.login(body.email, body.password)
+        token = await service.login(body.email, body.password)
+        user = await service.get_current_user_from_email(body.email)
         local_auth.set_auth_cookie(response, token)
-        user = await user_repo.get_by_email(body.email)
-        return AuthMeResponse(
-            authenticated=True,
-            user=UserResponse(
-                id=user.id,
-                email=user.email,
-                display_name=user.display_name,
-                is_active=user.is_active,
-                created_at=user.created_at,
-                last_login_at=user.last_login_at,
-            ),
-        )
-    except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        return AuthMeResponse(authenticated=True, user=_user_response(user))
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid credentials") from exc
 
 
 @router.get("/me", response_model=AuthMeResponse)
 async def get_me(
-    current_user: AuthenticatedUser = Depends(get_current_user),
-    session: AsyncSession = Depends(get_db_session),
-):
-    if not current_user:
+    user: AuthenticatedUser | None = Depends(get_current_user),
+    service: AuthService = Depends(get_auth_service),
+) -> AuthMeResponse:
+    if user is None:
         return AuthMeResponse(authenticated=False, user=None)
-
-    user_repo = AuthUserRepository(session)
-    user = await user_repo.get_by_id(int(current_user.user_id))
-    if not user:
+    try:
+        return AuthMeResponse(
+            authenticated=True,
+            user=_user_response(await service.get_current_user(int(user.user_id))),
+        )
+    except ValueError:
         return AuthMeResponse(authenticated=False, user=None)
-
-    return AuthMeResponse(
-        authenticated=True,
-        user=UserResponse(
-            id=user.id,
-            email=user.email,
-            display_name=user.display_name,
-            is_active=user.is_active,
-            created_at=user.created_at,
-            last_login_at=user.last_login_at,
-        ),
-    )
 
 
 @router.post("/logout", status_code=200)
-async def logout(response: Response):
+async def logout(response: Response) -> dict[str, bool]:
     local_auth.clear_auth_cookie(response)
     return {"ok": True}

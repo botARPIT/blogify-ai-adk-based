@@ -1,9 +1,13 @@
-# Architecture diagrams
+# Architecture
 
-These are editable native Excalidraw files. Open them at [excalidraw.com](https://excalidraw.com) or import the files there.
+Blogify's current architecture is documented with the following artifacts:
 
-- [System overview](./blogify-system-design.excalidraw) — the easy component map: client, API, Redis, worker, PostgreSQL, and recovery process.
-- [Generation and review workflow](./blogify-workflow-detail.excalidraw) — the detailed stage flow, outline/final review pauses, state checkpoints, outbox dispatch, and lease recovery.
-- [Database schema](./blogify-database-schema.excalidraw) — tables and declared ORM relationships from `backend/src/models/orm_models.py`.
+- [System context diagram](SystemArchitecture.png) — user, API, PostgreSQL, Redis, worker, and Google ADK workflow.
+- [Generation workflow diagram](WorkflowDiagram.png) — durable dispatch, worker processing, human review pauses, and persisted results.
+- [Editable workflow source](WorkflowDiagram.excalidraw) — source for the current workflow diagram.
+- [Multi-agent pipeline diagram](<Blogify Content Generation Workflow.png>) — fresh generation, outline review, research, writing, editing, and final review.
+- [Editable multi-agent pipeline source](<Blogify Content Generation Workflow.excalidraw>) — source for the current pipeline diagram.
+- [Database schema diagram](blogify-database-schema.excalidraw) — ORM-level table and relationship view.
+- [Backend architecture guide](backend.md) — current runtime, recovery, API, persistence, and security behavior.
 
-The system diagrams show the intended outbox-based workflow. The current working tree deletes `backend/src/services/blog_service.py`, so verify the API-to-outbox transaction and relay wiring after that implementation is restored. The schema diagram reflects ORM declarations, not a live database introspection; compare it with Alembic history and the deployed schema before applying migrations.
+The diagrams describe the outbox-based workflow used by the API, worker, and reaper. The schema diagram is not live-database evidence; validate it against Alembic migrations and the deployed database before applying changes.

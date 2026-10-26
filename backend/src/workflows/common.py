@@ -7,12 +7,13 @@ does next".
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Any, cast
 
 from google.adk.agents import Agent
 from google.adk.agents.context import Context
-from google.adk.apps.app import App, ResumabilityConfig
+from google.adk.apps.app import App
 from google.adk.runners import Runner
 from google.adk.workflow import DEFAULT_ROUTE, Workflow
 
@@ -22,12 +23,14 @@ from src.agents.outline_agent import create_outline_agent
 from src.agents.research_agent import create_research_agent
 from src.agents.writer_agent import create_writer_agent
 from src.config.logging_config import get_logger
+from src.monitoring.metrics import judge_decisions_total, validation_failures_total
 from src.normalizer import (
     NormalizationError,
     extract_raw_output,
     normalize_editor_review,
     normalize_intent,
     normalize_outline,
+    normalize_research,
 )
 from src.workflows.state_schema import (
     EDITOR_REVIEW_KEY as _EDITOR_REVIEW_KEY,
@@ -40,6 +43,12 @@ from src.workflows.state_schema import (
 )
 from src.workflows.state_schema import (
     REFINEMENT_ITERATIONS_KEY as _REFINEMENT_ITERATIONS_KEY,
+)
+from src.workflows.state_schema import (
+    RESEARCH_DATA_KEY as _RESEARCH_DATA_KEY,
+)
+from src.workflows.state_schema import (
+    RESEARCH_TOOL_DATA_KEY as _RESEARCH_TOOL_DATA_KEY,
 )
 
 logger = get_logger(__name__)
@@ -57,6 +66,8 @@ INTENT_RESULT_KEY = _INTENT_RESULT_KEY
 OUTLINE_KEY = _OUTLINE_KEY
 EDITOR_REVIEW_KEY = _EDITOR_REVIEW_KEY
 REFINEMENT_ITERATIONS_KEY = _REFINEMENT_ITERATIONS_KEY
+RESEARCH_DATA_KEY = _RESEARCH_DATA_KEY
+RESEARCH_TOOL_DATA_KEY = _RESEARCH_TOOL_DATA_KEY
 
 
 # ---------------------------------------------------------------------------
@@ -67,10 +78,24 @@ REFINEMENT_ITERATIONS_KEY = _REFINEMENT_ITERATIONS_KEY
 def normalize_intent_node(ctx: Context, node_input: Any) -> dict[str, Any]:
     """Turn the intent classifier's raw output into ``intent_result``."""
     raw = _raw_text(ctx, node_input, "intent_raw")
-    intent = normalize_intent(raw)
+    try:
+        intent = normalize_intent(raw)
+    except NormalizationError:
+        validation_failures_total.labels(
+            agent_name="intent_classifier", validation_type="output_schema"
+        ).inc()
+        raise
     payload = intent.model_dump()
     ctx.state[INTENT_RESULT_KEY] = payload
     return payload
+
+
+def route_after_intent(ctx: Context) -> str:
+    """Continue only when the deterministic intent gate accepted the request."""
+    intent = ctx.state.get(INTENT_RESULT_KEY)
+    is_clear = intent.get("intent_clear") if isinstance(intent, dict) else False
+    ctx.route = "clear" if is_clear is True else "blocked"
+    return str(ctx.route)
 
 
 def normalize_outline_node(ctx: Context, node_input: Any) -> dict[str, Any]:
@@ -81,7 +106,13 @@ def normalize_outline_node(ctx: Context, node_input: Any) -> dict[str, Any]:
     and continue into a human review that would present a blank outline.
     """
     raw = _raw_text(ctx, node_input, "outline_raw")
-    outline = normalize_outline(raw)
+    try:
+        outline = normalize_outline(raw)
+    except NormalizationError:
+        validation_failures_total.labels(
+            agent_name="outline_agent", validation_type="output_schema"
+        ).inc()
+        raise
     payload = outline.model_dump()
     ctx.state[OUTLINE_KEY] = payload
     return payload
@@ -90,9 +121,45 @@ def normalize_outline_node(ctx: Context, node_input: Any) -> dict[str, Any]:
 def normalize_editor_review_node(ctx: Context, node_input: Any) -> dict[str, Any]:
     """Turn the editor's raw output into ``editor_review``."""
     raw = _raw_text(ctx, node_input, "editor_review_raw")
-    review = normalize_editor_review(raw)
+    try:
+        review = normalize_editor_review(raw)
+    except NormalizationError:
+        validation_failures_total.labels(
+            agent_name="editor_agent", validation_type="output_schema"
+        ).inc()
+        raise
     payload = review.model_dump()
+    try:
+        _validate_editor_citations(payload, ctx.state.get(RESEARCH_DATA_KEY))
+    except NormalizationError:
+        validation_failures_total.labels(
+            agent_name="editor_agent", validation_type="citation_rule"
+        ).inc()
+        raise
+    judge_decisions_total.labels(
+        decision="approved" if payload.get("approved") else "rejected"
+    ).inc()
     ctx.state[EDITOR_REVIEW_KEY] = payload
+    return payload
+
+
+def normalize_research_node(ctx: Context, node_input: Any) -> dict[str, Any]:
+    """Commit only validated evidence into the state visible to later agents."""
+    tool_payload = ctx.state.get(RESEARCH_TOOL_DATA_KEY)
+    raw = tool_payload if isinstance(tool_payload, dict) else _raw_text(
+        ctx,
+        node_input,
+        "research_data_raw",
+    )
+    try:
+        research = normalize_research(raw)
+    except NormalizationError:
+        validation_failures_total.labels(
+            agent_name="research_agent", validation_type="output_schema"
+        ).inc()
+        raise
+    payload = research.model_dump()
+    ctx.state[RESEARCH_DATA_KEY] = payload
     return payload
 
 
@@ -113,6 +180,25 @@ def _raw_text(ctx: Context, node_input: Any, state_key: str) -> str:
     if stored is not None:
         return extract_raw_output(stored)
     return raw
+
+
+def _validate_editor_citations(review: dict[str, Any], research_data: Any) -> None:
+    """Reject final content that cites an index outside validated research."""
+    if not review.get("approved"):
+        return
+    sources = research_data.get("sources", []) if isinstance(research_data, dict) else []
+    source_count = len(sources)
+    references = {int(index) for index in re.findall(r"\[(\d{1,2})\]", review.get("final_blog", ""))}
+    invalid = sorted(index for index in references if index < 1 or index > source_count)
+    if invalid:
+        raise NormalizationError(
+            workflow="blog_generation",
+            stage="editor",
+            agent="editor_agent",
+            output_format="json",
+            reason="final_blog cites a source outside validated research_data",
+            field_paths=[f"final_blog.citation[{index}]" for index in invalid],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +307,7 @@ def build_agents(names: Sequence[str] | None = None) -> dict[str, Agent]:
 
 
 def pre_research_stages(agents: dict[str, Agent]) -> list[EdgeSpec]:
-    """START -> intent -> outline, with normalization nodes after each agent.
+    """START -> intent gate -> outline, with normalization nodes after each agent.
 
     Ends after outline normalization. Fresh generation terminates there so the
     application can persist the outline for human review.
@@ -231,13 +317,14 @@ def pre_research_stages(agents: dict[str, Agent]) -> list[EdgeSpec]:
     return [
         ("START", intent),
         (intent, normalize_intent_node),
-        (normalize_intent_node, outline),
+        (normalize_intent_node, route_after_intent),
+        (route_after_intent, {"clear": outline, "blocked": workflow_end}),
         (outline, normalize_outline_node),
     ]
 
 
 def post_outline_stages(agents: dict[str, Agent]) -> list[EdgeSpec]:
-    """research -> writer -> editor, ending at the terminal node.
+    """research -> validate evidence -> writer -> editor, ending at the terminal node.
 
     Starts at research. Post-outline workflows own the edge that reaches it.
     """
@@ -246,7 +333,8 @@ def post_outline_stages(agents: dict[str, Agent]) -> list[EdgeSpec]:
     editor = agents["editor"]
 
     return [
-        (research, writer),
+        (research, normalize_research_node),
+        (normalize_research_node, writer),
         *_editor_cycle(writer, editor),
     ]
 
@@ -264,16 +352,8 @@ def build_post_outline_workflow(name: str) -> Workflow:
 
 
 def build_app(root_agent: Workflow) -> App:
-    """Wrap a workflow in an ADK ``App`` with resumability enabled.
-
-    Resumability is what lets outline review pause and later continue from the
-    point it stopped, instead of restarting the graph.
-    """
-    return App(
-        name=APP_NAME,
-        root_agent=root_agent,
-        resumability_config=ResumabilityConfig(is_resumable=True),
-    )
+    """Wrap one short-lived workflow segment in an ADK application."""
+    return App(name=APP_NAME, root_agent=root_agent)
 
 
 def build_runner(app: App, session_service: Any) -> Runner:
@@ -289,6 +369,8 @@ __all__ = [
     "NormalizationError",
     "OUTLINE_KEY",
     "REFINEMENT_ITERATIONS_KEY",
+    "RESEARCH_DATA_KEY",
+    "RESEARCH_TOOL_DATA_KEY",
     "EdgeSpec",
     "build_agents",
     "build_app",
@@ -298,8 +380,10 @@ __all__ = [
     "normalize_editor_review_node",
     "normalize_intent_node",
     "normalize_outline_node",
+    "normalize_research_node",
     "post_outline_stages",
     "pre_research_stages",
     "route_after_editor",
+    "route_after_intent",
     "workflow_end",
 ]

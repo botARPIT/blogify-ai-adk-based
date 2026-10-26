@@ -508,6 +508,14 @@ a { color: inherit; }
 .article-reader .article-meta-line { flex-wrap:wrap; margin-bottom:26px; padding-bottom:15px; border-bottom:1px solid #f0f0ea; }
 .article-endmark { display:flex; align-items:center; justify-content:center; gap:12px; margin:44px auto 0; color:var(--orange); }
 .article-endmark i { width:35px; height:1px; background:#e5e5dc; }
+.article-sources { margin-top:42px; padding-top:25px; border-top:1px solid #ecece4; }
+.article-sources-heading { display:flex; align-items:baseline; justify-content:space-between; gap:16px; }
+.article-sources h2 { margin:5px 0 18px; color:#2e322d; font-family:var(--font-display); font-size:25px; font-weight:400; }
+.article-sources ol { display:grid; gap:8px; margin:0; padding:0; list-style:none; counter-reset:source; }
+.article-sources li { display:grid; grid-template-columns:28px minmax(0, 1fr) auto; align-items:baseline; gap:10px; color:#6f746c; font-size:12px; counter-increment:source; }
+.article-sources li::before { color:#9a9e94; content:"[" counter(source) "]"; font-variant-numeric:tabular-nums; }
+.article-sources a { color:var(--orange-dark); font-weight:700; overflow-wrap:anywhere; }
+.article-sources li span { color:#9a9e94; font-size:9px; text-transform:capitalize; }
 .article-reader :is(h1,h2,h3) { scroll-margin-top:90px; }
 .article-reader :is(h1,h2,h3):focus { outline:0; }
 .markdown-table-wrap { overflow-x:auto; margin:1.5em 0; }

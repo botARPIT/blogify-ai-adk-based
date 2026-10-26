@@ -19,3 +19,7 @@ class SessionTerminalError(Exception):
     The caller (API route) should return HTTP 409 with error_code=SESSION_TERMINAL
     so the frontend can generate a new idempotency key and retry as a fresh request.
     """
+
+
+class WorkflowOwnershipLostError(Exception):
+    """Raised when a worker attempt tries to write after losing its lease or outbox claim."""

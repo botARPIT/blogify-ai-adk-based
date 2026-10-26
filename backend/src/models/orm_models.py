@@ -49,6 +49,7 @@ class BlogSessionStatus(StrEnum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     REJECTED = "REJECTED"
+    AGENT_REJECTED = "AGENT_REJECTED"
     CANCELLED = "CANCELLED"
 
     # ── State machine constants ────────────────────────────────────
@@ -61,6 +62,7 @@ class BlogSessionStatus(StrEnum):
                 cls.AWAITING_OUTLINE_REVIEW,
                 cls.AWAITING_FINAL_REVIEW,
                 cls.FAILED,
+                cls.AGENT_REJECTED,
                 cls.CANCELLED,
             },
             cls.AWAITING_OUTLINE_REVIEW: {cls.QUEUED, cls.FAILED, cls.CANCELLED},
@@ -74,6 +76,7 @@ class BlogSessionStatus(StrEnum):
             cls.COMPLETED: set(),
             cls.FAILED: set(),
             cls.REJECTED: set(),
+            cls.AGENT_REJECTED: set(),
             cls.CANCELLED: set(),
         }
 
@@ -83,16 +86,20 @@ class BlogSessionStatus(StrEnum):
 
     @classmethod
     def terminal_states(cls) -> frozenset[BlogSessionStatus]:
-        return frozenset({cls.COMPLETED, cls.FAILED, cls.REJECTED, cls.CANCELLED})
+        return frozenset(
+            {cls.COMPLETED, cls.FAILED, cls.REJECTED, cls.AGENT_REJECTED, cls.CANCELLED}
+        )
 
     @classmethod
     def active_states(cls) -> frozenset[BlogSessionStatus]:
-        return frozenset({
-            cls.QUEUED,
-            cls.PROCESSING,
-            cls.AWAITING_OUTLINE_REVIEW,
-            cls.AWAITING_FINAL_REVIEW,
-        })
+        return frozenset(
+            {
+                cls.QUEUED,
+                cls.PROCESSING,
+                cls.AWAITING_OUTLINE_REVIEW,
+                cls.AWAITING_FINAL_REVIEW,
+            }
+        )
 
     @classmethod
     def validate_transition(
@@ -144,7 +151,6 @@ class LeaseEventType:
 
 class BlogJobPhase(StrEnum):
     FRESH_GENERATION = "fresh_generation"
-    RESUME_OUTLINE = "resume_outline"
     REVISION = "revision"
     RESEARCH_PHASE = "research_phase"
 
@@ -226,6 +232,8 @@ class BlogSession(Base):
     )
 
     adk_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Legacy ADK-confirmation columns retained for a backwards-compatible schema
+    # migration. The snapshot-based workflow runtime no longer reads or writes them.
     invocation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confirmation_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
@@ -301,6 +309,7 @@ class BlogVersion(Base):
     feedback_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     user_action: Mapped[str | None] = mapped_column(String(50), nullable=True)
     adk_session_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # See BlogSession: these are inactive compatibility columns pending migration.
     invocation_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confirmation_request_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     state_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -313,7 +322,9 @@ class BlogVersion(Base):
     failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("blog_session_id", "version_number", name="uq_blog_versions_session_version"),
+        UniqueConstraint(
+            "blog_session_id", "version_number", name="uq_blog_versions_session_version"
+        ),
         Index("ix_blog_versions_session", "blog_session_id"),
         Index("ix_blog_versions_status", "status"),
     )
@@ -474,7 +485,9 @@ class SessionReservation(Base):
     )
     reserved_usd: Mapped[Decimal] = mapped_column(Numeric(12, 8), nullable=False)
     reserved_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=_now, server_default= func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_now, server_default=func.now()
+    )
     released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_session_reservations_session", "blog_session_id"),)

@@ -59,9 +59,6 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
-docker-compose.base.yml
-docker-compose.local.yml
-docker-compose.vpc.yml
 
 # Monitoring data
 prometheus_data/

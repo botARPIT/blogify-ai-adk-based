@@ -14,7 +14,7 @@ The approved outline carries over unchanged, research is redone against the
 reviewer's feedback, and the writer/editor cycle runs again to produce a new
 version.
 
-The revision and recovery builders share one graph definition because they have
+The revision and continuation builders share one graph definition because they have
 the same execution path. They retain distinct workflow names so lifecycle
 identity stays visible in tracing and can diverge later if requirements change.
 Creating the extra blog version remains the repository's job; this module only

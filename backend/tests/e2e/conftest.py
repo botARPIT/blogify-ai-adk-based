@@ -53,12 +53,13 @@ async def e2e(monkeypatch):
     monkeypatch.setattr(TaskQueue, "QUEUE_KEY", f"{prefix}:tasks")
     monkeypatch.setattr(TaskQueue, "PROCESSING_KEY", f"{prefix}:processing")
     monkeypatch.setattr(TaskQueue, "NOTIFY_CHANNEL", f"{prefix}:notify")
-    monkeypatch.setattr("src.core.task_queue.get_redis_client", lambda: _return(redis))
-    monkeypatch.setattr("src.core.redis_pool.get_redis_client", lambda: _return(redis))
-    monkeypatch.setattr("src.api.routes.blog_routes.get_redis_client", lambda: _return(redis))
+    monkeypatch.setattr("src.core.task_queue.get_redis_client", lambda: redis)
+    monkeypatch.setattr("src.core.redis_pool.get_redis_client", lambda: redis)
+    monkeypatch.setattr("src.api.dependencies.get_redis_client", lambda: redis)
     monkeypatch.setattr("src.core.database.AsyncSessionFactory", sessions)
-    monkeypatch.setattr("src.workers.blog_worker.AsyncSessionFactory", sessions)
+    monkeypatch.setattr("src.workers.job_attempt_processor.AsyncSessionFactory", sessions)
     monkeypatch.setattr("src.workers.reaper.AsyncSessionFactory", sessions)
+    monkeypatch.setattr("src.monitoring.runtime_metrics.AsyncSessionFactory", sessions)
 
     async with sessions.begin() as db:
         user = AuthUser(email=f"{uuid.uuid4().hex}@example.test", password_hash="test")

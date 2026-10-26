@@ -23,7 +23,7 @@ from src.llm.config import (
 )
 
 DEFAULT_OLLAMA_BASE_URL = "https://ollama.com/v1"
-DEFAULT_OLLAMA_MODEL = "gemma4:31b"
+DEFAULT_OLLAMA_MODEL = "gpt-oss:120b"
 DEFAULT_GOOGLE_MODEL = "gemini-2.5-flash"
 
 

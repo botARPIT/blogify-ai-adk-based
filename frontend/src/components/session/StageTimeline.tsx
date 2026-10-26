@@ -16,6 +16,7 @@ function stageIndex(status: string, stage: string | null, agent: string | null):
   const normalizedStatus = status.toLowerCase();
   const active = `${agent || ''} ${stage || ''}`.toLowerCase();
   if (normalizedStatus === 'awaiting_outline_review' || active.includes('outline_review')) return 2;
+  if (normalizedStatus === 'agent_rejected') return 0;
   if (normalizedStatus === 'awaiting_final_review' || normalizedStatus === 'rejected' || active.includes('final_review') || active.includes('rejected')) return 6;
   if (normalizedStatus === 'completed') return 7;
   if (active.includes('editor')) return 5;
@@ -30,7 +31,7 @@ const StageTimeline: React.FC<StageTimelineProps> = ({ status, currentStage, cur
   const active = stageIndex(status, currentStage, currentAgent);
   const normalizedStatus = status.toLowerCase();
   const failed = normalizedStatus === 'failed';
-  const cancelled = normalizedStatus === 'cancelled' || normalizedStatus === 'rejected';
+  const cancelled = ['cancelled', 'rejected', 'agent_rejected'].includes(normalizedStatus);
   const complete = normalizedStatus === 'completed';
   const activeLabel = STAGES[active].label;
   const stateLabel = failed ? `Stopped during ${activeLabel}` : cancelled ? normalizedStatus : complete ? 'Complete' : normalizedStatus.replaceAll('_', ' ');

@@ -1,4 +1,4 @@
-"""Intent classification agent.
+"""Safety and clarity gate for the first blog workflow segment.
 
 The agent decides *what* to do. It emits raw model output under
 ``intent_raw``; turning that into an :class:`~src.models.schemas.IntentSchema`
@@ -13,15 +13,27 @@ from src.llm.factory import create_model
 from src.llm.model_configs import INTENT_MODEL
 
 INTENT_INSTRUCTION = """
-Analyze the user's topic and audience to determine if it's suitable for blog generation.
+Decide whether the request is safe and sufficiently specified for blog generation.
 
-Classification rules:
-- CLEAR: Single, well-defined topic with clear audience
-- UNCLEAR_TOPIC: Topic is too vague, ambiguous, or needs clarification
-- MULTI_TOPIC: Multiple unrelated topics mixed together
-- MISSING_AUDIENCE: Topic is clear but audience is not specified or unclear
+Topic: {topic}
+Target audience: {audience}
+Requested tone: {tone}
 
-Return a JSON object with 'status' and 'message' fields.
+Set intent_clear to false when any of the following is true:
+- The user requests instructions, planning, or content that would facilitate
+  violence, self-harm, criminal wrongdoing, exploitation, hate, or other harm.
+- The topic is missing, vague, ambiguous, or combines unrelated requests.
+- The target audience is missing, contradictory, or too unclear to write for.
+- The requested tone is missing, contradictory, or too unclear to apply.
+
+Set intent_clear to true only when none of those conditions apply.
+
+Return exactly one JSON object and no prose:
+{"intent_clear": true, "confidence": between 0 - 1}
+
+or
+
+{"intent_clear": false, "confidence": between 0 - 1}
 """.strip()
 
 

@@ -9,6 +9,7 @@ export function getRouteForStatus(sessionId: string, status: string): string {
     case 'revision_requested':
     case 'failed':
     case 'rejected':
+    case 'agent_rejected':
     case 'cancelled':
       return `/sessions/${sessionId}/progress`;
     case 'awaiting_outline_review':

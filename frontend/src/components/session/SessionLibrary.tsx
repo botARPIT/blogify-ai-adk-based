@@ -16,7 +16,7 @@ const FILTER_STATUSES: Partial<Record<SessionFilter, BlogSessionStatusFilter[]>>
   review: ['AWAITING_OUTLINE_REVIEW', 'AWAITING_FINAL_REVIEW'],
   active: ['QUEUED', 'PROCESSING'],
   completed: ['COMPLETED'],
-  failed: ['FAILED'],
+  failed: ['FAILED', 'REJECTED', 'AGENT_REJECTED'],
 };
 const PAGE_SIZE = 9;
 

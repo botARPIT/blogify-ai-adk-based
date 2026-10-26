@@ -121,9 +121,16 @@ export interface BlogContentView {
   content_markdown: string;
   word_count: number;
   sources_count: number;
+  sources: ResearchSource[];
   topic: string;
   audience: string | null;
   status: string;
+}
+
+export interface ResearchSource {
+  title: string;
+  url: string;
+  provider: string;
 }
 
 export interface BudgetSnapshot {
@@ -279,6 +286,7 @@ export type BlogSessionStatusFilter =
   | 'COMPLETED'
   | 'FAILED'
   | 'REJECTED'
+  | 'AGENT_REJECTED'
   | 'CANCELLED';
 
 export interface BlogSessionsQuery {

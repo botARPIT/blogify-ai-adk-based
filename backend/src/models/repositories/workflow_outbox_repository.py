@@ -1,6 +1,7 @@
 """Database-backed outbox for durable workflow dispatch."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +19,7 @@ class WorkflowOutboxRepository:
         *,
         event_type: str,
         aggregate_id: int,
-        payload: dict,
+        payload: dict[str, Any],
     ) -> WorkflowOutboxEvent:
         durable_payload = dict(payload)
         trace_context = inject_trace_context()
@@ -33,7 +34,12 @@ class WorkflowOutboxRepository:
         await self._session.flush()
         return event
 
-    async def get_dispatchable(self, *, limit: int = 100, republish_after_seconds: int = 300):
+    async def get_dispatchable(
+        self,
+        *,
+        limit: int = 100,
+        republish_after_seconds: int = 300,
+    ) -> list[WorkflowOutboxEvent]:
         """Rows that need a Redis delivery or whose worker lease expired."""
         now = datetime.now(timezone.utc)
         republish_before = now - timedelta(seconds=republish_after_seconds)
@@ -88,9 +94,7 @@ class WorkflowOutboxRepository:
             await self._session.flush()
         return session_ids
 
-    async def get_undispatched_for_aggregate(
-        self, aggregate_id: int
-    ) -> WorkflowOutboxEvent | None:
+    async def get_undispatched_for_aggregate(self, aggregate_id: int) -> WorkflowOutboxEvent | None:
         stmt = (
             select(WorkflowOutboxEvent)
             .where(
@@ -105,9 +109,7 @@ class WorkflowOutboxRepository:
 
     async def mark_dispatched(self, event_id: int) -> None:
         result = await self._session.execute(
-            select(WorkflowOutboxEvent)
-            .where(WorkflowOutboxEvent.id == event_id)
-            .with_for_update()
+            select(WorkflowOutboxEvent).where(WorkflowOutboxEvent.id == event_id).with_for_update()
         )
         event = result.scalar_one_or_none()
         if event is not None and event.status in {"PENDING", "PROCESSING"}:
@@ -188,6 +190,32 @@ class WorkflowOutboxRepository:
         await self._session.flush()
         return True
 
+    async def lock_current_claim(
+        self,
+        *,
+        event_id: int,
+        claim_owner: str,
+    ) -> WorkflowOutboxEvent:
+        """Lock and verify the exact outbox attempt before durable result writes."""
+        now = datetime.now(timezone.utc)
+        result = await self._session.execute(
+            select(WorkflowOutboxEvent).where(WorkflowOutboxEvent.id == event_id).with_for_update()
+        )
+        event = result.scalar_one_or_none()
+        if (
+            event is None
+            or event.status != "PROCESSING"
+            or event.locked_by != claim_owner
+            or event.locked_until is None
+            or event.locked_until <= now
+        ):
+            from src.services.exceptions import WorkflowOwnershipLostError
+
+            raise WorkflowOwnershipLostError(
+                f"Attempt no longer owns outbox event {event_id} claim {claim_owner}"
+            )
+        return event
+
     async def fail(self, event_id: int, *, worker_id: str, error: str) -> bool:
         event = await self._owned_event(event_id, worker_id)
         if event is None:
@@ -206,10 +234,7 @@ class WorkflowOutboxRepository:
         if event is None:
             return False
         if event.attempts >= max_attempts:
-            event.status = "FAILED"
             event.last_error = error[:4000]
-            event.locked_by = None
-            event.locked_until = None
             await self._session.flush()
             return False
         delay = min(2 ** min(event.attempts, 8), 300)

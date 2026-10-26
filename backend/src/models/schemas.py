@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field, model_validator
+from pydantic import BaseModel, EmailStr, Field, StrictBool, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Agent I/O schemas (used by ADK agents - NOT part of API contract)
@@ -11,10 +11,11 @@ from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class IntentSchema(BaseModel):
-    """Intent classification result."""
+    """Boolean gate for safe, unambiguous blog-generation requests."""
 
-    status: str = Field(description="CLEAR | UNCLEAR_TOPIC | MULTI_TOPIC | MISSING_AUDIENCE")
-    message: str = Field(description="Message explaining the classification")
+    intent_clear: StrictBool = Field(
+        description="True only when the request is safe and its topic, audience, and tone are clear"
+    )
 
 
 class SectionSchema(BaseModel):
@@ -35,12 +36,21 @@ class OutlineSchema(BaseModel):
 
 
 class ResearchSourceSchema(BaseModel):
-    """Research source from Tavily."""
+    """Evidence returned by the research agent's search tool."""
 
-    title: str
-    url: str
-    content: str
+    title: str = Field(min_length=1, max_length=500)
+    url: str = Field(min_length=1, max_length=2_048)
+    content: str = Field(min_length=1, max_length=2_000)
     score: float = Field(ge=0.0, le=1.0)
+    provider: str = Field(default="tavily", min_length=1, max_length=100)
+
+    @field_validator("url")
+    @classmethod
+    def require_http_url(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized.startswith(("https://", "http://")):
+            raise ValueError("source URL must use http or https")
+        return normalized
 
 
 class ResearchDataSchema(BaseModel):
@@ -48,8 +58,22 @@ class ResearchDataSchema(BaseModel):
 
     topic: str
     summary: str
-    sources: list[ResearchSourceSchema]
-    total_sources: int
+    sources: list[ResearchSourceSchema] = Field(min_length=1)
+    total_sources: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def require_matching_source_count(self) -> "ResearchDataSchema":
+        if self.total_sources != len(self.sources):
+            raise ValueError("total_sources must match the number of validated sources")
+        return self
+
+
+class ResearchSourceView(BaseModel):
+    """A safe, clickable research source returned with the finished blog."""
+
+    title: str
+    url: str
+    provider: str
 
 
 class EditorReviewSchema(BaseModel):
@@ -59,6 +83,14 @@ class EditorReviewSchema(BaseModel):
     feedback: str = Field(description="Specific issues if not approved, empty if approved")
     final_blog: str = Field(description="Polished blog content if approved")
     sources_section: str = Field(description="Formatted sources/references section")
+
+    @model_validator(mode="after")
+    def require_consistent_decision_payload(self) -> "EditorReviewSchema":
+        if self.approved and not self.final_blog.strip():
+            raise ValueError("approved reviews must include final_blog")
+        if not self.approved and (self.final_blog.strip() or self.sources_section.strip()):
+            raise ValueError("rejected reviews must not include final content or sources")
+        return self
 
 
 class FinalBlogSchema(BaseModel):
@@ -329,6 +361,7 @@ class BlogContentView(BaseModel):
     content_markdown: str
     word_count: int
     sources_count: int = 0
+    sources: list[ResearchSourceView] = Field(default_factory=list)
     topic: str
     audience: str | None = None
     status: str

@@ -20,7 +20,6 @@ import pytest
 AGENT_MODULES = [
     "src.agents.intent_agent",
     "src.agents.outline_agent",
-    "src.agents.outline_review_agent",
     "src.agents.research_agent",
     "src.agents.writer_agent",
     "src.agents.editor_agent",
@@ -165,6 +164,7 @@ class TestOutputKeys:
         for state_key in (
             "topic",
             "audience",
+            "tone",
             "approved_outline",
             "blog_outline",
             "research_data",
@@ -174,16 +174,54 @@ class TestOutputKeys:
         assert "do not ask the user to provide them again" in WRITER_INSTRUCTION
         assert "research_data.sources[0]" in WRITER_INSTRUCTION
 
+    def test_every_prompt_placeholder_is_a_seeded_state_key(self):
+        """A placeholder outside SESSION_STATE_KEYS never resolves at runtime."""
+        import re
+
+        from src.workflows.state_schema import SESSION_STATE_KEYS
+
+        for module_name in (
+            "src.agents.intent_agent",
+            "src.agents.outline_agent",
+            "src.agents.research_agent",
+            "src.agents.writer_agent",
+            "src.agents.editor_agent",
+        ):
+            module = importlib.import_module(module_name)
+            instruction = next(
+                getattr(module, name) for name in vars(module) if name.endswith("_INSTRUCTION")
+            )
+            placeholders = set(re.findall(r"\{([a-z_][a-z0-9_]*)\}", instruction))
+            unknown = placeholders - set(SESSION_STATE_KEYS)
+            assert not unknown, f"{module_name} interpolates unseeded keys {unknown}"
+
+    def test_tone_and_audience_reach_every_agent_prompt(self):
+        from src.agents.editor_agent import EDITOR_INSTRUCTION
+        from src.agents.intent_agent import INTENT_INSTRUCTION
+        from src.agents.outline_agent import OUTLINE_INSTRUCTION
+        from src.agents.research_agent import RESEARCH_INSTRUCTION
+        from src.agents.writer_agent import WRITER_INSTRUCTION
+
+        for instruction in (
+            INTENT_INSTRUCTION,
+            OUTLINE_INSTRUCTION,
+            RESEARCH_INSTRUCTION,
+            WRITER_INSTRUCTION,
+            EDITOR_INSTRUCTION,
+        ):
+            assert "{audience}" in instruction
+            assert "{tone}" in instruction
+
     def test_editor_prompt_preserves_numbered_source_mapping(self):
         from src.agents.editor_agent import EDITOR_INSTRUCTION
 
         assert "[1] is sources[0]" in EDITOR_INSTRUCTION
         assert "never invent a source or URL" in EDITOR_INSTRUCTION
 
-    def test_research_keeps_its_key(self):
+    def test_research_writes_raw_output_for_normalization(self):
         from src.agents.research_agent import create_research_agent
 
-        assert create_research_agent().output_key == "research_data"
+        assert create_research_agent().output_key == "research_data_raw"
 
 
 class TestModelSelectionIsConfiguration:
@@ -192,7 +230,6 @@ class TestModelSelectionIsConfiguration:
         [
             ("src.agents.intent_agent", "INTENT_MODEL"),
             ("src.agents.outline_agent", "OUTLINE_MODEL"),
-            ("src.agents.outline_review_agent", "OUTLINE_REVIEW_MODEL"),
             ("src.agents.research_agent", "RESEARCH_MODEL"),
             ("src.agents.writer_agent", "WRITER_MODEL"),
             ("src.agents.editor_agent", "EDITOR_MODEL"),

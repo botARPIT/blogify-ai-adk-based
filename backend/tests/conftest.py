@@ -60,7 +60,7 @@ def mock_redis():
     redis.zrem = AsyncMock(return_value=1)
     redis.zrangebyscore = AsyncMock(return_value=[])
     redis.evalsha = AsyncMock(return_value=None)
-    redis.eval = AsyncMock(return_value=None)
+    redis.eval = AsyncMock(return_value=1)
     redis.script_load = AsyncMock(return_value="test_sha")
     redis.keys = AsyncMock(return_value=[])
     
@@ -114,7 +114,10 @@ def test_client():
     with patch("src.core.redis_pool.get_redis_client", new_callable=AsyncMock):
         from src.api.main import app
 
-        return TestClient(app)
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides.clear()
 
 
 @pytest.fixture

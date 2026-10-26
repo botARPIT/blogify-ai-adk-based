@@ -1,213 +1,129 @@
-# Blogify AI - Production Blog Generation System
+# Blogify AI
 
-Production-grade blog generation system built with Google ADK, featuring multi-agent pipeline with human approval checkpoints.
+Blogify AI is an asynchronous, human-reviewed blog-generation system. A FastAPI API records a durable generation request, Redis delivers it to a worker, and a Google ADK workflow produces a draft that a user reviews before publication.
 
-## Features
+## What it demonstrates
 
-- 🤖 **Multi-Agent Pipeline**: Intent → Outline → Research (Tavily) → Writer ⟷ Editor Loop
-- 🎯 **LLM as Judge**: Final quality validation using Gemini Pro
-- 🔒 **Comprehensive Validation**: Semantic, business rule, and quality checks
-- 💰 **Budget Enforcement**: Hard token limits + cost tracking
-- 🚦 **Rate Limiting**: Global + per-user limits with Redis
-- 🛡️ **Circuit Breakers**: Resilience for external APIs
-- 📊 **Monitoring**: Prometheus + Grafana + Datadog ready
-- 🔄 **Context Compression**: ADK-based compression before judge
+- Asynchronous API design with polling rather than long-running HTTP requests.
+- A PostgreSQL outbox and Redis delivery queue so generation jobs survive API or worker failures.
+- Worker leases and reaper-based recovery for abandoned work.
+- Human review after the outline and final-editing stages.
+- Versioned REST API, cookie-based local authentication, idempotent generation requests, and per-user quotas.
+- Structured logs, Prometheus metrics, OpenTelemetry tracing, and Grafana dashboards.
 
-## Setup
+## Demo flow
+
+1. Register or sign in, then submit a topic, audience, and tone.
+2. The API creates a session and durable outbox event, then dispatches a job to Redis.
+3. The worker runs the Intent, Outline, Research, Writer, and Editor stages through Google ADK.
+4. Review the generated outline; approving or revising it resumes the workflow.
+5. Review the final draft, then read or export the completed blog.
+
+## Architecture
+
+### System context
+
+![System context: the API records durable work in PostgreSQL, Redis delivers jobs to a worker, and the worker runs the Google ADK workflow.](docs/architecture/SystemArchitecture.png)
+
+### Generation workflow
+
+![Workflow: generation is queued, processed through the ADK stages, paused for outline and final reviews, and persisted as a completed blog.](docs/architecture/WorkflowDiagram.png)
+
+### Multi-agent pipeline
+
+![Multi-agent pipeline: fresh generation classifies intent and produces a reviewable outline; after human approval, research, writing, and editing produce a final draft for human review.](<docs/architecture/Blogify Content Generation Workflow.png>)
+
+The editable source diagrams and architecture notes are in [docs/architecture](docs/architecture/README.md). The backend architecture reference covers the outbox, lease, recovery, observability, and security decisions in [docs/architecture/backend.md](docs/architecture/backend.md).
+
+## Quick start
 
 ### Prerequisites
 
 - Python 3.11+
-- PostgreSQL (or Neon)
-- Redis
-- Docker & Docker Compose (optional)
+- Docker and Docker Compose
+- Node.js 20+ and pnpm, if running the frontend locally
+- Google and Tavily API keys for live generation
 
-### Installation
-
-```bash
-# Clone repository
-cd blogify-ai-adk-prod
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -e .
-```
-
-### Configuration
-
-1. Copy environment template:
-```bash
-cp .env.dev .env
-```
-
-2. Update `.env` with your keys:
-- `GOOGLE_API_KEY`: Your Google API key
-- `TAVILY_API_KEY`: Your Tavily API key
-- `DATABASE_URL`: PostgreSQL connection string
-- `REDIS_URL`: Redis URL
-
-### Database Initialization
+### Configure and run the backend stack
 
 ```bash
-python scripts/init_db.py
+cp backend/.env.dev backend/.env
+# Edit backend/.env and set GOOGLE_API_KEY and TAVILY_API_KEY.
+
+docker compose -f backend/docker-compose.yml up --build
 ```
 
-## Running the Service
+This starts the API at `http://localhost:8000`, PostgreSQL, Redis, the worker, reaper, Prometheus, and Grafana. The API reference is available at `http://localhost:8000/docs`.
 
-### Development
+### Run the frontend
 
 ```bash
-# Start Redis (if not using docker-compose)
-# redis-server &
-
-# Run API
-export ENVIRONMENT=dev
-uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+cd frontend
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-### With Docker Compose
+For a non-container local backend setup, use the documented scripts in [backend/README.md](backend/README.md).
+
+## API
+
+The canonical API prefix is `/api/v1`.
+
+- Interactive OpenAPI: `http://localhost:8000/docs`
+- Raw OpenAPI document: `http://localhost:8000/openapi.json`
+- Postman collection: [postman/Blogify-AI.postman_collection.json](postman/Blogify-AI.postman_collection.json)
+- Human-facing workflow guide: [docs/API.md](docs/API.md)
+
+The main client flow is:
+
+```text
+POST /auth/register or /auth/login
+POST /blogs/generate
+GET  /blogs/{session_id}/status
+GET  /blogs/{session_id}/outline
+POST /blogs/{session_id}/outline/review
+POST /blogs/{session_id}/final-review
+GET  /blogs/{session_id}/content
+```
+
+## Testing and verification
 
 ```bash
-docker-compose up
+cd backend
+
+# Unit and API-contract tests
+.venv/bin/pytest tests/unit -q
+
+# Tests that require dedicated PostgreSQL and Redis services
+export BLOGIFY_TEST_DATABASE_URL='postgresql+asyncpg://user:password@localhost:5432/blogify_test'
+export BLOGIFY_TEST_REDIS_URL='redis://localhost:6379/15'
+.venv/bin/pytest tests/e2e -q
 ```
 
-This starts:
-- API (port 8000)
-- PostgreSQL (port 5432)
-- Redis (port 6379)
-- Prometheus (port 9090)
-- Grafana (port 3000)
+The lifecycle E2E suite scripts the provider-facing executor, so it exercises the API-to-PostgreSQL/Redis/worker path without calling Google or Tavily. See [backend/tests/e2e/README.md](backend/tests/e2e/README.md) before running it.
 
-## API Endpoints
+## Operations
 
-### Health Check
-```bash
-curl http://localhost:8000/api/health
-```
+- Health: `GET /api/v1/health`, with liveness, readiness, detailed, and startup variants.
+- Metrics: `GET /metrics` (protect this endpoint in non-local environments).
+- Dashboards: Prometheus at `http://localhost:9090`; Grafana at `http://localhost:3001` for the local Compose stack.
+- Database migrations: `bash backend/scripts/init_db.sh`.
+- More detail: [observability](docs/backend/observability.md), [performance plan](docs/backend/performance/slo-sli-and-stress-plan.md), and [Azure deployment runbook](docs/runbooks/azure-vm.md).
 
-### Chat (General queries)
-```bash
-curl -X POST http://localhost:8000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "test_user",
-    "message": "Hello, how are you?"
-  }'
-```
+## Current limitations
 
-### Generate Blog
-```bash
-curl -X POST http://localhost:8000/api/blog/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "user_id": "test_user",
-    "topic": "The Future of AI in Healthcare",
-    "audience": "healthcare professionals"
-  }'
-```
+- Generation depends on external model and research providers; provider latency and availability affect completion time.
+- The checked-in deployment path is Docker Compose. Kubernetes and multi-region failover are intentionally out of scope.
+- The project has focused unit, contract, and integration coverage, but capacity claims require a representative deployed load test.
+- Document export requires Pandoc to be available in the API runtime.
 
-### Approve Stage
-```bash
-curl -X POST http://localhost:8000/api/blog/approve \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "<session_id>",
-    "approved": true
-  }'
-```
+## Repository layout
 
-### Metrics
-```bash
-curl http://localhost:8000/metrics
-```
-
-## Architecture
-
-### Job Processing Architecture
-
-![Blog generation architecture: requests flow from the user through the API server and queue to a worker, while the database stores outbox jobs and stage results.](docs/architecture/images/blog-generation-architecture.png)
-
-### Validation Policy
-
-Each agent output undergoes:
-1. **Semantic Validation** (e.g., citations match research)
-2. **Business Rule Validation** (e.g., word counts)
-3. **Quality Checks** (e.g., no repetition)
-
-Max 2 retries per agent on validation failure.
-
-## Testing
-
-```bash
-# Run tests
-pytest
-
-# With coverage
-pytest --cov=src tests/
-
-# Run specific test suite
-pytest tests/unit/
-pytest tests/integration/
-```
-
-## Monitoring
-
-### Prometheus Metrics
-
-Access at `http://localhost:9090`
-
-Key metrics:
-- `blog_generations_total`
-- `agent_token_usage`
-- `agent_cost_usd`
-- `validation_failures_total`
-- `rate_limit_rejections_total`
-
-### Grafana Dashboards
-
-Access at `http://localhost:3000`
-- Default credentials: admin/admin
-
-## Environment Configuration
-
-### Development (.env.dev)
-- Relaxed rate limits
-- Debug logging
-- Permissive CORS
-
-### Staging (.env.stage)
-- Moderate limits
-- Info logging
-- Specific domains
-
-### Production (.env.prod)
-- Strict limits
-- Warning logging
-- Explicit CORS whitelist
-- Datadog enabled
-
-## Project Structure
-
-```
-src/
-├── agents/          # All agent definitions
-├── api/             # FastAPI routes
-├── config/          # Configuration files
-├── guards/          # Validation & guardrails
-├── models/          # DB models & schemas
-├── monitoring/      # Metrics, cost tracking
-└── tools/           # Tavily MCP integration
-
-tests/
-├── unit/            # Unit tests
-├── integration/     # Integration tests
-└── eval/            # Evaluation tests
-
-scripts/             # Utility scripts
-monitoring/          # Prometheus/Grafana configs
+```text
+backend/     FastAPI API, worker, reaper, persistence, monitoring, and tests
+frontend/    React/Vite browser client
+docs/        Architecture, API, operational runbooks, and incident notes
+postman/     Importable API collection
 ```
 
 ## License

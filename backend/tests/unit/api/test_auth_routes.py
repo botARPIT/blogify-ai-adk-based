@@ -160,9 +160,9 @@ class TestAuthenticatedRequests:
         app.dependency_overrides[get_current_user] = lambda: mock_user
 
         with patch(
-            "src.api.routes.blog_routes.BlogSessionRepository.get_for_user",
+            "src.services.blog_read_service.BlogSessionRepository.list_for_user",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=([], 0),
         ):
             response = test_client.get(
                 "/api/v1/blogs/", cookies={"auth_token": "valid-jwt-token"}
